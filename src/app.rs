@@ -1,0 +1,365 @@
+use chrono::{DateTime, Local, Utc};
+use std::collections::HashMap;
+
+use crate::input::{self, InputAction, HELP_TEXT};
+use crate::signal::types::{SignalEvent, SignalMessage};
+
+/// A single displayed message in a conversation
+#[derive(Debug, Clone)]
+pub struct DisplayMessage {
+    pub sender: String,
+    pub timestamp: DateTime<Utc>,
+    pub body: String,
+    pub is_system: bool,
+}
+
+impl DisplayMessage {
+    pub fn format_time(&self) -> String {
+        let local: DateTime<Local> = self.timestamp.with_timezone(&Local);
+        local.format("%H:%M").to_string()
+    }
+}
+
+/// A conversation (1:1 or group)
+#[derive(Debug, Clone)]
+pub struct Conversation {
+    /// Display name (contact name/number or group name)
+    pub name: String,
+    /// Unique key — phone number for 1:1, group ID for groups
+    pub id: String,
+    pub messages: Vec<DisplayMessage>,
+    pub unread: usize,
+    pub is_group: bool,
+}
+
+/// Application state
+pub struct App {
+    pub conversations: HashMap<String, Conversation>,
+    /// Ordered list of conversation IDs for sidebar display
+    pub conversation_order: Vec<String>,
+    /// Currently selected conversation ID
+    pub active_conversation: Option<String>,
+    /// Text input buffer
+    pub input_buffer: String,
+    /// Cursor position in input buffer
+    pub input_cursor: usize,
+    /// Whether sidebar is visible
+    pub sidebar_visible: bool,
+    /// Scroll offset for messages (0 = bottom)
+    pub scroll_offset: usize,
+    /// Status bar message
+    pub status_message: String,
+    /// Whether the app should quit
+    pub should_quit: bool,
+    /// Our own account number for identifying outgoing messages
+    pub account: String,
+}
+
+impl App {
+    pub fn new(account: String) -> Self {
+        Self {
+            conversations: HashMap::new(),
+            conversation_order: Vec::new(),
+            active_conversation: None,
+            input_buffer: String::new(),
+            input_cursor: 0,
+            sidebar_visible: true,
+            scroll_offset: 0,
+            status_message: "connecting...".to_string(),
+            should_quit: false,
+            account,
+        }
+    }
+
+    /// Handle an event from signal-cli
+    pub fn handle_signal_event(&mut self, event: SignalEvent) {
+        match event {
+            SignalEvent::MessageReceived(msg) => self.handle_message(msg),
+            SignalEvent::ReceiptReceived { .. } => {}
+            SignalEvent::TypingIndicator { sender, is_typing } => {
+                if is_typing {
+                    self.status_message = format!("{} is typing...", short_name(&sender));
+                } else {
+                    self.update_status();
+                }
+            }
+            SignalEvent::Error(err) => {
+                self.status_message = format!("error: {err}");
+            }
+        }
+    }
+
+    fn handle_message(&mut self, msg: SignalMessage) {
+        let conv_id = if let Some(ref gid) = msg.group_id {
+            gid.clone()
+        } else if msg.is_outgoing {
+            // Outgoing 1:1 — conversation is keyed by recipient, but we don't
+            // know the recipient from the event alone; skip for now.
+            return;
+        } else {
+            msg.source.clone()
+        };
+
+        let conv = self.get_or_create_conversation(
+            &conv_id,
+            msg.group_name
+                .as_deref()
+                .or(msg.source_name.as_deref())
+                .unwrap_or(&conv_id),
+            msg.group_id.is_some(),
+        );
+
+        let sender_display = if msg.is_outgoing {
+            "you".to_string()
+        } else {
+            msg.source_name
+                .clone()
+                .unwrap_or_else(|| short_name(&msg.source))
+        };
+
+        // Add text body
+        if let Some(ref body) = msg.body {
+            conv.messages.push(DisplayMessage {
+                sender: sender_display.clone(),
+                timestamp: msg.timestamp,
+                body: body.clone(),
+                is_system: false,
+            });
+        }
+
+        // Add attachment notices
+        for att in &msg.attachments {
+            let label = att
+                .filename
+                .as_deref()
+                .unwrap_or(&att.content_type);
+            let path_info = att
+                .local_path
+                .as_deref()
+                .map(|p| format!(" -> {p}"))
+                .unwrap_or_default();
+            conv.messages.push(DisplayMessage {
+                sender: sender_display.clone(),
+                timestamp: msg.timestamp,
+                body: format!("[attachment: {label}]{path_info}"),
+                is_system: false,
+            });
+        }
+
+        let is_active = self
+            .active_conversation
+            .as_ref()
+            .map(|a| a == &conv_id)
+            .unwrap_or(false);
+
+        if !is_active {
+            if let Some(c) = self.conversations.get_mut(&conv_id) {
+                c.unread += 1;
+            }
+        }
+    }
+
+    fn get_or_create_conversation(
+        &mut self,
+        id: &str,
+        name: &str,
+        is_group: bool,
+    ) -> &mut Conversation {
+        if !self.conversations.contains_key(id) {
+            self.conversations.insert(
+                id.to_string(),
+                Conversation {
+                    name: name.to_string(),
+                    id: id.to_string(),
+                    messages: Vec::new(),
+                    unread: 0,
+                    is_group,
+                },
+            );
+            self.conversation_order.push(id.to_string());
+        }
+        self.conversations.get_mut(id).unwrap()
+    }
+
+    /// Handle a line of user input; returns Some(command) if we need to send a message
+    pub fn handle_input(&mut self) -> Option<(String, String, bool)> {
+        let input = self.input_buffer.clone();
+        self.input_buffer.clear();
+        self.input_cursor = 0;
+
+        let action = input::parse_input(&input);
+        match action {
+            InputAction::SendText(text) => {
+                if text.is_empty() {
+                    return None;
+                }
+                if let Some(ref conv_id) = self.active_conversation {
+                    let is_group = self
+                        .conversations
+                        .get(conv_id)
+                        .map(|c| c.is_group)
+                        .unwrap_or(false);
+                    let conv_id = conv_id.clone();
+
+                    // Add our own message to the display
+                    if let Some(conv) = self.conversations.get_mut(&conv_id) {
+                        conv.messages.push(DisplayMessage {
+                            sender: "you".to_string(),
+                            timestamp: Utc::now(),
+                            body: text.clone(),
+                            is_system: false,
+                        });
+                    }
+                    self.scroll_offset = 0;
+                    return Some((conv_id, text, is_group));
+                } else {
+                    self.status_message =
+                        "No active conversation. Use /join <name> first.".to_string();
+                }
+            }
+            InputAction::Join(target) => {
+                self.join_conversation(&target);
+            }
+            InputAction::Part => {
+                self.active_conversation = None;
+                self.scroll_offset = 0;
+                self.update_status();
+            }
+            InputAction::Quit => {
+                self.should_quit = true;
+            }
+            InputAction::ToggleSidebar => {
+                self.sidebar_visible = !self.sidebar_visible;
+            }
+            InputAction::Help => {
+                self.add_system_message(HELP_TEXT);
+            }
+            InputAction::Unknown(msg) => {
+                self.status_message = msg;
+            }
+        }
+        None
+    }
+
+    fn join_conversation(&mut self, target: &str) {
+        // Try exact match first
+        if self.conversations.contains_key(target) {
+            self.active_conversation = Some(target.to_string());
+            if let Some(conv) = self.conversations.get_mut(target) {
+                conv.unread = 0;
+            }
+            self.scroll_offset = 0;
+            self.update_status();
+            return;
+        }
+
+        // Try matching by name (case-insensitive)
+        let target_lower = target.to_lowercase();
+        let found_id = self
+            .conversations
+            .iter()
+            .find(|(_, conv)| conv.name.to_lowercase().contains(&target_lower))
+            .map(|(id, _)| id.clone());
+
+        if let Some(id) = found_id {
+            self.active_conversation = Some(id.clone());
+            self.scroll_offset = 0;
+            if let Some(conv) = self.conversations.get_mut(&id) {
+                conv.unread = 0;
+            }
+            self.update_status();
+            return;
+        }
+
+        // Create a new 1:1 conversation if target looks like a phone number
+        if target.starts_with('+') {
+            self.get_or_create_conversation(target, target, false);
+            self.active_conversation = Some(target.to_string());
+            self.scroll_offset = 0;
+            self.update_status();
+        } else {
+            self.status_message = format!("Conversation not found: {target}");
+        }
+    }
+
+    pub fn next_conversation(&mut self) {
+        if self.conversation_order.is_empty() {
+            return;
+        }
+        let idx = self
+            .active_conversation
+            .as_ref()
+            .and_then(|id| self.conversation_order.iter().position(|x| x == id))
+            .map(|i| (i + 1) % self.conversation_order.len())
+            .unwrap_or(0);
+        let new_id = self.conversation_order[idx].clone();
+        self.active_conversation = Some(new_id.clone());
+        if let Some(conv) = self.conversations.get_mut(&new_id) {
+            conv.unread = 0;
+        }
+        self.scroll_offset = 0;
+        self.update_status();
+    }
+
+    pub fn prev_conversation(&mut self) {
+        if self.conversation_order.is_empty() {
+            return;
+        }
+        let len = self.conversation_order.len();
+        let idx = self
+            .active_conversation
+            .as_ref()
+            .and_then(|id| self.conversation_order.iter().position(|x| x == id))
+            .map(|i| if i == 0 { len - 1 } else { i - 1 })
+            .unwrap_or(0);
+        let new_id = self.conversation_order[idx].clone();
+        self.active_conversation = Some(new_id.clone());
+        if let Some(conv) = self.conversations.get_mut(&new_id) {
+            conv.unread = 0;
+        }
+        self.scroll_offset = 0;
+        self.update_status();
+    }
+
+    fn add_system_message(&mut self, text: &str) {
+        if let Some(ref conv_id) = self.active_conversation {
+            if let Some(conv) = self.conversations.get_mut(conv_id) {
+                conv.messages.push(DisplayMessage {
+                    sender: String::new(),
+                    timestamp: Utc::now(),
+                    body: text.to_string(),
+                    is_system: true,
+                });
+            }
+        } else {
+            // No active conversation — show in status
+            self.status_message = text.lines().next().unwrap_or("").to_string();
+        }
+    }
+
+    fn update_status(&mut self) {
+        if let Some(ref id) = self.active_conversation {
+            if let Some(conv) = self.conversations.get(id) {
+                let prefix = if conv.is_group { "#" } else { "" };
+                self.status_message = format!("connected | {}{}", prefix, conv.name);
+            }
+        } else {
+            self.status_message = "connected | no conversation selected".to_string();
+        }
+    }
+
+    pub fn set_connected(&mut self) {
+        self.status_message = "connected | no conversation selected".to_string();
+    }
+}
+
+/// Shorten a phone number for display: +15551234567 -> +1***4567
+fn short_name(number: &str) -> String {
+    if number.len() > 6 {
+        let last4 = &number[number.len() - 4..];
+        let prefix = &number[..2];
+        format!("{prefix}***{last4}")
+    } else {
+        number.to_string()
+    }
+}

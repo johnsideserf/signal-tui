@@ -1,0 +1,313 @@
+use anyhow::{Context, Result};
+use chrono::DateTime;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, Command};
+use tokio::sync::mpsc;
+use uuid::Uuid;
+
+use crate::config::Config;
+use crate::signal::types::*;
+
+pub struct SignalClient {
+    child: Child,
+    stdin_tx: mpsc::Sender<String>,
+    pub event_rx: mpsc::Receiver<SignalEvent>,
+    account: String,
+}
+
+impl SignalClient {
+    pub async fn spawn(config: &Config) -> Result<Self> {
+        let mut cmd = Command::new(&config.signal_cli_path);
+        if !config.account.is_empty() {
+            cmd.arg("-a").arg(&config.account);
+        }
+        cmd.arg("jsonRpc");
+        cmd.stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        let mut child = cmd.spawn().with_context(|| {
+            format!(
+                "Failed to spawn signal-cli at '{}'. Is it installed and in PATH?",
+                config.signal_cli_path
+            )
+        })?;
+
+        let stdout = child.stdout.take().context("Failed to capture stdout")?;
+        let stdin = child.stdin.take().context("Failed to capture stdin")?;
+
+        let (event_tx, event_rx) = mpsc::channel::<SignalEvent>(256);
+        let (stdin_tx, mut stdin_rx) = mpsc::channel::<String>(64);
+
+        let download_dir = config.download_dir.clone();
+
+        // Stdout reader task — parse JSON-RPC messages from signal-cli
+        tokio::spawn(async move {
+            let reader = BufReader::new(stdout);
+            let mut lines = reader.lines();
+
+            while let Ok(Some(line)) = lines.next_line().await {
+                if line.trim().is_empty() {
+                    continue;
+                }
+
+                match serde_json::from_str::<JsonRpcResponse>(&line) {
+                    Ok(resp) => {
+                        if let Some(event) = parse_signal_event(&resp, &download_dir) {
+                            if event_tx.send(event).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = event_tx
+                            .send(SignalEvent::Error(format!("JSON parse error: {e}")))
+                            .await;
+                    }
+                }
+            }
+        });
+
+        // Stdin writer task — send JSON-RPC requests to signal-cli
+        tokio::spawn(async move {
+            let mut stdin = stdin;
+            while let Some(msg) = stdin_rx.recv().await {
+                if stdin.write_all(msg.as_bytes()).await.is_err() {
+                    break;
+                }
+                if stdin.write_all(b"\n").await.is_err() {
+                    break;
+                }
+                if stdin.flush().await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        Ok(Self {
+            child,
+            stdin_tx,
+            event_rx,
+            account: config.account.clone(),
+        })
+    }
+
+    pub async fn send_message(
+        &self,
+        recipient: &str,
+        body: &str,
+        is_group: bool,
+    ) -> Result<()> {
+        let id = Uuid::new_v4().to_string();
+
+        let params = if is_group {
+            serde_json::json!({
+                "groupId": recipient,
+                "message": body,
+                "account": self.account,
+            })
+        } else {
+            serde_json::json!({
+                "recipient": [recipient],
+                "message": body,
+                "account": self.account,
+            })
+        };
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "send".to_string(),
+            id,
+            params: Some(params),
+        };
+
+        let json = serde_json::to_string(&request)?;
+        self.stdin_tx
+            .send(json)
+            .await
+            .context("Failed to send to signal-cli stdin")?;
+        Ok(())
+    }
+
+    pub async fn list_groups(&self) -> Result<()> {
+        let id = Uuid::new_v4().to_string();
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "listGroups".to_string(),
+            id,
+            params: Some(serde_json::json!({ "account": self.account })),
+        };
+        let json = serde_json::to_string(&request)?;
+        self.stdin_tx.send(json).await.context("Failed to send")?;
+        Ok(())
+    }
+
+    pub async fn list_contacts(&self) -> Result<()> {
+        let id = Uuid::new_v4().to_string();
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "listContacts".to_string(),
+            id,
+            params: Some(serde_json::json!({ "account": self.account })),
+        };
+        let json = serde_json::to_string(&request)?;
+        self.stdin_tx.send(json).await.context("Failed to send")?;
+        Ok(())
+    }
+
+    pub async fn shutdown(&mut self) -> Result<()> {
+        let _ = self.child.kill().await;
+        Ok(())
+    }
+}
+
+fn parse_signal_event(
+    resp: &JsonRpcResponse,
+    download_dir: &std::path::Path,
+) -> Option<SignalEvent> {
+    // signal-cli sends notifications as JSON-RPC requests with a method field
+    let method = resp.method.as_deref()?;
+    let params = resp.params.as_ref()?;
+
+    match method {
+        "receive" => parse_receive_event(params, download_dir),
+        _ => None,
+    }
+}
+
+fn parse_receive_event(
+    params: &serde_json::Value,
+    download_dir: &std::path::Path,
+) -> Option<SignalEvent> {
+    let envelope = params.get("envelope")?;
+
+    // Typing indicator
+    if let Some(typing) = envelope.get("typingMessage") {
+        let sender = envelope
+            .get("sourceNumber")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let is_typing = typing
+            .get("action")
+            .and_then(|v| v.as_str())
+            .map(|a| a == "STARTED")
+            .unwrap_or(false);
+        return Some(SignalEvent::TypingIndicator { sender, is_typing });
+    }
+
+    // Receipt
+    if let Some(_receipt) = envelope.get("receiptMessage") {
+        let sender = envelope
+            .get("sourceNumber")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let timestamp = envelope
+            .get("timestamp")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        return Some(SignalEvent::ReceiptReceived { sender, timestamp });
+    }
+
+    // Data message (actual text/attachments)
+    let data = envelope.get("dataMessage")?;
+
+    let source = envelope
+        .get("sourceNumber")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    let source_name = envelope
+        .get("sourceName")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let timestamp_ms = data
+        .get("timestamp")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+
+    let timestamp = DateTime::from_timestamp_millis(timestamp_ms)
+        .unwrap_or_default();
+
+    let body = data
+        .get("message")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let group_id = data
+        .get("groupInfo")
+        .and_then(|g| g.get("groupId"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let group_name = data
+        .get("groupInfo")
+        .and_then(|g| g.get("groupName"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let attachments = data
+        .get("attachments")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|a| parse_attachment(a, download_dir))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Some(SignalEvent::MessageReceived(SignalMessage {
+        source,
+        source_name,
+        timestamp,
+        body,
+        attachments,
+        group_id,
+        group_name,
+        is_outgoing: false,
+    }))
+}
+
+fn parse_attachment(
+    value: &serde_json::Value,
+    download_dir: &std::path::Path,
+) -> Option<Attachment> {
+    let id = value.get("id").and_then(|v| v.as_str())?.to_string();
+    let content_type = value
+        .get("contentType")
+        .and_then(|v| v.as_str())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    let filename = value
+        .get("filename")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    // If signal-cli provides a file path, attempt to copy to download dir
+    let local_path = value
+        .get("file")
+        .and_then(|v| v.as_str())
+        .and_then(|src_path| {
+            let src = std::path::Path::new(src_path);
+            if !src.exists() {
+                return None;
+            }
+            let dest_name = filename.as_deref().unwrap_or(&id);
+            let dest = download_dir.join(dest_name);
+            let _ = std::fs::create_dir_all(download_dir);
+            match std::fs::copy(src, &dest) {
+                Ok(_) => Some(dest.to_string_lossy().to_string()),
+                Err(_) => Some(src_path.to_string()),
+            }
+        });
+
+    Some(Attachment {
+        id,
+        content_type,
+        filename,
+        local_path,
+    })
+}
