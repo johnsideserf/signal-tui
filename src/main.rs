@@ -135,6 +135,14 @@ async fn run_app(
                     (KeyModifiers::SHIFT, KeyCode::BackTab) => {
                         app.prev_conversation();
                     }
+                    // Ctrl+Left — shrink sidebar
+                    (KeyModifiers::CONTROL, KeyCode::Left) => {
+                        app.resize_sidebar(-2);
+                    }
+                    // Ctrl+Right — expand sidebar
+                    (KeyModifiers::CONTROL, KeyCode::Right) => {
+                        app.resize_sidebar(2);
+                    }
                     // Page Up — scroll up
                     (_, KeyCode::PageUp) => {
                         app.scroll_offset = app.scroll_offset.saturating_add(5);
@@ -198,6 +206,9 @@ async fn run_app(
         while let Ok(event) = signal_client.event_rx.try_recv() {
             app.handle_signal_event(event);
         }
+
+        // Expire stale typing indicators
+        app.cleanup_typing();
 
         if app.should_quit {
             break;

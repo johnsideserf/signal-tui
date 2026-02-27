@@ -1,5 +1,6 @@
 use chrono::{DateTime, Local, Utc};
 use std::collections::HashMap;
+use std::time::Instant;
 
 use crate::input::{self, InputAction, HELP_TEXT};
 use crate::signal::types::{SignalEvent, SignalMessage};
@@ -53,6 +54,14 @@ pub struct App {
     pub should_quit: bool,
     /// Our own account number for identifying outgoing messages
     pub account: String,
+    /// Resizable sidebar width (min 14, max 40)
+    pub sidebar_width: u16,
+    /// Per-conversation typing indicators with expiry timestamp
+    pub typing_indicators: HashMap<String, Instant>,
+    /// Last-read message index per conversation (for unread marker)
+    pub last_read_index: HashMap<String, usize>,
+    /// Whether we are connected to signal-cli
+    pub connected: bool,
 }
 
 impl App {
@@ -68,7 +77,34 @@ impl App {
             status_message: "connecting...".to_string(),
             should_quit: false,
             account,
+            sidebar_width: 22,
+            typing_indicators: HashMap::new(),
+            last_read_index: HashMap::new(),
+            connected: false,
         }
+    }
+
+    /// Resize sidebar by delta, clamped between 14..=40
+    pub fn resize_sidebar(&mut self, delta: i16) {
+        let new_width = (self.sidebar_width as i16 + delta).clamp(14, 40) as u16;
+        self.sidebar_width = new_width;
+    }
+
+    /// Mark current conversation as fully read
+    pub fn mark_read(&mut self) {
+        if let Some(ref conv_id) = self.active_conversation {
+            if let Some(conv) = self.conversations.get(conv_id) {
+                self.last_read_index
+                    .insert(conv_id.clone(), conv.messages.len());
+            }
+        }
+    }
+
+    /// Remove typing indicators older than 5 seconds
+    pub fn cleanup_typing(&mut self) {
+        let now = Instant::now();
+        self.typing_indicators
+            .retain(|_, ts| now.duration_since(*ts).as_secs() < 5);
     }
 
     /// Handle an event from signal-cli
@@ -77,10 +113,11 @@ impl App {
             SignalEvent::MessageReceived(msg) => self.handle_message(msg),
             SignalEvent::ReceiptReceived { .. } => {}
             SignalEvent::TypingIndicator { sender, is_typing } => {
+                // Store typing state per-conversation (use sender as key for 1:1)
                 if is_typing {
-                    self.status_message = format!("{} is typing...", short_name(&sender));
+                    self.typing_indicators.insert(sender.clone(), Instant::now());
                 } else {
-                    self.update_status();
+                    self.typing_indicators.remove(&sender);
                 }
             }
             SignalEvent::Error(err) => {
@@ -242,6 +279,8 @@ impl App {
     }
 
     fn join_conversation(&mut self, target: &str) {
+        self.mark_read();
+
         // Try exact match first
         if self.conversations.contains_key(target) {
             self.active_conversation = Some(target.to_string());
@@ -286,6 +325,7 @@ impl App {
         if self.conversation_order.is_empty() {
             return;
         }
+        self.mark_read();
         let idx = self
             .active_conversation
             .as_ref()
@@ -305,6 +345,7 @@ impl App {
         if self.conversation_order.is_empty() {
             return;
         }
+        self.mark_read();
         let len = self.conversation_order.len();
         let idx = self
             .active_conversation
@@ -349,6 +390,7 @@ impl App {
     }
 
     pub fn set_connected(&mut self) {
+        self.connected = true;
         self.status_message = "connected | no conversation selected".to_string();
     }
 }

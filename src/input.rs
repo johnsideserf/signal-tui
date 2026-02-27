@@ -59,5 +59,6 @@ Commands:
 Shortcuts:
   Tab           - Next conversation
   Shift+Tab     - Previous conversation
-  PgUp/PgDn    - Scroll messages
+  PgUp/PgDn     - Scroll messages
+  Ctrl+Left/Right - Resize sidebar
   Ctrl+C        - Quit";
