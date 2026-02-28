@@ -314,14 +314,6 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
     let start = end.saturating_sub(available_height);
     let visible = &messages[start..end];
 
-    // Compute max sender name width for alignment
-    let max_sender_width = visible
-        .iter()
-        .filter(|m| !m.is_system)
-        .map(|m| m.sender.len())
-        .max()
-        .unwrap_or(0);
-
     // Get last_read_index for unread marker
     let conv_id = app.active_conversation.as_ref().unwrap();
     let last_read = app.last_read_index.get(conv_id).copied().unwrap_or(0);
@@ -385,14 +377,13 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
             )));
         } else {
             let time = msg.format_time();
-            let sender_padded = format!("{:>width$}", msg.sender, width = max_sender_width);
             lines.push(Line::from(vec![
                 Span::styled(
                     format!("[{}] ", time),
                     Style::default().fg(Color::DarkGray),
                 ),
                 Span::styled(
-                    format!("<{}>", sender_padded),
+                    format!("<{}>", msg.sender),
                     Style::default()
                         .fg(sender_color(&msg.sender))
                         .add_modifier(Modifier::BOLD),
