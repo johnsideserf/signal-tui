@@ -5,6 +5,12 @@ use std::time::Instant;
 use crate::input::{self, InputAction, HELP_TEXT};
 use crate::signal::types::{SignalEvent, SignalMessage};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputMode {
+    Normal,
+    Insert,
+}
+
 /// A single displayed message in a conversation
 #[derive(Debug, Clone)]
 pub struct DisplayMessage {
@@ -62,6 +68,8 @@ pub struct App {
     pub last_read_index: HashMap<String, usize>,
     /// Whether we are connected to signal-cli
     pub connected: bool,
+    /// Current input mode (Normal or Insert)
+    pub mode: InputMode,
 }
 
 impl App {
@@ -81,6 +89,7 @@ impl App {
             typing_indicators: HashMap::new(),
             last_read_index: HashMap::new(),
             connected: false,
+            mode: InputMode::Insert,
         }
     }
 

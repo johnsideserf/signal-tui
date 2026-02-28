@@ -61,4 +61,17 @@ Shortcuts:
   Shift+Tab     - Previous conversation
   PgUp/PgDn     - Scroll messages
   Ctrl+Left/Right - Resize sidebar
-  Ctrl+C        - Quit";
+  Ctrl+C        - Quit
+
+Vim Keybindings:
+  Esc           - Switch to Normal mode
+  i/a/I/A/o     - Switch to Insert mode
+  j/k           - Scroll up/down (Normal)
+  g/G           - Top/bottom of messages (Normal)
+  Ctrl+D/U      - Half-page scroll (Normal)
+  h/l           - Move cursor left/right (Normal)
+  w/b           - Word forward/back (Normal)
+  0/$           - Cursor to start/end of line (Normal)
+  x             - Delete character (Normal)
+  D             - Delete to end of line (Normal)
+  /             - Start command input (Normal)";
