@@ -17,6 +17,7 @@
 - [x] Echo outgoing messages from other devices via sync messages
 - [x] Contact name resolution from address book
 - [x] Sync request at startup to refresh data from primary device
+- [x] Inline image preview for attachments (halfblock rendering)
 
 ## Up Next
 
@@ -38,7 +39,14 @@
 - [ ] Multi-line message input (Shift+Enter for newlines)
 - [ ] Message history pagination (scroll-up to load older messages)
 - [ ] Correct group typing indicators (per-sender-to-group mapping)
-- [ ] Message reactions (emoji reactions)
+- [ ] **Message reactions (emoji reactions)**
+  - Parse `dataMessage.reaction` from signal-cli (emoji, targetAuthor, targetTimestamp, isRemove)
+  - Display reactions below the target message as compact emoji badges (e.g. `👍 2  ❤️ 1`)
+  - Aggregate duplicate emoji from different senders into counts
+  - Handle reaction removal (`isRemove: true`) by decrementing or removing the badge
+  - Store reactions in DB (new `reactions` table keyed by message + sender)
+  - Re-render reaction badges on startup from DB
+  - Stretch: allow sending reactions via a command (e.g. `/react 👍`)
 - [ ] Message deletion and editing
 - [ ] Group management (create, add/remove members, member list)
 - [ ] Scroll position memory per conversation

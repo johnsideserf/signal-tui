@@ -11,6 +11,7 @@ pub enum SignalEvent {
     },
     TypingIndicator {
         sender: String,
+        sender_name: Option<String>,
         is_typing: bool,
     },
     ContactList(Vec<Contact>),

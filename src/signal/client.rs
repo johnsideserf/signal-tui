@@ -293,12 +293,17 @@ fn parse_receive_event(
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_string();
+        let sender_name = envelope
+            .get("sourceName")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
         let is_typing = typing
             .get("action")
             .and_then(|v| v.as_str())
             .map(|a| a == "STARTED")
             .unwrap_or(false);
-        return Some(SignalEvent::TypingIndicator { sender, is_typing });
+        return Some(SignalEvent::TypingIndicator { sender, sender_name, is_typing });
     }
 
     // Receipt
@@ -325,7 +330,33 @@ fn parse_receive_event(
     }
 
     // Data message (actual text/attachments)
-    let data = envelope.get("dataMessage")?;
+    let data = match envelope.get("dataMessage") {
+        Some(d) => d,
+        None => {
+            // Catch-all: envelope type we don't handle yet — surface it for diagnostics
+            let keys: Vec<&str> = envelope
+                .as_object()
+                .map(|obj| obj.keys().map(|k| k.as_str()).collect())
+                .unwrap_or_default();
+            // Only report if there are interesting keys beyond metadata
+            let interesting: Vec<&&str> = keys.iter()
+                .filter(|k| !matches!(**k,
+                    "source" | "sourceNumber" | "sourceName" | "sourceUuid"
+                    | "sourceDevice" | "timestamp" | "serverReceivedTimestamp"
+                    | "serverDeliveredTimestamp" | "relay"
+                ))
+                .collect();
+            if !interesting.is_empty() {
+                return Some(SignalEvent::Error(
+                    format!("unhandled envelope type: {}", interesting.iter()
+                        .map(|k| **k)
+                        .collect::<Vec<_>>()
+                        .join(", "))
+                ));
+            }
+            return None;
+        }
+    };
 
     let source = envelope
         .get("sourceNumber")

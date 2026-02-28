@@ -150,36 +150,18 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_chat_area(frame: &mut Frame, app: &App, area: Rect) {
-    // Check if there's an active typing indicator for current conversation
-    let has_typing = app.active_conversation.as_ref().map_or(false, |conv_id| {
-        app.typing_indicators.keys().any(|sender| {
-            // For 1:1 conversations, sender == conv_id
-            // For groups, we'd need a mapping, but for now show any active indicator
-            sender == conv_id || app.conversations.get(conv_id).map_or(false, |c| c.is_group)
-        })
-    });
-
-    let typing_height = if has_typing { 1 } else { 0 };
-
     let chat_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(1),              // messages
-            Constraint::Length(typing_height), // typing indicator
-            Constraint::Length(3),            // input
+            Constraint::Min(1),   // messages (typing indicator rendered inside)
+            Constraint::Length(3), // input
         ])
         .split(area);
 
     let messages_area = chat_layout[0];
-    let typing_area = chat_layout[1];
-    let input_area = chat_layout[2];
+    let input_area = chat_layout[1];
 
     draw_messages(frame, app, messages_area);
-
-    if has_typing {
-        draw_typing_indicator(frame, app, typing_area);
-    }
-
     draw_input(frame, app, input_area);
 }
 
@@ -400,13 +382,8 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
 
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
-    frame.render_widget(paragraph, inner);
-}
-
-fn draw_typing_indicator(frame: &mut Frame, app: &App, area: Rect) {
+    // Append typing indicator as the last line inside the message area
     if let Some(ref conv_id) = app.active_conversation {
-        // Collect names of people typing in this conversation
         let typers: Vec<String> = app
             .typing_indicators
             .keys()
@@ -418,11 +395,10 @@ fn draw_typing_indicator(frame: &mut Frame, app: &App, area: Rect) {
                         .map_or(false, |c| c.is_group)
             })
             .map(|s| {
-                // Resolve display name: conversation name, then contact lookup, then raw number
-                if let Some(conv) = app.conversations.get(s) {
-                    conv.name.clone()
-                } else if let Some(name) = app.contact_names.get(s) {
+                if let Some(name) = app.contact_names.get(s) {
                     name.clone()
+                } else if let Some(conv) = app.conversations.get(s) {
+                    conv.name.clone()
                 } else {
                     s.clone()
                 }
@@ -435,15 +411,17 @@ fn draw_typing_indicator(frame: &mut Frame, app: &App, area: Rect) {
             } else {
                 format!("  {} are typing...", typers.join(", "))
             };
-            let indicator = Paragraph::new(Span::styled(
+            lines.push(Line::from(Span::styled(
                 text,
                 Style::default()
                     .fg(Color::DarkGray)
                     .add_modifier(Modifier::ITALIC),
-            ));
-            frame.render_widget(indicator, area);
+            )));
         }
     }
+
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, inner);
 }
 
 fn draw_input(frame: &mut Frame, app: &App, area: Rect) {

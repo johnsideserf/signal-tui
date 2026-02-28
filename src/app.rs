@@ -176,7 +176,11 @@ impl App {
         match event {
             SignalEvent::MessageReceived(msg) => self.handle_message(msg),
             SignalEvent::ReceiptReceived { .. } => {}
-            SignalEvent::TypingIndicator { sender, is_typing } => {
+            SignalEvent::TypingIndicator { sender, sender_name, is_typing } => {
+                // Store name in contact lookup if we learned it from this event
+                if let Some(ref name) = sender_name {
+                    self.contact_names.entry(sender.clone()).or_insert_with(|| name.clone());
+                }
                 // Store typing state per-conversation (use sender as key for 1:1)
                 if is_typing {
                     self.typing_indicators.insert(sender.clone(), Instant::now());
@@ -204,6 +208,13 @@ impl App {
         } else {
             msg.source.clone()
         };
+
+        // Store source_name in contact lookup for future resolution (typing indicators, etc.)
+        if !msg.is_outgoing {
+            if let Some(ref name) = msg.source_name {
+                self.contact_names.entry(msg.source.clone()).or_insert_with(|| name.clone());
+            }
+        }
 
         // Resolve conversation name: prefer message metadata, then contact lookup, then raw ID
         // For groups, source_name is the sender (not the group), so skip it
