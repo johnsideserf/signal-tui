@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, InputMode};
+use crate::app::{App, InputMode, SETTINGS_ITEMS};
 use crate::input::COMMANDS;
 
 /// Hash a sender name to one of ~8 distinct colors. "you" always gets Green.
@@ -307,11 +307,7 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
     let total = messages.len();
 
     // Calculate visible window — use larger slice to account for multi-line image messages
-    let end = if app.scroll_offset >= total {
-        0
-    } else {
-        total - app.scroll_offset
-    };
+    let end = total.saturating_sub(app.scroll_offset);
     let start = end.saturating_sub(available_height * 2);
     let visible = &messages[start..end];
 
@@ -411,7 +407,7 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
                     || app
                         .conversations
                         .get(conv_id)
-                        .map_or(false, |c| c.is_group)
+                        .is_some_and(|c| c.is_group)
             })
             .map(|s| {
                 if let Some(name) = app.contact_names.get(s) {
@@ -656,15 +652,10 @@ fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
         .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
         .style(Style::default().bg(Color::Black));
 
-    let settings_items = [
-        ("Direct message notifications", app.notify_direct),
-        ("Group message notifications", app.notify_group),
-        ("Sidebar visible", app.sidebar_visible),
-    ];
-
     let mut lines: Vec<Line> = Vec::new();
-    for (i, (label, enabled)) in settings_items.iter().enumerate() {
-        let checkbox = if *enabled { "[x]" } else { "[ ]" };
+    for (i, &label) in SETTINGS_ITEMS.iter().enumerate() {
+        let enabled = app.setting_value(i);
+        let checkbox = if enabled { "[x]" } else { "[ ]" };
         let is_selected = i == app.settings_index;
         let style = if is_selected {
             Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD)
@@ -673,7 +664,7 @@ fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
         };
         let check_style = if is_selected {
             Style::default().bg(Color::DarkGray).fg(Color::Cyan).add_modifier(Modifier::BOLD)
-        } else if *enabled {
+        } else if enabled {
             Style::default().fg(Color::Green)
         } else {
             Style::default().fg(Color::DarkGray)

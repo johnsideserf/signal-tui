@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 pub enum SignalEvent {
     MessageReceived(SignalMessage),
     ReceiptReceived {
+        #[allow(dead_code)]
         sender: String,
+        #[allow(dead_code)]
         timestamp: i64,
     },
     TypingIndicator {
@@ -37,22 +39,11 @@ pub struct SignalMessage {
 /// An attachment on a message
 #[derive(Debug, Clone)]
 pub struct Attachment {
+    #[allow(dead_code)]
     pub id: String,
     pub content_type: String,
     pub filename: Option<String>,
     pub local_path: Option<String>,
-}
-
-/// Commands sent to signal-cli
-#[derive(Debug, Clone)]
-pub enum UserCommand {
-    SendMessage {
-        recipient: String,
-        body: String,
-        is_group: bool,
-    },
-    ListGroups,
-    ListContacts,
 }
 
 /// JSON-RPC request to signal-cli
@@ -66,6 +57,7 @@ pub struct JsonRpcRequest {
 }
 
 /// JSON-RPC response from signal-cli
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct JsonRpcResponse {
     pub jsonrpc: String,
@@ -76,6 +68,7 @@ pub struct JsonRpcResponse {
     pub params: Option<serde_json::Value>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct JsonRpcError {
     pub code: i64,
@@ -94,5 +87,6 @@ pub struct Contact {
 pub struct Group {
     pub id: String,
     pub name: String,
+    #[allow(dead_code)]
     pub members: Vec<String>,
 }

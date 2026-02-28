@@ -269,3 +269,124 @@ impl Database {
         Ok(ids.into_iter().collect())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_db() -> Database {
+        Database::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn migration_creates_tables() {
+        let db = test_db();
+        // Should be able to query conversations table
+        let count: i64 = db.conn.query_row(
+            "SELECT COUNT(*) FROM conversations", [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn upsert_and_load_conversations() {
+        let db = test_db();
+        db.upsert_conversation("+1", "Alice", false).unwrap();
+        db.upsert_conversation("g1", "Family", true).unwrap();
+
+        let convs = db.load_conversations(100).unwrap();
+        assert_eq!(convs.len(), 2);
+    }
+
+    #[test]
+    fn name_update_on_conflict() {
+        let db = test_db();
+        db.upsert_conversation("+1", "Unknown", false).unwrap();
+        db.upsert_conversation("+1", "Alice", false).unwrap();
+
+        let convs = db.load_conversations(100).unwrap();
+        assert_eq!(convs.len(), 1);
+        assert_eq!(convs[0].0.name, "Alice");
+    }
+
+    #[test]
+    fn insert_and_load_messages() {
+        let db = test_db();
+        db.upsert_conversation("+1", "Alice", false).unwrap();
+        db.insert_message("+1", "Alice", "2025-01-01T00:00:00Z", "hello", false).unwrap();
+        db.insert_message("+1", "you", "2025-01-01T00:01:00Z", "hi!", false).unwrap();
+
+        let convs = db.load_conversations(100).unwrap();
+        assert_eq!(convs[0].0.messages.len(), 2);
+        assert_eq!(convs[0].0.messages[0].body, "hello");
+        assert_eq!(convs[0].0.messages[1].body, "hi!");
+    }
+
+    #[test]
+    fn unread_count_with_read_markers() {
+        let db = test_db();
+        db.upsert_conversation("+1", "Alice", false).unwrap();
+        let r1 = db.insert_message("+1", "Alice", "2025-01-01T00:00:00Z", "msg1", false).unwrap();
+        db.insert_message("+1", "Alice", "2025-01-01T00:01:00Z", "msg2", false).unwrap();
+        db.insert_message("+1", "Alice", "2025-01-01T00:02:00Z", "msg3", false).unwrap();
+
+        // Mark first message as read
+        db.save_read_marker("+1", r1).unwrap();
+        assert_eq!(db.unread_count("+1").unwrap(), 2);
+    }
+
+    #[test]
+    fn system_messages_excluded_from_unread() {
+        let db = test_db();
+        db.upsert_conversation("+1", "Alice", false).unwrap();
+        db.insert_message("+1", "", "2025-01-01T00:00:00Z", "system msg", true).unwrap();
+        db.insert_message("+1", "Alice", "2025-01-01T00:01:00Z", "real msg", false).unwrap();
+
+        // No read marker → only non-system messages count as unread
+        assert_eq!(db.unread_count("+1").unwrap(), 1);
+    }
+
+    #[test]
+    fn conversation_order() {
+        let db = test_db();
+        db.upsert_conversation("+1", "Alice", false).unwrap();
+        db.upsert_conversation("+2", "Bob", false).unwrap();
+        // Alice gets an older message, Bob gets a newer one
+        db.insert_message("+1", "Alice", "2025-01-01T00:00:00Z", "old", false).unwrap();
+        db.insert_message("+2", "Bob", "2025-01-02T00:00:00Z", "new", false).unwrap();
+
+        let order = db.load_conversation_order().unwrap();
+        // Most recent message first
+        assert_eq!(order[0], "+2");
+        assert_eq!(order[1], "+1");
+    }
+
+    #[test]
+    fn mute_round_trip() {
+        let db = test_db();
+        db.upsert_conversation("+1", "Alice", false).unwrap();
+        db.upsert_conversation("+2", "Bob", false).unwrap();
+
+        db.set_muted("+1", true).unwrap();
+        let muted = db.load_muted().unwrap();
+        assert!(muted.contains("+1"));
+        assert!(!muted.contains("+2"));
+
+        db.set_muted("+1", false).unwrap();
+        let muted = db.load_muted().unwrap();
+        assert!(!muted.contains("+1"));
+    }
+
+    #[test]
+    fn last_message_rowid() {
+        let db = test_db();
+        db.upsert_conversation("+1", "Alice", false).unwrap();
+
+        assert_eq!(db.last_message_rowid("+1").unwrap(), None);
+
+        db.insert_message("+1", "Alice", "2025-01-01T00:00:00Z", "msg1", false).unwrap();
+        let r2 = db.insert_message("+1", "Alice", "2025-01-01T00:01:00Z", "msg2", false).unwrap();
+
+        assert_eq!(db.last_message_rowid("+1").unwrap(), Some(r2));
+    }
+}

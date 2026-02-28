@@ -111,3 +111,146 @@ Vim Keybindings:
   x             - Delete character (Normal)
   D             - Delete to end of line (Normal)
   /             - Start command input (Normal)";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plain_text() {
+        match parse_input("hello world") {
+            InputAction::SendText(s) => assert_eq!(s, "hello world"),
+            other => panic!("expected SendText, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_input() {
+        match parse_input("") {
+            InputAction::SendText(s) => assert!(s.is_empty()),
+            other => panic!("expected empty SendText, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn whitespace_only() {
+        match parse_input("   ") {
+            InputAction::SendText(s) => assert!(s.is_empty()),
+            other => panic!("expected empty SendText, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn trimmed_text() {
+        match parse_input("  hello  ") {
+            InputAction::SendText(s) => assert_eq!(s, "hello"),
+            other => panic!("expected SendText, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn join_with_arg() {
+        match parse_input("/join Alice") {
+            InputAction::Join(s) => assert_eq!(s, "Alice"),
+            other => panic!("expected Join, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn join_alias() {
+        match parse_input("/j +1234567890") {
+            InputAction::Join(s) => assert_eq!(s, "+1234567890"),
+            other => panic!("expected Join, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn join_without_arg() {
+        match parse_input("/join") {
+            InputAction::Unknown(s) => assert!(s.contains("requires")),
+            other => panic!("expected Unknown, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn part_command() {
+        assert!(matches!(parse_input("/part"), InputAction::Part));
+    }
+
+    #[test]
+    fn part_alias() {
+        assert!(matches!(parse_input("/p"), InputAction::Part));
+    }
+
+    #[test]
+    fn quit_command() {
+        assert!(matches!(parse_input("/quit"), InputAction::Quit));
+    }
+
+    #[test]
+    fn quit_alias() {
+        assert!(matches!(parse_input("/q"), InputAction::Quit));
+    }
+
+    #[test]
+    fn sidebar_command() {
+        assert!(matches!(parse_input("/sidebar"), InputAction::ToggleSidebar));
+    }
+
+    #[test]
+    fn sidebar_alias() {
+        assert!(matches!(parse_input("/sb"), InputAction::ToggleSidebar));
+    }
+
+    #[test]
+    fn bell_no_arg() {
+        match parse_input("/bell") {
+            InputAction::ToggleBell(None) => {}
+            other => panic!("expected ToggleBell(None), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bell_with_arg() {
+        match parse_input("/bell direct") {
+            InputAction::ToggleBell(Some(s)) => assert_eq!(s, "direct"),
+            other => panic!("expected ToggleBell(Some), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn notify_alias() {
+        match parse_input("/notify group") {
+            InputAction::ToggleBell(Some(s)) => assert_eq!(s, "group"),
+            other => panic!("expected ToggleBell(Some), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mute_command() {
+        assert!(matches!(parse_input("/mute"), InputAction::ToggleMute));
+    }
+
+    #[test]
+    fn settings_command() {
+        assert!(matches!(parse_input("/settings"), InputAction::Settings));
+    }
+
+    #[test]
+    fn help_command() {
+        assert!(matches!(parse_input("/help"), InputAction::Help));
+    }
+
+    #[test]
+    fn help_alias() {
+        assert!(matches!(parse_input("/h"), InputAction::Help));
+    }
+
+    #[test]
+    fn unknown_command() {
+        match parse_input("/foo") {
+            InputAction::Unknown(s) => assert!(s.contains("/foo")),
+            other => panic!("expected Unknown, got {other:?}"),
+        }
+    }
+}

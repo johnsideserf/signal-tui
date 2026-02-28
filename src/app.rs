@@ -1,4 +1,5 @@
 use chrono::{DateTime, Local, Utc};
+use crossterm::event::KeyCode;
 use ratatui::text::Line;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -65,6 +66,7 @@ pub struct App {
     /// Whether the app should quit
     pub should_quit: bool,
     /// Our own account number for identifying outgoing messages
+    #[allow(dead_code)]
     pub account: String,
     /// Resizable sidebar width (min 14, max 40)
     pub sidebar_width: u16,
@@ -102,7 +104,93 @@ pub struct App {
     pub settings_index: usize,
 }
 
+pub const SETTINGS_ITEMS: &[&str] = &[
+    "Direct message notifications",
+    "Group message notifications",
+    "Sidebar visible",
+];
+
 impl App {
+    pub fn toggle_setting(&mut self, index: usize) {
+        match index {
+            0 => self.notify_direct = !self.notify_direct,
+            1 => self.notify_group = !self.notify_group,
+            2 => self.sidebar_visible = !self.sidebar_visible,
+            _ => {}
+        }
+    }
+
+    pub fn setting_value(&self, index: usize) -> bool {
+        match index {
+            0 => self.notify_direct,
+            1 => self.notify_group,
+            2 => self.sidebar_visible,
+            _ => false,
+        }
+    }
+
+    /// Handle a key press while the settings overlay is open.
+    pub fn handle_settings_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                if self.settings_index < SETTINGS_ITEMS.len() - 1 {
+                    self.settings_index += 1;
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.settings_index = self.settings_index.saturating_sub(1);
+            }
+            KeyCode::Char(' ') | KeyCode::Enter => {
+                self.toggle_setting(self.settings_index);
+            }
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.show_settings = false;
+            }
+            _ => {}
+        }
+    }
+
+    /// Handle a key press while the autocomplete popup is visible.
+    /// Returns `Some((recipient, body, is_group))` when the user submits a command
+    /// that requires sending a message. Returns `None` otherwise.
+    pub fn handle_autocomplete_key(&mut self, code: KeyCode) -> Option<(String, String, bool)> {
+        match code {
+            KeyCode::Up => {
+                let len = self.autocomplete_candidates.len();
+                if len > 0 {
+                    self.autocomplete_index = if self.autocomplete_index == 0 {
+                        len - 1
+                    } else {
+                        self.autocomplete_index - 1
+                    };
+                }
+            }
+            KeyCode::Down => {
+                let len = self.autocomplete_candidates.len();
+                if len > 0 {
+                    self.autocomplete_index = (self.autocomplete_index + 1) % len;
+                }
+            }
+            KeyCode::Tab => {
+                self.apply_autocomplete();
+            }
+            KeyCode::Esc => {
+                self.autocomplete_visible = false;
+                self.autocomplete_candidates.clear();
+                self.autocomplete_index = 0;
+            }
+            KeyCode::Enter => {
+                self.apply_autocomplete();
+                return self.handle_input();
+            }
+            _ => {
+                self.apply_input_edit(code);
+                self.update_autocomplete();
+            }
+        }
+        None
+    }
+
     pub fn new(account: String, db: Database) -> Self {
         Self {
             conversations: HashMap::new(),
@@ -588,6 +676,50 @@ impl App {
         }
     }
 
+    /// Handle basic cursor/editing keys (Backspace, Delete, Left, Right, Home, End, Char).
+    /// Returns true if the key was handled.
+    pub fn apply_input_edit(&mut self, key_code: KeyCode) -> bool {
+        match key_code {
+            KeyCode::Backspace => {
+                if self.input_cursor > 0 {
+                    self.input_cursor -= 1;
+                    self.input_buffer.remove(self.input_cursor);
+                }
+                true
+            }
+            KeyCode::Delete => {
+                if self.input_cursor < self.input_buffer.len() {
+                    self.input_buffer.remove(self.input_cursor);
+                }
+                true
+            }
+            KeyCode::Left => {
+                self.input_cursor = self.input_cursor.saturating_sub(1);
+                true
+            }
+            KeyCode::Right => {
+                if self.input_cursor < self.input_buffer.len() {
+                    self.input_cursor += 1;
+                }
+                true
+            }
+            KeyCode::Home => {
+                self.input_cursor = 0;
+                true
+            }
+            KeyCode::End => {
+                self.input_cursor = self.input_buffer.len();
+                true
+            }
+            KeyCode::Char(c) => {
+                self.input_buffer.insert(self.input_cursor, c);
+                self.input_cursor += 1;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Accept the currently selected autocomplete candidate.
     pub fn apply_autocomplete(&mut self) {
         if let Some(&cmd_idx) = self.autocomplete_candidates.get(self.autocomplete_index) {
@@ -932,5 +1064,145 @@ mod tests {
         assert_eq!(app.conversations.len(), 1);
         assert_eq!(app.conversation_order.len(), 1);
         assert_eq!(app.conversations["+1"].messages.len(), 3);
+    }
+
+    // --- Autocomplete tests ---
+
+    #[test]
+    fn autocomplete_slash_prefix() {
+        let mut app = test_app();
+        app.input_buffer = "/".to_string();
+        app.update_autocomplete();
+        assert!(app.autocomplete_visible);
+        assert!(!app.autocomplete_candidates.is_empty());
+    }
+
+    #[test]
+    fn autocomplete_prefix_filtering() {
+        let mut app = test_app();
+        app.input_buffer = "/jo".to_string();
+        app.update_autocomplete();
+        assert!(app.autocomplete_visible);
+        // Only /join should match
+        assert_eq!(app.autocomplete_candidates.len(), 1);
+        assert_eq!(COMMANDS[app.autocomplete_candidates[0]].name, "/join");
+    }
+
+    #[test]
+    fn autocomplete_non_slash_hidden() {
+        let mut app = test_app();
+        app.input_buffer = "hello".to_string();
+        app.update_autocomplete();
+        assert!(!app.autocomplete_visible);
+        assert!(app.autocomplete_candidates.is_empty());
+    }
+
+    #[test]
+    fn autocomplete_space_hides() {
+        let mut app = test_app();
+        app.input_buffer = "/join ".to_string();
+        app.update_autocomplete();
+        assert!(!app.autocomplete_visible);
+    }
+
+    #[test]
+    fn autocomplete_no_match() {
+        let mut app = test_app();
+        app.input_buffer = "/zzz".to_string();
+        app.update_autocomplete();
+        assert!(!app.autocomplete_visible);
+        assert!(app.autocomplete_candidates.is_empty());
+    }
+
+    #[test]
+    fn apply_autocomplete_trailing_space_for_arg_command() {
+        let mut app = test_app();
+        app.input_buffer = "/jo".to_string();
+        app.update_autocomplete();
+        app.apply_autocomplete();
+        // /join takes args, so buffer should end with a space
+        assert_eq!(app.input_buffer, "/join ");
+        assert_eq!(app.input_cursor, 6);
+    }
+
+    #[test]
+    fn apply_autocomplete_no_space_for_no_arg_command() {
+        let mut app = test_app();
+        app.input_buffer = "/pa".to_string();
+        app.update_autocomplete();
+        app.apply_autocomplete();
+        // /part takes no args, no trailing space
+        assert_eq!(app.input_buffer, "/part");
+        assert_eq!(app.input_cursor, 5);
+    }
+
+    #[test]
+    fn apply_autocomplete_index_clamped() {
+        let mut app = test_app();
+        app.input_buffer = "/".to_string();
+        app.update_autocomplete();
+        let len = app.autocomplete_candidates.len();
+        app.autocomplete_index = len + 5; // way out of bounds
+        app.update_autocomplete(); // should clamp
+        assert!(app.autocomplete_index < app.autocomplete_candidates.len());
+    }
+
+    // --- apply_input_edit tests ---
+
+    #[test]
+    fn input_edit_char_insert() {
+        let mut app = test_app();
+        assert!(app.apply_input_edit(KeyCode::Char('a')));
+        assert!(app.apply_input_edit(KeyCode::Char('b')));
+        assert_eq!(app.input_buffer, "ab");
+        assert_eq!(app.input_cursor, 2);
+    }
+
+    #[test]
+    fn input_edit_backspace() {
+        let mut app = test_app();
+        app.input_buffer = "abc".to_string();
+        app.input_cursor = 3;
+        assert!(app.apply_input_edit(KeyCode::Backspace));
+        assert_eq!(app.input_buffer, "ab");
+        assert_eq!(app.input_cursor, 2);
+    }
+
+    #[test]
+    fn input_edit_delete() {
+        let mut app = test_app();
+        app.input_buffer = "abc".to_string();
+        app.input_cursor = 1;
+        assert!(app.apply_input_edit(KeyCode::Delete));
+        assert_eq!(app.input_buffer, "ac");
+        assert_eq!(app.input_cursor, 1);
+    }
+
+    #[test]
+    fn input_edit_left_right() {
+        let mut app = test_app();
+        app.input_buffer = "abc".to_string();
+        app.input_cursor = 2;
+        assert!(app.apply_input_edit(KeyCode::Left));
+        assert_eq!(app.input_cursor, 1);
+        assert!(app.apply_input_edit(KeyCode::Right));
+        assert_eq!(app.input_cursor, 2);
+    }
+
+    #[test]
+    fn input_edit_home_end() {
+        let mut app = test_app();
+        app.input_buffer = "abc".to_string();
+        app.input_cursor = 1;
+        assert!(app.apply_input_edit(KeyCode::Home));
+        assert_eq!(app.input_cursor, 0);
+        assert!(app.apply_input_edit(KeyCode::End));
+        assert_eq!(app.input_cursor, 3);
+    }
+
+    #[test]
+    fn input_edit_unhandled_key() {
+        let mut app = test_app();
+        assert!(!app.apply_input_edit(KeyCode::F(1)));
     }
 }

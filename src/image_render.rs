@@ -38,7 +38,7 @@ pub fn render_image(path: &Path, max_width: u32) -> Option<Vec<Line<'static>>> {
 
     let (w, h) = rgba.dimensions();
     // Process pixel rows in pairs (top/bottom per cell row)
-    let row_pairs = (h + 1) / 2;
+    let row_pairs = h.div_ceil(2);
 
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(row_pairs as usize);
 

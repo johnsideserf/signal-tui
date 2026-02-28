@@ -137,7 +137,7 @@ pub async fn run_linking_flow(
 /// Convert a QR code matrix into half-block text lines.
 /// Uses Unicode half-block characters to pack two QR rows into one terminal row.
 fn render_qr_lines(qr: &qrcode::QrCode) -> Vec<Line<'static>> {
-    let width = qr.width() as usize;
+    let width = qr.width();
     let colors = qr.to_colors();
 
     // Add a 2-module quiet zone on each side
@@ -159,8 +159,7 @@ fn render_qr_lines(qr: &qrcode::QrCode) -> Vec<Line<'static>> {
     let mut y = 0;
     while y < total_h {
         let mut spans = Vec::new();
-        for x in 0..total_w {
-            let top = grid[y][x];
+        for (x, &top) in grid[y].iter().enumerate() {
             let bottom = if y + 1 < total_h { grid[y + 1][x] } else { false };
 
             let (ch, fg, bg) = match (top, bottom) {
