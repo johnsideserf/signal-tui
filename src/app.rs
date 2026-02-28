@@ -177,9 +177,11 @@ impl App {
         let conv_id = if let Some(ref gid) = msg.group_id {
             gid.clone()
         } else if msg.is_outgoing {
-            // Outgoing 1:1 — conversation is keyed by recipient, but we don't
-            // know the recipient from the event alone; skip for now.
-            return;
+            // Outgoing 1:1 — conversation is keyed by recipient
+            match msg.destination {
+                Some(ref dest) => dest.clone(),
+                None => return,
+            }
         } else {
             msg.source.clone()
         };
@@ -590,6 +592,7 @@ mod tests {
             group_id: None,
             group_name: None,
             is_outgoing: false,
+            destination: None,
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         assert_eq!(app.conversations["+15551234567"].name, "+15551234567");
@@ -616,6 +619,7 @@ mod tests {
             group_id: None,
             group_name: None,
             is_outgoing: false,
+            destination: None,
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         assert_eq!(app.conversations["+1"].name, "Alice");
@@ -650,6 +654,7 @@ mod tests {
             group_id: None,
             group_name: None,
             is_outgoing: false,
+            destination: None,
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
 
@@ -678,6 +683,7 @@ mod tests {
             group_id: Some("g1".to_string()),
             group_name: None,
             is_outgoing: false,
+            destination: None,
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
 
@@ -707,6 +713,7 @@ mod tests {
                 group_id: None,
                 group_name: None,
                 is_outgoing: false,
+                destination: None,
             };
             app.handle_signal_event(SignalEvent::MessageReceived(msg));
         }
