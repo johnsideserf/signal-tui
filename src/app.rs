@@ -57,6 +57,12 @@ pub struct App {
     pub input_buffer: String,
     /// Cursor position in input buffer
     pub input_cursor: usize,
+    /// Previously submitted inputs for Up/Down recall
+    pub input_history: Vec<String>,
+    /// Current position in history (None = not browsing)
+    pub history_index: Option<usize>,
+    /// Saves in-progress input when browsing history
+    pub history_draft: String,
     /// Whether sidebar is visible
     pub sidebar_visible: bool,
     /// Scroll offset for messages (0 = bottom)
@@ -207,6 +213,9 @@ impl App {
             active_conversation: None,
             input_buffer: String::new(),
             input_cursor: 0,
+            input_history: Vec::new(),
+            history_index: None,
+            history_draft: String::new(),
             sidebar_visible: true,
             scroll_offset: 0,
             status_message: "connecting...".to_string(),
@@ -547,6 +556,11 @@ impl App {
     /// Handle a line of user input; returns Some(command) if we need to send a message
     pub fn handle_input(&mut self) -> Option<(String, String, bool)> {
         let input = self.input_buffer.clone();
+        let trimmed = input.trim();
+        if !trimmed.is_empty() {
+            self.input_history.push(trimmed.to_string());
+        }
+        self.history_index = None;
         self.input_buffer.clear();
         self.input_cursor = 0;
 
@@ -700,6 +714,41 @@ impl App {
 
     /// Handle basic cursor/editing keys (Backspace, Delete, Left, Right, Home, End, Char).
     /// Returns true if the key was handled.
+    /// Navigate up through input history (older entries).
+    pub fn history_up(&mut self) {
+        if self.input_history.is_empty() {
+            return;
+        }
+        match self.history_index {
+            None => {
+                self.history_draft = self.input_buffer.clone();
+                self.history_index = Some(self.input_history.len() - 1);
+            }
+            Some(idx) if idx > 0 => {
+                self.history_index = Some(idx - 1);
+            }
+            _ => return,
+        }
+        self.input_buffer = self.input_history[self.history_index.unwrap()].clone();
+        self.input_cursor = self.input_buffer.len();
+    }
+
+    /// Navigate down through input history (newer entries).
+    pub fn history_down(&mut self) {
+        let idx = match self.history_index {
+            Some(idx) => idx,
+            None => return,
+        };
+        if idx < self.input_history.len() - 1 {
+            self.history_index = Some(idx + 1);
+            self.input_buffer = self.input_history[idx + 1].clone();
+        } else {
+            self.input_buffer = self.history_draft.clone();
+            self.history_index = None;
+        }
+        self.input_cursor = self.input_buffer.len();
+    }
+
     pub fn apply_input_edit(&mut self, key_code: KeyCode) -> bool {
         match key_code {
             KeyCode::Backspace => {
@@ -731,6 +780,14 @@ impl App {
             }
             KeyCode::End => {
                 self.input_cursor = self.input_buffer.len();
+                true
+            }
+            KeyCode::Up => {
+                self.history_up();
+                true
+            }
+            KeyCode::Down => {
+                self.history_down();
                 true
             }
             KeyCode::Char(c) => {
