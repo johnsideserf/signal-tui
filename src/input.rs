@@ -11,6 +11,10 @@ pub enum InputAction {
     Quit,
     /// Toggle sidebar visibility
     ToggleSidebar,
+    /// Toggle terminal bell notifications (None = both, Some("direct"/"group") = specific)
+    ToggleBell(Option<String>),
+    /// Mute/unmute the current conversation
+    ToggleMute,
     /// Show help text
     Help,
     /// Unknown command
@@ -43,6 +47,14 @@ pub fn parse_input(input: &str) -> InputAction {
         "/part" | "/p" => InputAction::Part,
         "/quit" | "/q" => InputAction::Quit,
         "/sidebar" | "/sb" => InputAction::ToggleSidebar,
+        "/bell" | "/notify" => {
+            if arg.is_empty() {
+                InputAction::ToggleBell(None)
+            } else {
+                InputAction::ToggleBell(Some(arg))
+            }
+        }
+        "/mute" => InputAction::ToggleMute,
         "/help" | "/h" => InputAction::Help,
         _ => InputAction::Unknown(format!("Unknown command: {cmd}")),
     }
@@ -53,6 +65,8 @@ Commands:
   /join <name>  - Switch to a conversation (contact number or group name)
   /part         - Leave current conversation view
   /sidebar      - Toggle sidebar visibility
+  /bell [type]  - Toggle notifications (direct, group, or both)
+  /mute         - Mute/unmute the current conversation
   /quit         - Exit signal-tui
   /help         - Show this help
 

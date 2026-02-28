@@ -267,6 +267,8 @@ async fn run_app(
     db: db::Database,
 ) -> Result<()> {
     let mut app = App::new(config.account.clone(), db);
+    app.notify_direct = config.notify_direct;
+    app.notify_group = config.notify_group;
     app.load_from_db()?;
     app.set_connected();
 
@@ -531,10 +533,29 @@ async fn run_app(
         // Expire stale typing indicators
         app.cleanup_typing();
 
+        // Terminal bell on new messages in background conversations
+        if app.pending_bell {
+            app.pending_bell = false;
+            execute!(terminal.backend_mut(), crossterm::style::Print("\x07"))?;
+        }
+
+        // Update terminal title with unread count
+        let unread = app.total_unread();
+        let title = if unread > 0 {
+            format!("signal-tui ({unread})")
+        } else {
+            "signal-tui".to_string()
+        };
+        execute!(terminal.backend_mut(), crossterm::terminal::SetTitle(&title))?;
+
         if app.should_quit {
             break;
         }
     }
+
+    // Restore terminal title on exit
+    execute!(terminal.backend_mut(), crossterm::terminal::SetTitle(""))
+        .ok();
 
     Ok(())
 }

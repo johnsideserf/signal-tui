@@ -21,9 +21,11 @@
 
 ## Up Next
 
-- [ ] **New message notifications**
-  - Terminal bell or title update when a message arrives in a non-active conversation
-  - Unread count in terminal title bar
+- [x] **New message notifications**
+  - Terminal bell + unread count in terminal title
+  - Separate toggles for direct and group messages (config + `/bell` command)
+  - Per-conversation `/mute` with DB persistence
+  - Setup wizard preferences step
 
 - [ ] **Delivery/read receipt display**
   - Receipts are already parsed but silently discarded

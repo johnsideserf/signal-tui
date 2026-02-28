@@ -123,16 +123,23 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
             }
 
             // Conversation name
+            let is_muted = app.muted_conversations.contains(id);
             let name_style = if is_active {
                 Style::default()
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD)
             } else if has_unread {
                 Style::default().fg(Color::Yellow)
+            } else if is_muted {
+                Style::default().fg(Color::DarkGray)
             } else {
                 Style::default().fg(Color::Gray)
             };
             spans.push(Span::styled(name, name_style));
+
+            if is_muted {
+                spans.push(Span::styled(" ~", Style::default().fg(Color::DarkGray)));
+            }
 
             ListItem::new(Line::from(spans))
         })

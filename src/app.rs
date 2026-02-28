@@ -1,6 +1,6 @@
 use chrono::{DateTime, Local, Utc};
 use ratatui::text::Line;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Instant;
 
@@ -82,6 +82,14 @@ pub struct App {
     pub connection_error: Option<String>,
     /// Contact/group name lookup (number/id → display name) for name resolution
     pub contact_names: HashMap<String, String>,
+    /// Bell pending — set by handle_message, drained by main loop
+    pub pending_bell: bool,
+    /// Terminal bell for 1:1 messages in background conversations
+    pub notify_direct: bool,
+    /// Terminal bell for group messages in background conversations
+    pub notify_group: bool,
+    /// Conversations muted from notifications
+    pub muted_conversations: HashSet<String>,
 }
 
 impl App {
@@ -105,6 +113,10 @@ impl App {
             db,
             connection_error: None,
             contact_names: HashMap::new(),
+            pending_bell: false,
+            notify_direct: true,
+            notify_group: true,
+            muted_conversations: HashSet::new(),
         }
     }
 
@@ -140,6 +152,7 @@ impl App {
         }
 
         self.conversation_order = order;
+        self.muted_conversations = self.db.load_muted()?;
         Ok(())
     }
 
@@ -337,9 +350,13 @@ impl App {
             .map(|a| a == &conv_id)
             .unwrap_or(false);
 
-        if !is_active {
+        if !is_active && !msg.is_outgoing {
             if let Some(c) = self.conversations.get_mut(&conv_id) {
                 c.unread += 1;
+            }
+            let type_enabled = if is_group { self.notify_group } else { self.notify_direct };
+            if type_enabled && !self.muted_conversations.contains(&conv_id) {
+                self.pending_bell = true;
             }
         }
     }
@@ -460,6 +477,50 @@ impl App {
             }
             InputAction::ToggleSidebar => {
                 self.sidebar_visible = !self.sidebar_visible;
+            }
+            InputAction::ToggleBell(ref target) => {
+                match target.as_deref() {
+                    None => {
+                        // Toggle both together
+                        let new_state = !(self.notify_direct && self.notify_group);
+                        self.notify_direct = new_state;
+                        self.notify_group = new_state;
+                        let state = if new_state { "on" } else { "off" };
+                        self.status_message = format!("notifications {state}");
+                    }
+                    Some("direct" | "dm" | "1:1") => {
+                        self.notify_direct = !self.notify_direct;
+                        let state = if self.notify_direct { "on" } else { "off" };
+                        self.status_message = format!("direct notifications {state}");
+                    }
+                    Some("group" | "groups") => {
+                        self.notify_group = !self.notify_group;
+                        let state = if self.notify_group { "on" } else { "off" };
+                        self.status_message = format!("group notifications {state}");
+                    }
+                    Some(other) => {
+                        self.status_message = format!("unknown bell type: {other} (use direct or group)");
+                    }
+                }
+            }
+            InputAction::ToggleMute => {
+                if let Some(ref conv_id) = self.active_conversation {
+                    let conv_id = conv_id.clone();
+                    if self.muted_conversations.remove(&conv_id) {
+                        let name = self.conversations.get(&conv_id)
+                            .map(|c| c.name.as_str()).unwrap_or(&conv_id);
+                        self.status_message = format!("unmuted {name}");
+                        let _ = self.db.set_muted(&conv_id, false);
+                    } else {
+                        let name = self.conversations.get(&conv_id)
+                            .map(|c| c.name.as_str()).unwrap_or(&conv_id);
+                        self.status_message = format!("muted {name}");
+                        self.muted_conversations.insert(conv_id.clone());
+                        let _ = self.db.set_muted(&conv_id, true);
+                    }
+                } else {
+                    self.status_message = "no active conversation to mute".to_string();
+                }
             }
             InputAction::Help => {
                 self.add_system_message(HELP_TEXT);
@@ -586,6 +647,11 @@ impl App {
     pub fn set_connected(&mut self) {
         self.connected = true;
         self.status_message = "connected | no conversation selected".to_string();
+    }
+
+    /// Total unread count across all conversations
+    pub fn total_unread(&self) -> usize {
+        self.conversations.values().map(|c| c.unread).sum()
     }
 }
 

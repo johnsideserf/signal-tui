@@ -15,6 +15,18 @@ pub struct Config {
     /// Directory for downloaded attachments
     #[serde(default = "default_download_dir")]
     pub download_dir: PathBuf,
+
+    /// Terminal bell for 1:1 messages in background conversations
+    #[serde(default = "default_true")]
+    pub notify_direct: bool,
+
+    /// Terminal bell for group messages in background conversations
+    #[serde(default = "default_true")]
+    pub notify_group: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_signal_cli_path() -> String {
@@ -33,6 +45,8 @@ impl Default for Config {
             account: String::new(),
             signal_cli_path: default_signal_cli_path(),
             download_dir: default_download_dir(),
+            notify_direct: true,
+            notify_group: true,
         }
     }
 }

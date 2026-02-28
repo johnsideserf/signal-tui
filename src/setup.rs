@@ -30,6 +30,7 @@ enum Step {
     SignalCli,
     Account,
     Linking,
+    Preferences,
     Done,
 }
 
@@ -210,14 +211,14 @@ pub async fn run_setup(
                         draw_registered_screen(frame, &working_config.account);
                     })?;
                     tokio::time::sleep(Duration::from_secs(1)).await;
-                    step = Step::Done;
+                    step = Step::Preferences;
                     continue;
                 }
 
                 // Run linking flow
                 match link::run_linking_flow(terminal, &working_config).await {
                     Ok(link::LinkResult::Success) => {
-                        step = Step::Done;
+                        step = Step::Preferences;
                     }
                     Ok(link::LinkResult::Cancelled) => {
                         step = Step::Account;
@@ -249,6 +250,38 @@ pub async fn run_setup(
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+
+            Step::Preferences => {
+                terminal.draw(|frame| {
+                    draw_preferences_step(frame, &working_config);
+                })?;
+
+                if event::poll(Duration::from_millis(50))? {
+                    if let Event::Key(key) = event::read()? {
+                        if key.kind != KeyEventKind::Press {
+                            continue;
+                        }
+                        match (key.modifiers, key.code) {
+                            (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
+                                return Ok(SetupResult::Cancelled);
+                            }
+                            (_, KeyCode::Char('1')) => {
+                                working_config.notify_direct = !working_config.notify_direct;
+                            }
+                            (_, KeyCode::Char('2')) => {
+                                working_config.notify_group = !working_config.notify_group;
+                            }
+                            (_, KeyCode::Enter) => {
+                                step = Step::Done;
+                            }
+                            (_, KeyCode::Esc) => {
+                                step = Step::Linking;
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -337,9 +370,10 @@ fn validate_phone(input: &str) -> Result<(), String> {
 
 fn step_label(current: Step) -> &'static str {
     match current {
-        Step::SignalCli => "Step 1 of 3",
-        Step::Account => "Step 2 of 3",
-        Step::Linking => "Step 3 of 3",
+        Step::SignalCli => "Step 1 of 4",
+        Step::Account => "Step 2 of 4",
+        Step::Linking => "Step 3 of 4",
+        Step::Preferences => "Step 4 of 4",
         Step::Done => "Complete",
     }
 }
@@ -603,6 +637,73 @@ fn draw_link_error(frame: &mut ratatui::Frame, error: &str) {
         Line::from(""),
         Line::from(Span::styled(
             "  Enter to retry | Esc to go back",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, inner);
+}
+
+fn draw_preferences_step(frame: &mut ratatui::Frame, config: &Config) {
+    let area = frame.area();
+
+    let [_, content_area, _] = Layout::vertical([
+        Constraint::Min(1),
+        Constraint::Length(16),
+        Constraint::Min(1),
+    ])
+    .flex(Flex::Center)
+    .areas(area);
+
+    let [content] = Layout::horizontal([Constraint::Percentage(60)])
+        .flex(Flex::Center)
+        .areas(content_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(" Setup ")
+        .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+    let inner = block.inner(content);
+    frame.render_widget(block, content);
+
+    let on = Style::default().fg(Color::Green);
+    let off = Style::default().fg(Color::Red);
+
+    let direct_state = if config.notify_direct { ("on", on) } else { ("off", off) };
+    let group_state = if config.notify_group { ("on", on) } else { ("off", off) };
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  {}: Notifications", step_label(Step::Preferences)),
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Terminal bell when messages arrive in background chats.",
+            Style::default().fg(Color::Gray),
+        )),
+        Line::from(Span::styled(
+            "  You can change these later with /bell and /mute.",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  1 ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled("Direct messages  ", Style::default().fg(Color::White)),
+            Span::styled(direct_state.0, direct_state.1),
+        ]),
+        Line::from(vec![
+            Span::styled("  2 ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled("Group messages   ", Style::default().fg(Color::White)),
+            Span::styled(group_state.0, group_state.1),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Press 1/2 to toggle | Enter to continue",
             Style::default().fg(Color::DarkGray),
         )),
     ];

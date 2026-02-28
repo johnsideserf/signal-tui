@@ -76,6 +76,17 @@ impl Database {
             )?;
         }
 
+        if version < 2 {
+            self.conn.execute_batch(
+                "
+                BEGIN;
+                ALTER TABLE conversations ADD COLUMN muted INTEGER NOT NULL DEFAULT 0;
+                UPDATE schema_version SET version = 2;
+                COMMIT;
+                ",
+            )?;
+        }
+
         Ok(())
     }
 
@@ -236,5 +247,25 @@ impl Database {
         )?;
 
         Ok(count as usize)
+    }
+
+    // --- Muted conversations ---
+
+    pub fn set_muted(&self, conv_id: &str, muted: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE conversations SET muted = ?2 WHERE id = ?1",
+            params![conv_id, muted as i32],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_muted(&self) -> Result<std::collections::HashSet<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM conversations WHERE muted = 1",
+        )?;
+        let ids: Vec<String> = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(ids.into_iter().collect())
     }
 }
