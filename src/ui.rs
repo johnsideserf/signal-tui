@@ -460,7 +460,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Scrollbar (only when content overflows)
     if content_height > available_height {
-        let mut scrollbar_state = ScrollbarState::new(content_height).position(scroll_y);
+        let mut scrollbar_state = ScrollbarState::new(base_scroll).position(scroll_y);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(None)
             .end_symbol(None);
