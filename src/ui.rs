@@ -458,13 +458,19 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         .scroll((scroll_y as u16, 0));
     frame.render_widget(paragraph, inner);
 
-    // Scrollbar (only when content overflows)
+    // Scrollbar on right border, inset to preserve rounded corners
     if content_height > available_height {
+        let scrollbar_area = Rect::new(
+            area.x + area.width.saturating_sub(1),
+            area.y + 1,
+            1,
+            area.height.saturating_sub(2),
+        );
         let mut scrollbar_state = ScrollbarState::new(base_scroll).position(scroll_y);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(None)
             .end_symbol(None);
-        frame.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
+        frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
     }
 }
 
