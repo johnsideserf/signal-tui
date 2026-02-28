@@ -2,19 +2,7 @@
 
 A terminal-based Signal client with an IRC aesthetic. Wraps [signal-cli](https://github.com/AsamK/signal-cli) via JSON-RPC for the messaging backend.
 
-```
-┌─Channels──┬─ #group-chat ──────────────────────┐
-│ > alice    │ [12:34] <bob> hey everyone          │
-│   bob      │ [12:35] <alice> what's up           │
-│   #work    │ [12:36] <bob> check this out        │
-│   #friends │ [12:36] <bob> [attachment: pic.jpg]  │
-│            │                                      │
-│            ├──────────────────────────────────────┤
-│            │ > your message here_                 │
-├────────────┴──────────────────────────────────────┤
-│ [INSERT] │ ● connected │ #group-chat │ 4 chats    │
-└───────────────────────────────────────────────────┘
-```
+![signal-tui screenshot](screenshot.png)
 
 ## Prerequisites
 

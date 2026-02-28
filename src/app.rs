@@ -104,12 +104,17 @@ pub struct App {
     pub settings_index: usize,
     /// Help overlay visible
     pub show_help: bool,
+    /// Show inline halfblock image previews in chat
+    pub inline_images: bool,
+    /// Link regions detected in the last rendered frame (for OSC 8 injection)
+    pub link_regions: Vec<crate::ui::LinkRegion>,
 }
 
 pub const SETTINGS_ITEMS: &[&str] = &[
     "Direct message notifications",
     "Group message notifications",
     "Sidebar visible",
+    "Inline image previews",
 ];
 
 impl App {
@@ -118,6 +123,7 @@ impl App {
             0 => self.notify_direct = !self.notify_direct,
             1 => self.notify_group = !self.notify_group,
             2 => self.sidebar_visible = !self.sidebar_visible,
+            3 => self.inline_images = !self.inline_images,
             _ => {}
         }
     }
@@ -127,6 +133,7 @@ impl App {
             0 => self.notify_direct,
             1 => self.notify_group,
             2 => self.sidebar_visible,
+            3 => self.inline_images,
             _ => false,
         }
     }
@@ -223,6 +230,8 @@ impl App {
             show_settings: false,
             settings_index: 0,
             show_help: false,
+            inline_images: true,
+            link_regions: Vec::new(),
         }
     }
 
@@ -239,10 +248,16 @@ impl App {
             // Re-render image previews from stored paths
             for msg in &mut conv.messages {
                 if msg.body.starts_with("[image:") {
-                    if let Some(arrow_pos) = msg.body.find(" -> ") {
-                        let path_str = msg.body[arrow_pos + 4..].trim_end_matches(']');
-                        let path = Path::new(path_str);
-                        if path.exists() {
+                    let path_str = if let Some(uri_pos) = msg.body.find("file:///") {
+                        Some(file_uri_to_path(&msg.body[uri_pos..]))
+                    } else if let Some(arrow_pos) = msg.body.find(" -> ") {
+                        Some(msg.body[arrow_pos + 4..].trim_end_matches(']').to_string())
+                    } else {
+                        None
+                    };
+                    if let Some(p) = path_str {
+                        let path = Path::new(&p);
+                        if self.inline_images && path.exists() {
                             msg.image_lines = image_render::render_image(path, 40);
                         }
                     }
@@ -394,20 +409,24 @@ impl App {
             );
 
             if is_image {
-                // Try to render inline image preview
-                let rendered = att.local_path.as_deref().and_then(|p| {
-                    image_render::render_image(Path::new(p), 40)
-                });
+                // Try to render inline image preview (only when enabled)
+                let rendered = if self.inline_images {
+                    att.local_path.as_deref().and_then(|p| {
+                        image_render::render_image(Path::new(p), 40)
+                    })
+                } else {
+                    None
+                };
 
                 let path_info = att.local_path.as_deref()
-                    .map(|p| format!(" -> {p}"))
+                    .map(|p| format!(" {}", path_to_file_uri(p)))
                     .unwrap_or_default();
 
                 let att_body = if rendered.is_some() {
                     format!("[image: {label}]{path_info}")
                 } else {
                     // Render failed — show path as fallback
-                    format!("[image: {label}{path_info}]")
+                    format!("[image: {label}]{path_info}")
                 };
 
                 if let Some(conv) = self.conversations.get_mut(&conv_id) {
@@ -428,7 +447,7 @@ impl App {
                 );
             } else {
                 let path_info = att.local_path.as_deref()
-                    .map(|p| format!(" -> {p}"))
+                    .map(|p| format!(" {}", path_to_file_uri(p)))
                     .unwrap_or_default();
                 let att_body = format!("[attachment: {label}]{path_info}");
                 if let Some(conv) = self.conversations.get_mut(&conv_id) {
@@ -855,6 +874,25 @@ fn short_name(number: &str) -> String {
     } else {
         number.to_string()
     }
+}
+
+/// Convert a local file path to a file:/// URI (forward slashes, for terminal Ctrl+Click).
+fn path_to_file_uri(path: &str) -> String {
+    let normalized = path.replace('\\', "/");
+    if normalized.starts_with('/') {
+        format!("file://{normalized}")
+    } else {
+        format!("file:///{normalized}")
+    }
+}
+
+/// Extract a local file path from a file:/// URI string (which may have trailing text).
+fn file_uri_to_path(uri: &str) -> String {
+    let uri = uri.trim();
+    let stripped = uri.strip_prefix("file:///").unwrap_or(
+        uri.strip_prefix("file://").unwrap_or(uri),
+    );
+    stripped.to_string()
 }
 
 #[cfg(test)]
