@@ -68,3 +68,30 @@ Use prefixed names: `feature/`, `fix/`, `refactor/`, `docs/` (e.g. `feature/dark
 ### Exceptions
 
 Trivial docs-only changes (CLAUDE.md tweaks, typo fixes) may be committed directly to master. All code changes must go through a PR.
+
+## Releases
+
+CI runs automatically on every push/PR (`.github/workflows/ci.yml`). Releases are triggered by pushing a version tag.
+
+### Creating a Release
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+This triggers `.github/workflows/release.yml` which:
+1. Runs clippy + tests
+2. Builds binaries for 4 targets: Linux x86_64, macOS x86_64, macOS arm64, Windows x86_64
+3. Creates a GitHub Release with auto-generated changelog and attached archives
+
+### Version Tags
+
+Use semver: `v0.1.0`, `v0.2.0`, `v1.0.0`. Remember to update `version` in `Cargo.toml` before tagging.
+
+### Install Scripts
+
+- `install.sh` — Linux/macOS one-liner (`curl -fsSL .../install.sh | bash`)
+- `install.ps1` — Windows one-liner (`irm .../install.ps1 | iex`)
+
+Both download the latest release binary and handle signal-cli setup.
