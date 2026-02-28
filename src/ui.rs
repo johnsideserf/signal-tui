@@ -305,13 +305,13 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
     let available_height = inner.height as usize;
     let total = messages.len();
 
-    // Calculate visible window
+    // Calculate visible window — use larger slice to account for multi-line image messages
     let end = if app.scroll_offset >= total {
         0
     } else {
         total - app.scroll_offset
     };
-    let start = end.saturating_sub(available_height);
+    let start = end.saturating_sub(available_height * 2);
     let visible = &messages[start..end];
 
     // Get last_read_index for unread marker
@@ -390,6 +390,13 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
                 ),
                 Span::raw(format!(" {}", msg.body)),
             ]));
+
+            // Render inline image preview if available
+            if let Some(ref image_lines) = msg.image_lines {
+                for line in image_lines {
+                    lines.push(line.clone());
+                }
+            }
         }
     }
 

@@ -1,6 +1,7 @@
 mod app;
 mod config;
 mod db;
+mod image_render;
 mod input;
 mod link;
 mod setup;

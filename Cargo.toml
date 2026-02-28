@@ -16,3 +16,4 @@ anyhow = "1"
 toml = "0.8"
 rusqlite = { version = "0.32", features = ["bundled"] }
 qrcode = "0.14"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }

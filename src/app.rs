@@ -1,8 +1,11 @@
 use chrono::{DateTime, Local, Utc};
+use ratatui::text::Line;
 use std::collections::HashMap;
+use std::path::Path;
 use std::time::Instant;
 
 use crate::db::Database;
+use crate::image_render;
 use crate::input::{self, InputAction, HELP_TEXT};
 use crate::signal::types::{Contact, Group, SignalEvent, SignalMessage};
 
@@ -19,6 +22,8 @@ pub struct DisplayMessage {
     pub timestamp: DateTime<Utc>,
     pub body: String,
     pub is_system: bool,
+    /// Pre-rendered halfblock image lines (for image attachments)
+    pub image_lines: Option<Vec<Line<'static>>>,
 }
 
 impl DisplayMessage {
@@ -112,6 +117,20 @@ impl App {
             let id = conv.id.clone();
             let msg_count = conv.messages.len();
             conv.unread = unread;
+
+            // Re-render image previews from stored paths
+            for msg in &mut conv.messages {
+                if msg.body.starts_with("[image:") {
+                    if let Some(arrow_pos) = msg.body.find(" -> ") {
+                        let path_str = msg.body[arrow_pos + 4..].trim_end_matches(']');
+                        let path = Path::new(path_str);
+                        if path.exists() {
+                            msg.image_lines = image_render::render_image(path, 40);
+                        }
+                    }
+                }
+            }
+
             self.conversations.insert(id.clone(), conv);
             // Derive last_read_index from unread count
             if msg_count > 0 {
@@ -220,6 +239,7 @@ impl App {
                     timestamp: msg.timestamp,
                     body: body.clone(),
                     is_system: false,
+                    image_lines: None,
                 });
             }
             let _ = self.db.insert_message(
@@ -237,27 +257,67 @@ impl App {
                 .filename
                 .as_deref()
                 .unwrap_or(&att.content_type);
-            let path_info = att
-                .local_path
-                .as_deref()
-                .map(|p| format!(" -> {p}"))
-                .unwrap_or_default();
-            let att_body = format!("[attachment: {label}]{path_info}");
-            if let Some(conv) = self.conversations.get_mut(&conv_id) {
-                conv.messages.push(DisplayMessage {
-                    sender: sender_display.clone(),
-                    timestamp: msg.timestamp,
-                    body: att_body.clone(),
-                    is_system: false,
-                });
-            }
-            let _ = self.db.insert_message(
-                &conv_id,
-                &sender_display,
-                &ts_rfc3339,
-                &att_body,
-                false,
+
+            let is_image = matches!(
+                att.content_type.as_str(),
+                "image/jpeg" | "image/png" | "image/gif" | "image/webp"
             );
+
+            if is_image {
+                // Try to render inline image preview
+                let rendered = att.local_path.as_deref().and_then(|p| {
+                    image_render::render_image(Path::new(p), 40)
+                });
+
+                let path_info = att.local_path.as_deref()
+                    .map(|p| format!(" -> {p}"))
+                    .unwrap_or_default();
+
+                let att_body = if rendered.is_some() {
+                    format!("[image: {label}]{path_info}")
+                } else {
+                    // Render failed — show path as fallback
+                    format!("[image: {label}{path_info}]")
+                };
+
+                if let Some(conv) = self.conversations.get_mut(&conv_id) {
+                    conv.messages.push(DisplayMessage {
+                        sender: sender_display.clone(),
+                        timestamp: msg.timestamp,
+                        body: att_body.clone(),
+                        is_system: false,
+                        image_lines: rendered,
+                    });
+                }
+                let _ = self.db.insert_message(
+                    &conv_id,
+                    &sender_display,
+                    &ts_rfc3339,
+                    &att_body,
+                    false,
+                );
+            } else {
+                let path_info = att.local_path.as_deref()
+                    .map(|p| format!(" -> {p}"))
+                    .unwrap_or_default();
+                let att_body = format!("[attachment: {label}]{path_info}");
+                if let Some(conv) = self.conversations.get_mut(&conv_id) {
+                    conv.messages.push(DisplayMessage {
+                        sender: sender_display.clone(),
+                        timestamp: msg.timestamp,
+                        body: att_body.clone(),
+                        is_system: false,
+                        image_lines: None,
+                    });
+                }
+                let _ = self.db.insert_message(
+                    &conv_id,
+                    &sender_display,
+                    &ts_rfc3339,
+                    &att_body,
+                    false,
+                );
+            }
         }
 
         let is_active = self
@@ -359,6 +419,7 @@ impl App {
                             timestamp: now,
                             body: text.clone(),
                             is_system: false,
+                            image_lines: None,
                         });
                     }
                     let _ = self.db.insert_message(
@@ -491,6 +552,7 @@ impl App {
                     timestamp: Utc::now(),
                     body: text.to_string(),
                     is_system: true,
+                    image_lines: None,
                 });
             }
         } else {

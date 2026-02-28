@@ -136,6 +136,7 @@ impl Database {
                         timestamp,
                         body,
                         is_system,
+                        image_lines: None,
                     })
                 })
                 .collect();

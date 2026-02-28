@@ -274,6 +274,16 @@ fn parse_receive_event(
     params: &serde_json::Value,
     download_dir: &std::path::Path,
 ) -> Option<SignalEvent> {
+    // signal-cli reports exceptions for messages it can't parse (e.g. 1:1 sent sync)
+    if let Some(exc) = params.get("exception") {
+        let msg = exc.get("message").and_then(|v| v.as_str()).unwrap_or("unknown error");
+        // Known signal-cli bug — silently ignore rather than spamming status bar
+        if msg.contains("SyncMessage missing destination") {
+            return None;
+        }
+        return Some(SignalEvent::Error(format!("signal-cli: {msg}")));
+    }
+
     let envelope = params.get("envelope")?;
 
     // Typing indicator
@@ -455,7 +465,15 @@ fn parse_attachment(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    // If signal-cli provides a file path, attempt to copy to download dir
+    // Generate a filename if signal-cli didn't provide one
+    let effective_name = filename.clone().unwrap_or_else(|| {
+        let ext = mime_to_ext(&content_type);
+        // Use last 8 chars of attachment ID for uniqueness
+        let short_id = if id.len() > 8 { &id[id.len() - 8..] } else { &id };
+        format!("{short_id}.{ext}")
+    });
+
+    // If signal-cli provides a file path, copy to download dir
     let local_path = value
         .get("file")
         .and_then(|v| v.as_str())
@@ -464,8 +482,7 @@ fn parse_attachment(
             if !src.exists() {
                 return None;
             }
-            let dest_name = filename.as_deref().unwrap_or(&id);
-            let dest = download_dir.join(dest_name);
+            let dest = download_dir.join(&effective_name);
             let _ = std::fs::create_dir_all(download_dir);
             match std::fs::copy(src, &dest) {
                 Ok(_) => Some(dest.to_string_lossy().to_string()),
@@ -476,9 +493,27 @@ fn parse_attachment(
     Some(Attachment {
         id,
         content_type,
-        filename,
+        filename: Some(effective_name),
         local_path,
     })
+}
+
+/// Map common MIME types to file extensions
+fn mime_to_ext(mime: &str) -> &str {
+    match mime {
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "video/mp4" => "mp4",
+        "video/quicktime" => "mov",
+        "audio/mpeg" => "mp3",
+        "audio/ogg" => "ogg",
+        "audio/aac" => "aac",
+        "application/pdf" => "pdf",
+        "text/plain" => "txt",
+        _ => "bin",
+    }
 }
 
 #[cfg(test)]
