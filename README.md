@@ -1,5 +1,9 @@
 # signal-tui
 
+[![CI](https://github.com/johnsideserf/signal-tui/actions/workflows/ci.yml/badge.svg)](https://github.com/johnsideserf/signal-tui/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/johnsideserf/signal-tui)](https://github.com/johnsideserf/signal-tui/releases/latest)
+[![License: GPL-3.0](https://img.shields.io/github/license/johnsideserf/signal-tui)](LICENSE)
+
 A terminal-based Signal messenger client with an IRC aesthetic. Wraps [signal-cli](https://github.com/AsamK/signal-cli) via JSON-RPC for the messaging backend.
 
 ![signal-tui screenshot](screenshot.png)
