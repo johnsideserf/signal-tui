@@ -54,15 +54,31 @@ download_dir = "/home/user/signal-downloads"
 
 All fields are optional. `signal_cli_path` defaults to `"signal-cli"` (found via PATH), and `download_dir` defaults to `~/signal-downloads/`. On Windows, use the full path to `signal-cli.bat` if it isn't in your PATH.
 
+## Features
+
+- Send and receive messages (1:1 and group)
+- Receive file attachments (displayed inline as `[attachment: filename]`)
+- Typing indicators with contact name resolution
+- Outgoing message sync (messages sent from your phone appear in the TUI)
+- SQLite message persistence across sessions (WAL mode)
+- Unread counts with persistent read markers
+- Contact name resolution from Signal address book
+- Groups auto-populated in sidebar on startup
+- First-run setup wizard with QR code device linking
+- Vim-style modal editing (Normal/Insert modes)
+- Responsive layout with resizable, auto-hiding sidebar
+
 ## Commands
 
-| Command | Description |
-|---|---|
-| `/join <name>` | Switch to a conversation (contact number or group name) |
-| `/part` | Leave current conversation view |
-| `/sidebar` | Toggle sidebar visibility |
-| `/quit` | Exit signal-tui |
-| `/help` | Show help |
+| Command | Alias | Description |
+|---|---|---|
+| `/join <name>` | `/j` | Switch to a conversation by contact name, number, or group name |
+| `/part` | `/p` | Leave current conversation (return to no selection) |
+| `/sidebar` | `/sb` | Toggle sidebar visibility |
+| `/quit` | `/q` | Exit signal-tui |
+| `/help` | `/h` | Show help text in the current conversation |
+
+To message a new contact, use `/join +15551234567` with their phone number in E.164 format.
 
 ## Keyboard Shortcuts
 

@@ -411,9 +411,11 @@ fn draw_typing_indicator(frame: &mut Frame, app: &App, area: Rect) {
                         .map_or(false, |c| c.is_group)
             })
             .map(|s| {
-                // Try to get a short display name
+                // Resolve display name: conversation name, then contact lookup, then raw number
                 if let Some(conv) = app.conversations.get(s) {
                     conv.name.clone()
+                } else if let Some(name) = app.contact_names.get(s) {
+                    name.clone()
                 } else {
                     s.clone()
                 }
