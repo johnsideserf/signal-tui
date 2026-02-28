@@ -305,6 +305,15 @@ fn parse_receive_event(
         return Some(SignalEvent::ReceiptReceived { sender, timestamp });
     }
 
+    // Sync message (sent from another device, e.g. phone)
+    if let Some(sync) = envelope.get("syncMessage") {
+        if let Some(sent) = sync.get("sentMessage") {
+            return parse_sent_sync(envelope, sent, download_dir);
+        }
+        // Other sync types (read receipts, etc.) — ignore for now
+        return None;
+    }
+
     // Data message (actual text/attachments)
     let data = envelope.get("dataMessage")?;
 
@@ -363,6 +372,71 @@ fn parse_receive_event(
         group_id,
         group_name,
         is_outgoing: false,
+        destination: None,
+    }))
+}
+
+fn parse_sent_sync(
+    envelope: &serde_json::Value,
+    sent: &serde_json::Value,
+    download_dir: &std::path::Path,
+) -> Option<SignalEvent> {
+    let source = envelope
+        .get("sourceNumber")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    let destination = sent
+        .get("destinationNumber")
+        .or_else(|| sent.get("destination"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let timestamp_ms = sent
+        .get("timestamp")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+
+    let timestamp = DateTime::from_timestamp_millis(timestamp_ms).unwrap_or_default();
+
+    let body = sent
+        .get("message")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let group_id = sent
+        .get("groupInfo")
+        .and_then(|g| g.get("groupId"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let group_name = sent
+        .get("groupInfo")
+        .and_then(|g| g.get("groupName"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let attachments = sent
+        .get("attachments")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|a| parse_attachment(a, download_dir))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Some(SignalEvent::MessageReceived(SignalMessage {
+        source,
+        source_name: None,
+        timestamp,
+        body,
+        attachments,
+        group_id,
+        group_name,
+        is_outgoing: true,
+        destination,
     }))
 }
 

@@ -29,6 +29,8 @@ pub struct SignalMessage {
     pub group_id: Option<String>,
     pub group_name: Option<String>,
     pub is_outgoing: bool,
+    /// For outgoing 1:1 messages (sync), the recipient number
+    pub destination: Option<String>,
 }
 
 /// An attachment on a message
