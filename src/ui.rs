@@ -2,7 +2,10 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{
+        Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Scrollbar,
+        ScrollbarOrientation, ScrollbarState, Wrap,
+    },
     Frame,
 };
 
@@ -41,7 +44,7 @@ fn truncate(s: &str, max_width: usize) -> String {
     }
 }
 
-pub fn draw(frame: &mut Frame, app: &App) {
+pub fn draw(frame: &mut Frame, app: &mut App) {
     let size = frame.area();
     let terminal_width = size.width;
 
@@ -86,6 +89,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
     // Settings overlay (overlays everything)
     if app.show_settings {
         draw_settings(frame, app, size);
+    }
+
+    // Help overlay (overlays everything)
+    if app.show_help {
+        draw_help(frame, size);
     }
 }
 
@@ -167,7 +175,7 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(sidebar, area);
 }
 
-fn draw_chat_area(frame: &mut Frame, app: &App, area: Rect) -> Rect {
+fn draw_chat_area(frame: &mut Frame, app: &mut App, area: Rect) -> Rect {
     let chat_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -184,7 +192,7 @@ fn draw_chat_area(frame: &mut Frame, app: &App, area: Rect) -> Rect {
     input_area
 }
 
-fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let (title_left, title_right) = match &app.active_conversation {
         Some(id) => {
             let conv = &app.conversations[id];
@@ -306,10 +314,10 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
     let available_height = inner.height as usize;
     let total = messages.len();
 
-    // Calculate visible window — use larger slice to account for multi-line image messages
-    let end = total.saturating_sub(app.scroll_offset);
-    let start = end.saturating_sub(available_height * 2);
-    let visible = &messages[start..end];
+    // Build lines from a generous window covering the viewport at the current scroll position.
+    // Always include messages up to `total`; scroll_offset controls the paragraph scroll instead.
+    let start = total.saturating_sub(available_height * 3 + app.scroll_offset);
+    let visible = &messages[start..total];
 
     // Get last_read_index for unread marker
     let conv_id = app.active_conversation.as_ref().unwrap();
@@ -435,8 +443,29 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
 
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    // Compute actual content height accounting for line wrapping
+    let content_height: usize = lines.iter().map(|line| {
+        let w = line.width();
+        if w == 0 { 1 } else { w.div_ceil(inner_width.max(1)) }
+    }).sum();
+
+    // Bottom-align by default; scroll_offset shifts the view upward
+    let base_scroll = content_height.saturating_sub(available_height);
+    app.scroll_offset = app.scroll_offset.min(base_scroll);
+    let scroll_y = base_scroll - app.scroll_offset;
+    let paragraph = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .scroll((scroll_y as u16, 0));
     frame.render_widget(paragraph, inner);
+
+    // Scrollbar (only when content overflows)
+    if content_height > available_height {
+        let mut scrollbar_state = ScrollbarState::new(content_height).position(scroll_y);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None);
+        frame.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
+    }
 }
 
 fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
@@ -618,9 +647,8 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect) {
 
     let area = Rect::new(x, y, popup_width, popup_height);
 
-    // Clear the area behind the popup
-    let clear = Block::default().style(Style::default().bg(Color::Black));
-    frame.render_widget(clear, area);
+    // Clear the area behind the popup so chat text doesn't leak through
+    frame.render_widget(Clear, area);
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -640,9 +668,8 @@ fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
     let y = (area.height.saturating_sub(popup_height)) / 2;
     let popup_area = Rect::new(x, y, popup_width, popup_height);
 
-    // Clear behind the overlay
-    let clear = Block::default().style(Style::default().bg(Color::Black));
-    frame.render_widget(clear, popup_area);
+    // Clear behind the overlay so underlying text doesn't leak through
+    frame.render_widget(Clear, popup_area);
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -678,6 +705,107 @@ fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "  Esc to close  |  Space to toggle",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let popup = Paragraph::new(lines).block(block);
+    frame.render_widget(popup, popup_area);
+}
+
+fn draw_help(frame: &mut Frame, area: Rect) {
+    // Help table entries: (key, description)
+    let commands: &[(&str, &str)] = &[
+        ("/join <name>", "Switch to a conversation"),
+        ("/part", "Leave current conversation"),
+        ("/sidebar", "Toggle sidebar visibility"),
+        ("/bell [type]", "Toggle notifications"),
+        ("/mute", "Mute/unmute conversation"),
+        ("/settings", "Open settings"),
+        ("/quit", "Exit signal-tui"),
+    ];
+    let shortcuts: &[(&str, &str)] = &[
+        ("Tab / Shift+Tab", "Next / prev conversation"),
+        ("PgUp / PgDn", "Scroll messages"),
+        ("Ctrl+Left/Right", "Resize sidebar"),
+        ("Ctrl+C", "Quit"),
+    ];
+    let vim: &[(&str, &str)] = &[
+        ("Esc", "Normal mode"),
+        ("i / a / I / A / o", "Insert mode"),
+        ("j / k", "Scroll up / down"),
+        ("g / G", "Top / bottom of messages"),
+        ("Ctrl+D / U", "Half-page scroll"),
+        ("h / l", "Cursor left / right"),
+        ("w / b", "Word forward / back"),
+        ("0 / $", "Start / end of line"),
+        ("x / D", "Delete char / to end"),
+        ("/", "Start command input"),
+    ];
+
+    // Calculate popup size
+    let key_col_width = 20;
+    let desc_col_width = 28;
+    let popup_width = (key_col_width + desc_col_width + 6) // padding + borders
+        .min(area.width.saturating_sub(4) as usize) as u16;
+    let content_lines =
+        commands.len() + shortcuts.len() + vim.len() + 5; // +5 for headers + footer + spacing
+    let popup_height = (content_lines as u16 + 2) // +2 for borders
+        .min(area.height.saturating_sub(2));
+
+    let x = (area.width.saturating_sub(popup_width)) / 2;
+    let y = (area.height.saturating_sub(popup_height)) / 2;
+    let popup_area = Rect::new(x, y, popup_width, popup_height);
+
+    frame.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(" Help ")
+        .title_style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+        .style(Style::default().bg(Color::Black));
+
+    let header_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+    let key_style = Style::default().fg(Color::Cyan);
+    let desc_style = Style::default().fg(Color::Gray);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Helper to push a row
+    let push_row = |lines: &mut Vec<Line>, key: &str, desc: &str| {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {:<width$}", key, width = key_col_width), key_style),
+            Span::styled(desc.to_string(), desc_style),
+        ]));
+    };
+
+    lines.push(Line::from(Span::styled("  Commands", header_style)));
+    for &(key, desc) in commands {
+        push_row(&mut lines, key, desc);
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("  Shortcuts", header_style)));
+    for &(key, desc) in shortcuts {
+        push_row(&mut lines, key, desc);
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("  Vim Keybindings", header_style)));
+    for &(key, desc) in vim {
+        push_row(&mut lines, key, desc);
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Press any key to close",
         Style::default().fg(Color::DarkGray),
     )));
 

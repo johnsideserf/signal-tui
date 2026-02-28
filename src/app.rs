@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use crate::db::Database;
 use crate::image_render;
-use crate::input::{self, InputAction, COMMANDS, HELP_TEXT};
+use crate::input::{self, InputAction, COMMANDS};
 use crate::signal::types::{Contact, Group, SignalEvent, SignalMessage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +102,8 @@ pub struct App {
     pub show_settings: bool,
     /// Cursor position in settings list
     pub settings_index: usize,
+    /// Help overlay visible
+    pub show_help: bool,
 }
 
 pub const SETTINGS_ITEMS: &[&str] = &[
@@ -220,6 +222,7 @@ impl App {
             autocomplete_index: 0,
             show_settings: false,
             settings_index: 0,
+            show_help: false,
         }
     }
 
@@ -630,7 +633,7 @@ impl App {
                 self.settings_index = 0;
             }
             InputAction::Help => {
-                self.add_system_message(HELP_TEXT);
+                self.show_help = true;
             }
             InputAction::Unknown(msg) => {
                 self.status_message = msg;
@@ -820,22 +823,6 @@ impl App {
         self.update_status();
     }
 
-    fn add_system_message(&mut self, text: &str) {
-        if let Some(ref conv_id) = self.active_conversation {
-            if let Some(conv) = self.conversations.get_mut(conv_id) {
-                conv.messages.push(DisplayMessage {
-                    sender: String::new(),
-                    timestamp: Utc::now(),
-                    body: text.to_string(),
-                    is_system: true,
-                    image_lines: None,
-                });
-            }
-        } else {
-            // No active conversation — show in status
-            self.status_message = text.lines().next().unwrap_or("").to_string();
-        }
-    }
 
     fn update_status(&mut self) {
         if let Some(ref id) = self.active_conversation {
