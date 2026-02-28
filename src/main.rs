@@ -117,10 +117,12 @@ async fn run_main_flow(
     force_setup: bool,
 ) -> Result<()> {
     // Run setup wizard if needed
+    let mut setup_handled_linking = false;
     if config.needs_setup() || force_setup {
         match setup::run_setup(terminal, config, force_setup).await? {
             SetupResult::Completed(new_config) => {
                 *config = new_config;
+                setup_handled_linking = true;
             }
             SetupResult::Skipped => {}
             SetupResult::Cancelled => {
@@ -142,25 +144,26 @@ async fn run_main_flow(
     let db_path = db_dir.join("signal-tui.db");
     let database = db::Database::open(&db_path)?;
 
-    // Quick pre-flight: check if account is registered
-    match link::check_account_registered(config).await {
-        Ok(false) => {
-            // Not registered — run linking flow
-            match link::run_linking_flow(terminal, config).await {
-                Ok(()) => {}
-                Err(e) => {
-                    let msg = format!("{e}");
-                    if msg.contains("cancelled") {
+    // Quick pre-flight: check if account is registered (skip if wizard already handled it)
+    if !setup_handled_linking {
+        match link::check_account_registered(config).await {
+            Ok(false) => {
+                // Not registered — run linking flow
+                match link::run_linking_flow(terminal, config).await {
+                    Ok(link::LinkResult::Success) => {}
+                    Ok(link::LinkResult::Cancelled) => {
                         return Ok(());
                     }
-                    // Show error and bail
-                    show_error_screen(terminal, "Device Linking Failed", &msg).await?;
-                    return Ok(());
+                    Err(e) => {
+                        let msg = format!("{e}");
+                        show_error_screen(terminal, "Device Linking Failed", &msg).await?;
+                        return Ok(());
+                    }
                 }
             }
+            Ok(true) => {} // Good to go
+            Err(_) => {}   // Can't check, proceed anyway (graceful degradation)
         }
-        Ok(true) => {} // Good to go
-        Err(_) => {}   // Can't check, proceed anyway (graceful degradation)
     }
 
     // Spawn signal-cli backend
@@ -504,9 +507,19 @@ async fn run_app(
             }
         }
 
-        // Drain signal events (non-blocking)
-        while let Ok(event) = signal_client.event_rx.try_recv() {
-            app.handle_signal_event(event);
+        // Drain signal events (non-blocking), detect disconnect
+        loop {
+            match signal_client.event_rx.try_recv() {
+                Ok(ev) => app.handle_signal_event(ev),
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    if app.connection_error.is_none() {
+                        app.connection_error = Some("signal-cli disconnected".to_string());
+                        app.connected = false;
+                    }
+                    break;
+                }
+                Err(_) => break, // Empty, no more events
+            }
         }
 
         // Expire stale typing indicators

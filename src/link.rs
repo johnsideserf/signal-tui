@@ -16,6 +16,14 @@ use tokio::process::Command;
 
 use crate::config::Config;
 
+/// Result of a device-linking flow.
+pub enum LinkResult {
+    /// Device was linked successfully.
+    Success,
+    /// User cancelled the linking (Esc / Ctrl+C).
+    Cancelled,
+}
+
 /// Check whether the configured account is registered with signal-cli.
 /// Returns `Ok(true)` if registered, `Ok(false)` if not.
 pub async fn check_account_registered(config: &Config) -> Result<bool> {
@@ -53,7 +61,7 @@ pub async fn check_account_registered(config: &Config) -> Result<bool> {
 pub async fn run_linking_flow(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     config: &Config,
-) -> Result<()> {
+) -> Result<LinkResult> {
     // Show initial status
     terminal.draw(|frame| {
         let msg = Paragraph::new("Starting device linking...")
@@ -179,7 +187,7 @@ async fn show_qr_and_wait(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     qr_lines: &[Line<'static>],
     child: &mut tokio::process::Child,
-) -> Result<()> {
+) -> Result<LinkResult> {
     loop {
         // Draw
         terminal.draw(|frame| draw_qr_screen(frame, qr_lines))?;
@@ -197,7 +205,7 @@ async fn show_qr_and_wait(
                         frame.render_widget(msg, area);
                     })?;
                     tokio::time::sleep(Duration::from_secs(2)).await;
-                    return Ok(());
+                    return Ok(LinkResult::Success);
                 } else {
                     anyhow::bail!("signal-cli link failed (exit code: {:?})", status.code());
                 }
@@ -215,7 +223,7 @@ async fn show_qr_and_wait(
                 match (key.modifiers, key.code) {
                     (_, KeyCode::Esc) | (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
                         let _ = child.kill().await;
-                        anyhow::bail!("Device linking cancelled by user");
+                        return Ok(LinkResult::Cancelled);
                     }
                     _ => {}
                 }

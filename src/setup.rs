@@ -90,7 +90,13 @@ pub async fn run_setup(
                             continue;
                         }
                         match (key.modifiers, key.code) {
-                            (KeyModifiers::CONTROL, KeyCode::Char('c')) | (_, KeyCode::Esc) => {
+                            (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
+                                return Ok(SetupResult::Cancelled);
+                            }
+                            (_, KeyCode::Esc) if custom_path_mode => {
+                                custom_path_mode = false;
+                            }
+                            (_, KeyCode::Esc) => {
                                 return Ok(SetupResult::Cancelled);
                             }
                             _ if custom_path_mode => match key.code {
@@ -210,15 +216,15 @@ pub async fn run_setup(
 
                 // Run linking flow
                 match link::run_linking_flow(terminal, &working_config).await {
-                    Ok(()) => {
+                    Ok(link::LinkResult::Success) => {
                         step = Step::Done;
+                    }
+                    Ok(link::LinkResult::Cancelled) => {
+                        step = Step::Account;
                     }
                     Err(e) => {
                         let msg = format!("{e}");
-                        if msg.contains("cancelled") {
-                            // User cancelled — go back to account step
-                            step = Step::Account;
-                        } else {
+                        {
                             // Show error, let user retry or go back
                             terminal.draw(|frame| {
                                 draw_link_error(frame, &msg);
@@ -265,6 +271,8 @@ pub async fn run_setup(
 
 async fn check_signal_cli(path: &str) -> (bool, String) {
     // Try running the command to see if it exists
+    let which_cmd = if cfg!(windows) { "where" } else { "which" };
+
     match Command::new(path)
         .arg("--version")
         .stdout(std::process::Stdio::piped())
@@ -277,12 +285,22 @@ async fn check_signal_cli(path: &str) -> (bool, String) {
             if output.status.success() && !version.is_empty() {
                 (true, format!("{path} ({version})"))
             } else {
-                (true, path.to_string())
+                // Command exists but no version info — resolve full path
+                let location = Command::new(which_cmd)
+                    .arg(path)
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::null())
+                    .output()
+                    .await
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                    .unwrap_or_else(|| path.to_string());
+                (true, location)
             }
         }
         Err(_) => {
-            // Also try `which` / `where` to find it
-            let which_cmd = if cfg!(windows) { "where" } else { "which" };
+            // Command failed to run — try `which` / `where` to find it
             match Command::new(which_cmd)
                 .arg(path)
                 .stdout(std::process::Stdio::piped())
@@ -375,6 +393,8 @@ fn draw_signal_cli_step(
         )),
     ];
 
+    let mut input_line_idx: Option<usize> = None;
+
     if found {
         lines.push(Line::from(vec![
             Span::styled("  ", Style::default()),
@@ -390,10 +410,16 @@ fn draw_signal_cli_step(
             Style::default().fg(Color::Yellow),
         )));
         lines.push(Line::from(""));
+        input_line_idx = Some(lines.len());
         lines.push(Line::from(vec![
             Span::styled("  > ", Style::default().fg(Color::Cyan)),
             Span::raw(custom_path_input),
         ]));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Enter to confirm | Esc to go back",
+            Style::default().fg(Color::DarkGray),
+        )));
     } else {
         lines.push(Line::from(vec![
             Span::styled("  ", Style::default()),
@@ -418,10 +444,9 @@ fn draw_signal_cli_step(
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, inner);
 
-    if custom_path_mode {
-        // Position cursor in the custom path input
+    if let Some(idx) = input_line_idx {
         let cursor_x = inner.x + 4 + custom_path_cursor as u16;
-        let cursor_y = inner.y + 8;
+        let cursor_y = inner.y + idx as u16;
         frame.set_cursor_position((cursor_x, cursor_y));
     }
 }
@@ -471,11 +496,13 @@ fn draw_account_step(
             Style::default().fg(Color::DarkGray),
         )),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("  > ", Style::default().fg(Color::Cyan)),
-            Span::raw(phone_input),
-        ]),
     ];
+
+    let input_line_idx = lines.len();
+    lines.push(Line::from(vec![
+        Span::styled("  > ", Style::default().fg(Color::Cyan)),
+        Span::raw(phone_input),
+    ]));
 
     if let Some(err) = error {
         lines.push(Line::from(""));
@@ -496,7 +523,7 @@ fn draw_account_step(
 
     // Position cursor
     let cursor_x = inner.x + 4 + phone_cursor as u16;
-    let cursor_y = inner.y + 6;
+    let cursor_y = inner.y + input_line_idx as u16;
     frame.set_cursor_position((cursor_x, cursor_y));
 }
 
