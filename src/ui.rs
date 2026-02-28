@@ -7,6 +7,7 @@ use ratatui::{
 };
 
 use crate::app::{App, InputMode};
+use crate::input::COMMANDS;
 
 /// Hash a sender name to one of ~8 distinct colors. "you" always gets Green.
 fn sender_color(name: &str) -> Color {
@@ -60,7 +61,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     let sidebar_auto_hidden = terminal_width < 60;
     let show_sidebar = app.sidebar_visible && !sidebar_auto_hidden;
 
-    if show_sidebar {
+    let input_area = if show_sidebar {
         let horizontal = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -70,12 +71,22 @@ pub fn draw(frame: &mut Frame, app: &App) {
             .split(body_area);
 
         draw_sidebar(frame, app, horizontal[0]);
-        draw_chat_area(frame, app, horizontal[1]);
+        draw_chat_area(frame, app, horizontal[1])
     } else {
-        draw_chat_area(frame, app, body_area);
-    }
+        draw_chat_area(frame, app, body_area)
+    };
 
     draw_status_bar(frame, app, status_area, sidebar_auto_hidden);
+
+    // Autocomplete popup (overlays everything)
+    if app.autocomplete_visible && !app.autocomplete_candidates.is_empty() {
+        draw_autocomplete(frame, app, input_area);
+    }
+
+    // Settings overlay (overlays everything)
+    if app.show_settings {
+        draw_settings(frame, app, size);
+    }
 }
 
 fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
@@ -156,7 +167,7 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(sidebar, area);
 }
 
-fn draw_chat_area(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_chat_area(frame: &mut Frame, app: &App, area: Rect) -> Rect {
     let chat_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -170,6 +181,7 @@ fn draw_chat_area(frame: &mut Frame, app: &App, area: Rect) {
 
     draw_messages(frame, app, messages_area);
     draw_input(frame, app, input_area);
+    input_area
 }
 
 fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
@@ -558,4 +570,126 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, sidebar_auto_hidden
             .bg(Color::DarkGray),
     );
     frame.render_widget(status, area);
+}
+
+fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect) {
+    let candidates = &app.autocomplete_candidates;
+    let count = candidates.len();
+    let terminal_width = frame.area().width;
+
+    // Build lines and measure max width
+    let mut lines: Vec<Line> = Vec::with_capacity(count);
+    let mut max_content_width: usize = 0;
+    for (i, &cmd_idx) in candidates.iter().enumerate() {
+        let cmd = &COMMANDS[cmd_idx];
+        let args_part = if cmd.args.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", cmd.args)
+        };
+        let left = format!("  {}{}", cmd.name, args_part);
+        let right = format!("  {}", cmd.description);
+        let total_len = left.len() + right.len() + 2; // padding
+        if total_len > max_content_width {
+            max_content_width = total_len;
+        }
+
+        let is_selected = i == app.autocomplete_index;
+        let style = if is_selected {
+            Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        let desc_style = if is_selected {
+            Style::default().bg(Color::DarkGray).fg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(left, style),
+            Span::styled(right, desc_style),
+        ]));
+    }
+
+    // Size the popup
+    let popup_width = (max_content_width as u16 + 2).min(terminal_width.saturating_sub(2)).max(20);
+    let popup_height = (count as u16) + 2; // +2 for border
+
+    // Position above the input box, left-aligned with it
+    let x = input_area.x;
+    let y = input_area.y.saturating_sub(popup_height);
+
+    let area = Rect::new(x, y, popup_width, popup_height);
+
+    // Clear the area behind the popup
+    let clear = Block::default().style(Style::default().bg(Color::Black));
+    frame.render_widget(clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
+
+    let popup = Paragraph::new(lines).block(block);
+    frame.render_widget(popup, area);
+}
+
+fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
+    let popup_width: u16 = 42.min(area.width.saturating_sub(4));
+    let popup_height: u16 = 9.min(area.height.saturating_sub(2));
+
+    let x = (area.width.saturating_sub(popup_width)) / 2;
+    let y = (area.height.saturating_sub(popup_height)) / 2;
+    let popup_area = Rect::new(x, y, popup_width, popup_height);
+
+    // Clear behind the overlay
+    let clear = Block::default().style(Style::default().bg(Color::Black));
+    frame.render_widget(clear, popup_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(" Settings ")
+        .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .style(Style::default().bg(Color::Black));
+
+    let settings_items = [
+        ("Direct message notifications", app.notify_direct),
+        ("Group message notifications", app.notify_group),
+        ("Sidebar visible", app.sidebar_visible),
+    ];
+
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, (label, enabled)) in settings_items.iter().enumerate() {
+        let checkbox = if *enabled { "[x]" } else { "[ ]" };
+        let is_selected = i == app.settings_index;
+        let style = if is_selected {
+            Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        let check_style = if is_selected {
+            Style::default().bg(Color::DarkGray).fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else if *enabled {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {} ", checkbox), check_style),
+            Span::styled(label.to_string(), style),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Esc to close  |  Space to toggle",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let popup = Paragraph::new(lines).block(block);
+    frame.render_widget(popup, popup_area);
 }

@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use crate::db::Database;
 use crate::image_render;
-use crate::input::{self, InputAction, HELP_TEXT};
+use crate::input::{self, InputAction, COMMANDS, HELP_TEXT};
 use crate::signal::types::{Contact, Group, SignalEvent, SignalMessage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +90,16 @@ pub struct App {
     pub notify_group: bool,
     /// Conversations muted from notifications
     pub muted_conversations: HashSet<String>,
+    /// Autocomplete popup visible
+    pub autocomplete_visible: bool,
+    /// Indices into COMMANDS for current matches
+    pub autocomplete_candidates: Vec<usize>,
+    /// Selected item in autocomplete popup
+    pub autocomplete_index: usize,
+    /// Settings overlay visible
+    pub show_settings: bool,
+    /// Cursor position in settings list
+    pub settings_index: usize,
 }
 
 impl App {
@@ -117,6 +127,11 @@ impl App {
             notify_direct: true,
             notify_group: true,
             muted_conversations: HashSet::new(),
+            autocomplete_visible: false,
+            autocomplete_candidates: Vec::new(),
+            autocomplete_index: 0,
+            show_settings: false,
+            settings_index: 0,
         }
     }
 
@@ -522,6 +537,10 @@ impl App {
                     self.status_message = "no active conversation to mute".to_string();
                 }
             }
+            InputAction::Settings => {
+                self.show_settings = true;
+                self.settings_index = 0;
+            }
             InputAction::Help => {
                 self.add_system_message(HELP_TEXT);
             }
@@ -530,6 +549,59 @@ impl App {
             }
         }
         None
+    }
+
+    /// Update autocomplete candidates based on current input_buffer.
+    /// Called after every input change in Insert mode.
+    pub fn update_autocomplete(&mut self) {
+        let buf = &self.input_buffer;
+
+        // Only show autocomplete if buffer starts with '/' and has no space yet
+        if !buf.starts_with('/') || buf.contains(' ') {
+            self.autocomplete_visible = false;
+            self.autocomplete_candidates.clear();
+            self.autocomplete_index = 0;
+            return;
+        }
+
+        let prefix = buf.to_lowercase();
+        let mut candidates = Vec::new();
+        for (i, cmd) in COMMANDS.iter().enumerate() {
+            if cmd.name.starts_with(&prefix)
+                || (!cmd.alias.is_empty() && cmd.alias.starts_with(&prefix))
+            {
+                candidates.push(i);
+            }
+        }
+
+        if candidates.is_empty() {
+            self.autocomplete_visible = false;
+            self.autocomplete_candidates.clear();
+            self.autocomplete_index = 0;
+        } else {
+            self.autocomplete_visible = true;
+            self.autocomplete_candidates = candidates;
+            // Clamp index
+            if self.autocomplete_index >= self.autocomplete_candidates.len() {
+                self.autocomplete_index = 0;
+            }
+        }
+    }
+
+    /// Accept the currently selected autocomplete candidate.
+    pub fn apply_autocomplete(&mut self) {
+        if let Some(&cmd_idx) = self.autocomplete_candidates.get(self.autocomplete_index) {
+            let cmd = &COMMANDS[cmd_idx];
+            if cmd.args.is_empty() {
+                self.input_buffer = cmd.name.to_string();
+            } else {
+                self.input_buffer = format!("{} ", cmd.name);
+            }
+            self.input_cursor = self.input_buffer.len();
+            self.autocomplete_visible = false;
+            self.autocomplete_candidates.clear();
+            self.autocomplete_index = 0;
+        }
     }
 
     fn join_conversation(&mut self, target: &str) {
