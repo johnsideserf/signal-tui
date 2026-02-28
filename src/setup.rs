@@ -279,7 +279,8 @@ pub async fn run_setup(
                                 step = Step::Done;
                             }
                             (_, KeyCode::Esc) => {
-                                step = Step::Linking;
+                                // Skip preferences and proceed with defaults
+                                step = Step::Done;
                             }
                             _ => {}
                         }
@@ -703,7 +704,7 @@ fn draw_preferences_step(frame: &mut ratatui::Frame, config: &Config) {
         ]),
         Line::from(""),
         Line::from(Span::styled(
-            "  Press 1/2 to toggle | Enter to continue",
+            "  Press 1/2 to toggle | Enter/Esc to continue",
             Style::default().fg(Color::DarkGray),
         )),
     ];
