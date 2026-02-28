@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use crate::db::Database;
 use crate::input::{self, InputAction, HELP_TEXT};
-use crate::signal::types::{SignalEvent, SignalMessage};
+use crate::signal::types::{Contact, Group, SignalEvent, SignalMessage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
@@ -162,6 +162,8 @@ impl App {
                     self.typing_indicators.remove(&sender);
                 }
             }
+            SignalEvent::ContactList(contacts) => self.handle_contact_list(contacts),
+            SignalEvent::GroupList(groups) => self.handle_group_list(groups),
             SignalEvent::Error(err) => {
                 self.status_message = format!("error: {err}");
             }
@@ -256,6 +258,31 @@ impl App {
         if !is_active {
             if let Some(c) = self.conversations.get_mut(&conv_id) {
                 c.unread += 1;
+            }
+        }
+    }
+
+    fn handle_contact_list(&mut self, contacts: Vec<Contact>) {
+        for contact in contacts {
+            let name = contact.name.as_deref().unwrap_or(&contact.number);
+            let conv = self.get_or_create_conversation(&contact.number, name, false);
+            // Update name if contact provides a better one
+            if let Some(ref contact_name) = contact.name {
+                if !contact_name.is_empty() && conv.name != *contact_name {
+                    conv.name = contact_name.clone();
+                    let _ = self.db.upsert_conversation(&contact.number, contact_name, false);
+                }
+            }
+        }
+    }
+
+    fn handle_group_list(&mut self, groups: Vec<Group>) {
+        for group in groups {
+            let conv = self.get_or_create_conversation(&group.id, &group.name, true);
+            // Update name if group provides a better one
+            if !group.name.is_empty() && conv.name != group.name {
+                conv.name = group.name.clone();
+                let _ = self.db.upsert_conversation(&group.id, &group.name, true);
             }
         }
     }
