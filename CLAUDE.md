@@ -48,3 +48,14 @@ Notifications (incoming messages, typing, receipts) arrive as JSON-RPC requests 
 ### Modal Input
 
 Insert mode (default) for typing messages. Normal mode (Esc) for vim-style navigation: j/k scroll, h/l cursor, w/b word movement, i/a/I/A/o to re-enter Insert.
+
+## Git Workflow
+
+Never commit directly to master. Always follow this process:
+
+1. **Create a feature branch** before making any changes (e.g. `git checkout -b feature/my-change`)
+2. **Commit and push** the branch to origin
+3. **Create a PR** via `gh pr create` targeting master
+4. **Review** the PR, then merge once approved
+
+Master is force-push protected.
