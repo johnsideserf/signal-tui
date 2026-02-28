@@ -16,7 +16,7 @@ use crossterm::{
     cursor::{MoveTo, RestorePosition, SavePosition},
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute, queue,
-    style::{Attribute, Print, ResetColor, SetAttribute, SetForegroundColor},
+    style::{Print, ResetColor, SetForegroundColor},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
@@ -291,7 +291,6 @@ fn emit_osc8_links(
             backend,
             SetForegroundColor(crossterm::style::Color::Blue)
         )?;
-        queue!(backend, SetAttribute(Attribute::Underlined))?;
         queue!(
             backend,
             Print(format!(
@@ -299,7 +298,6 @@ fn emit_osc8_links(
                 link.url, link.text
             ))
         )?;
-        queue!(backend, SetAttribute(Attribute::NoUnderline))?;
         queue!(backend, ResetColor)?;
     }
     queue!(backend, RestorePosition)?;
