@@ -504,22 +504,30 @@ fn parse_attachment(
         format!("{short_id}.{ext}")
     });
 
-    // If signal-cli provides a file path, copy to download dir
-    let local_path = value
-        .get("file")
-        .and_then(|v| v.as_str())
-        .and_then(|src_path| {
-            let src = std::path::Path::new(src_path);
-            if !src.exists() {
-                return None;
-            }
-            let dest = download_dir.join(&effective_name);
+    let dest = download_dir.join(&effective_name);
+
+    // Try to find the source file: explicit "file" field, or signal-cli's attachment dir
+    let local_path = if dest.exists() {
+        // Already copied previously
+        Some(dest.to_string_lossy().to_string())
+    } else {
+        // Find source: "file" field from JSON, or signal-cli's attachment storage
+        let src = value
+            .get("file")
+            .and_then(|v| v.as_str())
+            .map(std::path::PathBuf::from)
+            .or_else(|| find_signal_cli_attachment(&id, &content_type));
+
+        if let Some(src) = src.filter(|p| p.exists()) {
             let _ = std::fs::create_dir_all(download_dir);
-            match std::fs::copy(src, &dest) {
+            match std::fs::copy(&src, &dest) {
                 Ok(_) => Some(dest.to_string_lossy().to_string()),
-                Err(_) => Some(src_path.to_string()),
+                Err(_) => Some(src.to_string_lossy().to_string()),
             }
-        });
+        } else {
+            None
+        }
+    };
 
     Some(Attachment {
         id,
@@ -527,6 +535,34 @@ fn parse_attachment(
         filename: Some(effective_name),
         local_path,
     })
+}
+
+/// Look for an attachment file in signal-cli's data directory by attachment ID.
+/// signal-cli stores attachments as `{data_dir}/attachments/{id}.{ext}`.
+fn find_signal_cli_attachment(id: &str, content_type: &str) -> Option<std::path::PathBuf> {
+    let data_dir = dirs::data_dir()
+        .or_else(|| dirs::home_dir().map(|h| h.join(".local").join("share")))?;
+    let attachments_dir = data_dir.join("signal-cli").join("attachments");
+
+    // Try with MIME-derived extension first, then scan for any file starting with the ID
+    let ext = mime_to_ext(content_type);
+    let with_ext = attachments_dir.join(format!("{id}.{ext}"));
+    if with_ext.exists() {
+        return Some(with_ext);
+    }
+
+    // Scan directory for files matching the attachment ID
+    if let Ok(entries) = std::fs::read_dir(&attachments_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with(id) {
+                return Some(entry.path());
+            }
+        }
+    }
+
+    None
 }
 
 /// Map common MIME types to file extensions
