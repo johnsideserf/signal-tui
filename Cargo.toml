@@ -2,6 +2,11 @@
 name = "signal-tui"
 version = "0.2.0"
 edition = "2021"
+license = "GPL-3.0-only"
+description = "Terminal-based Signal messenger client with vim keybindings"
+repository = "https://github.com/johnsideserf/signal-tui"
+keywords = ["signal", "tui", "terminal", "messenger", "ratatui"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 ratatui = "0.29"

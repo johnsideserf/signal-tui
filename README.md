@@ -179,4 +179,4 @@ Built with [Ratatui](https://ratatui.rs/) + [Crossterm](https://github.com/cross
 
 ## License
 
-MIT
+[GPL-3.0](LICENSE)
