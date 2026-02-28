@@ -279,7 +279,7 @@ async fn run_app(
 
     loop {
         // Render
-        terminal.draw(|frame| ui::draw(frame, &app))?;
+        terminal.draw(|frame| ui::draw(frame, &mut app))?;
 
         // Poll for events with a short timeout so we stay responsive to signal events
         let has_terminal_event = event::poll(Duration::from_millis(50))?;
@@ -323,7 +323,10 @@ async fn run_app(
                 };
 
                 if !handled {
-                    if app.show_settings {
+                    if app.show_help {
+                        // Any key dismisses the help overlay
+                        app.show_help = false;
+                    } else if app.show_settings {
                         app.handle_settings_key(key.code);
                     } else if app.autocomplete_visible {
                         if let Some((recipient, body, is_group)) =
