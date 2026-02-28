@@ -15,7 +15,7 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 
-use app::App;
+use app::{App, InputMode};
 use config::Config;
 use signal::client::SignalClient;
 
@@ -122,82 +122,228 @@ async fn run_app(
 
         if has_terminal_event {
             if let Event::Key(key) = event::read()? {
-                match (key.modifiers, key.code) {
-                    // Ctrl+C — quit
+                // === Global keys (both modes) ===
+                let handled = match (key.modifiers, key.code) {
                     (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
                         app.should_quit = true;
+                        true
                     }
-                    // Tab — next conversation
                     (KeyModifiers::NONE, KeyCode::Tab) => {
                         app.next_conversation();
+                        true
                     }
-                    // Shift+Tab — previous conversation
                     (KeyModifiers::SHIFT, KeyCode::BackTab) => {
                         app.prev_conversation();
+                        true
                     }
-                    // Ctrl+Left — shrink sidebar
                     (KeyModifiers::CONTROL, KeyCode::Left) => {
                         app.resize_sidebar(-2);
+                        true
                     }
-                    // Ctrl+Right — expand sidebar
                     (KeyModifiers::CONTROL, KeyCode::Right) => {
                         app.resize_sidebar(2);
+                        true
                     }
-                    // Page Up — scroll up
                     (_, KeyCode::PageUp) => {
                         app.scroll_offset = app.scroll_offset.saturating_add(5);
+                        true
                     }
-                    // Page Down — scroll down
                     (_, KeyCode::PageDown) => {
                         app.scroll_offset = app.scroll_offset.saturating_sub(5);
+                        true
                     }
-                    // Enter — submit input
-                    (_, KeyCode::Enter) => {
-                        if let Some((recipient, body, is_group)) = app.handle_input() {
-                            if let Err(e) =
-                                signal_client.send_message(&recipient, &body, is_group).await
-                            {
-                                app.status_message = format!("send error: {e}");
+                    _ => false,
+                };
+
+                if !handled {
+                    match app.mode {
+                        // === Normal mode ===
+                        InputMode::Normal => match (key.modifiers, key.code) {
+                            // Scrolling
+                            (_, KeyCode::Char('j')) => {
+                                app.scroll_offset = app.scroll_offset.saturating_sub(1);
                             }
-                        }
+                            (_, KeyCode::Char('k')) => {
+                                app.scroll_offset = app.scroll_offset.saturating_add(1);
+                            }
+                            (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
+                                app.scroll_offset = app.scroll_offset.saturating_sub(10);
+                            }
+                            (KeyModifiers::CONTROL, KeyCode::Char('u')) => {
+                                app.scroll_offset = app.scroll_offset.saturating_add(10);
+                            }
+                            (_, KeyCode::Char('g')) => {
+                                // Scroll to top
+                                if let Some(ref id) = app.active_conversation {
+                                    if let Some(conv) = app.conversations.get(id) {
+                                        app.scroll_offset = conv.messages.len();
+                                    }
+                                }
+                            }
+                            (_, KeyCode::Char('G')) => {
+                                // Scroll to bottom
+                                app.scroll_offset = 0;
+                            }
+
+                            // Switch to Insert mode
+                            (_, KeyCode::Char('i')) => {
+                                app.mode = InputMode::Insert;
+                            }
+                            (_, KeyCode::Char('a')) => {
+                                // Cursor right 1, then Insert
+                                if app.input_cursor < app.input_buffer.len() {
+                                    app.input_cursor += 1;
+                                }
+                                app.mode = InputMode::Insert;
+                            }
+                            (_, KeyCode::Char('I')) => {
+                                app.input_cursor = 0;
+                                app.mode = InputMode::Insert;
+                            }
+                            (_, KeyCode::Char('A')) => {
+                                app.input_cursor = app.input_buffer.len();
+                                app.mode = InputMode::Insert;
+                            }
+                            (_, KeyCode::Char('o')) => {
+                                app.input_buffer.clear();
+                                app.input_cursor = 0;
+                                app.mode = InputMode::Insert;
+                            }
+
+                            // Cursor movement (Normal mode)
+                            (_, KeyCode::Char('h')) => {
+                                app.input_cursor = app.input_cursor.saturating_sub(1);
+                            }
+                            (_, KeyCode::Char('l')) => {
+                                if app.input_cursor < app.input_buffer.len() {
+                                    app.input_cursor += 1;
+                                }
+                            }
+                            (_, KeyCode::Char('0')) => {
+                                app.input_cursor = 0;
+                            }
+                            (_, KeyCode::Char('$')) => {
+                                app.input_cursor = app.input_buffer.len();
+                            }
+                            (_, KeyCode::Char('w')) => {
+                                // Move cursor forward one word (Unicode-safe)
+                                let buf = &app.input_buffer;
+                                let mut pos = app.input_cursor;
+                                // Skip current word chars
+                                while pos < buf.len() {
+                                    let c = buf[pos..].chars().next().unwrap();
+                                    if c.is_whitespace() { break; }
+                                    pos += c.len_utf8();
+                                }
+                                // Skip whitespace
+                                while pos < buf.len() {
+                                    let c = buf[pos..].chars().next().unwrap();
+                                    if !c.is_whitespace() { break; }
+                                    pos += c.len_utf8();
+                                }
+                                app.input_cursor = pos;
+                            }
+                            (_, KeyCode::Char('b')) => {
+                                // Move cursor back one word (Unicode-safe)
+                                let buf = &app.input_buffer;
+                                let mut pos = app.input_cursor;
+                                // Skip whitespace backwards
+                                while pos > 0 {
+                                    let prev = buf[..pos].chars().next_back().unwrap();
+                                    if !prev.is_whitespace() { break; }
+                                    pos -= prev.len_utf8();
+                                }
+                                // Skip word chars backwards
+                                while pos > 0 {
+                                    let prev = buf[..pos].chars().next_back().unwrap();
+                                    if prev.is_whitespace() { break; }
+                                    pos -= prev.len_utf8();
+                                }
+                                app.input_cursor = pos;
+                            }
+
+                            // Buffer editing (stay in Normal mode)
+                            (_, KeyCode::Char('x')) => {
+                                if app.input_cursor < app.input_buffer.len() {
+                                    app.input_buffer.remove(app.input_cursor);
+                                    // Keep cursor within bounds
+                                    if app.input_cursor > 0
+                                        && app.input_cursor >= app.input_buffer.len()
+                                    {
+                                        app.input_cursor = app.input_buffer.len().saturating_sub(1);
+                                    }
+                                }
+                            }
+                            (_, KeyCode::Char('D')) => {
+                                // Delete from cursor to end
+                                app.input_buffer.truncate(app.input_cursor);
+                            }
+
+                            // Quick actions
+                            (_, KeyCode::Char('/')) => {
+                                app.input_buffer = "/".to_string();
+                                app.input_cursor = 1;
+                                app.mode = InputMode::Insert;
+                            }
+                            (_, KeyCode::Esc) => {
+                                // Clear buffer if non-empty
+                                if !app.input_buffer.is_empty() {
+                                    app.input_buffer.clear();
+                                    app.input_cursor = 0;
+                                }
+                            }
+
+                            _ => {}
+                        },
+
+                        // === Insert mode ===
+                        InputMode::Insert => match (key.modifiers, key.code) {
+                            (_, KeyCode::Esc) => {
+                                app.mode = InputMode::Normal;
+                            }
+                            (_, KeyCode::Enter) => {
+                                if let Some((recipient, body, is_group)) = app.handle_input() {
+                                    if let Err(e) =
+                                        signal_client
+                                            .send_message(&recipient, &body, is_group)
+                                            .await
+                                    {
+                                        app.status_message = format!("send error: {e}");
+                                    }
+                                }
+                            }
+                            (_, KeyCode::Backspace) => {
+                                if app.input_cursor > 0 {
+                                    app.input_cursor -= 1;
+                                    app.input_buffer.remove(app.input_cursor);
+                                }
+                            }
+                            (_, KeyCode::Delete) => {
+                                if app.input_cursor < app.input_buffer.len() {
+                                    app.input_buffer.remove(app.input_cursor);
+                                }
+                            }
+                            (_, KeyCode::Left) => {
+                                app.input_cursor = app.input_cursor.saturating_sub(1);
+                            }
+                            (_, KeyCode::Right) => {
+                                if app.input_cursor < app.input_buffer.len() {
+                                    app.input_cursor += 1;
+                                }
+                            }
+                            (_, KeyCode::Home) => {
+                                app.input_cursor = 0;
+                            }
+                            (_, KeyCode::End) => {
+                                app.input_cursor = app.input_buffer.len();
+                            }
+                            (_, KeyCode::Char(c)) => {
+                                app.input_buffer.insert(app.input_cursor, c);
+                                app.input_cursor += 1;
+                            }
+                            _ => {}
+                        },
                     }
-                    // Backspace
-                    (_, KeyCode::Backspace) => {
-                        if app.input_cursor > 0 {
-                            app.input_cursor -= 1;
-                            app.input_buffer.remove(app.input_cursor);
-                        }
-                    }
-                    // Delete
-                    (_, KeyCode::Delete) => {
-                        if app.input_cursor < app.input_buffer.len() {
-                            app.input_buffer.remove(app.input_cursor);
-                        }
-                    }
-                    // Left arrow
-                    (_, KeyCode::Left) => {
-                        app.input_cursor = app.input_cursor.saturating_sub(1);
-                    }
-                    // Right arrow
-                    (_, KeyCode::Right) => {
-                        if app.input_cursor < app.input_buffer.len() {
-                            app.input_cursor += 1;
-                        }
-                    }
-                    // Home
-                    (_, KeyCode::Home) => {
-                        app.input_cursor = 0;
-                    }
-                    // End
-                    (_, KeyCode::End) => {
-                        app.input_cursor = app.input_buffer.len();
-                    }
-                    // Regular character input
-                    (_, KeyCode::Char(c)) => {
-                        app.input_buffer.insert(app.input_cursor, c);
-                        app.input_cursor += 1;
-                    }
-                    _ => {}
                 }
             }
         }

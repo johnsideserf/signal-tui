@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::App;
+use crate::app::{App, InputMode};
 
 /// Hash a sender name to one of ~8 distinct colors. "you" always gets Green.
 fn sender_color(name: &str) -> Color {
@@ -398,15 +398,23 @@ fn draw_typing_indicator(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
+    let border_color = match app.mode {
+        InputMode::Insert => Color::Cyan,
+        InputMode::Normal => Color::Yellow,
+    };
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(border_color));
 
     if app.input_buffer.is_empty() {
-        // Show placeholder text
+        let placeholder = match app.mode {
+            InputMode::Normal => "  Press i to type, / for commands",
+            InputMode::Insert => "  Type a message...",
+        };
         let input = Paragraph::new(Span::styled(
-            "  Type a message...",
+            placeholder,
             Style::default().fg(Color::DarkGray),
         ))
         .block(block);
@@ -419,14 +427,33 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
         frame.render_widget(input, area);
     }
 
-    // Place cursor
-    let cursor_x = area.x + 3 + app.input_cursor as u16;
-    let cursor_y = area.y + 1;
-    frame.set_cursor_position((cursor_x, cursor_y));
+    // Place cursor (only visible in Insert mode)
+    if app.mode == InputMode::Insert {
+        let cursor_x = area.x + 3 + app.input_cursor as u16;
+        let cursor_y = area.y + 1;
+        frame.set_cursor_position((cursor_x, cursor_y));
+    }
 }
 
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, sidebar_auto_hidden: bool) {
     let mut segments: Vec<Span> = Vec::new();
+
+    // Mode indicator
+    match app.mode {
+        InputMode::Normal => {
+            segments.push(Span::styled(
+                " [NORMAL] ",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ));
+        }
+        InputMode::Insert => {
+            segments.push(Span::styled(
+                " [INSERT] ",
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            ));
+        }
+    }
+    segments.push(Span::styled("│ ", Style::default().fg(Color::DarkGray)));
 
     // Connection status dot
     if app.connected {
