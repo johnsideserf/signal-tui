@@ -1,5 +1,6 @@
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    buffer::Buffer,
+    layout::{Alignment, Constraint, Direction, Layout, Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
@@ -42,6 +43,162 @@ fn truncate(s: &str, max_width: usize) -> String {
         truncated.push('…');
         truncated
     }
+}
+
+/// A clickable link region detected in the rendered buffer.
+pub struct LinkRegion {
+    pub x: u16,
+    pub y: u16,
+    pub url: String,
+    pub text: String,
+}
+
+/// Extract a URL from link-styled text.
+fn extract_url(text: &str) -> String {
+    for scheme in &["file:///", "https://", "http://"] {
+        if let Some(pos) = text.find(scheme) {
+            let uri_start = &text[pos..];
+            let uri_end = uri_start
+                .find(|c: char| c.is_whitespace())
+                .unwrap_or(uri_start.len());
+            return uri_start[..uri_end].to_string();
+        }
+    }
+    text.to_string()
+}
+
+/// Check if a cell's style matches the link style (Blue fg + UNDERLINED).
+fn is_link_style(style: &Style) -> bool {
+    style.fg == Some(Color::Blue) && style.add_modifier.contains(Modifier::UNDERLINED)
+}
+
+/// Scan a rendered buffer area for consecutive cells with the link style,
+/// and collect them into LinkRegion structs.
+fn collect_link_regions(buf: &Buffer, area: Rect) -> Vec<LinkRegion> {
+    let right_edge = area.x.saturating_add(area.width);
+    let mut regions = Vec::new();
+    let mut wrap_url: Option<String> = None;
+
+    for y in area.y..area.y.saturating_add(area.height) {
+        let mut x = area.x;
+        let mut row_last_url: Option<String> = None;
+        let mut row_last_reached_edge = false;
+
+        while x < right_edge {
+            let cell = match buf.cell(Position::new(x, y)) {
+                Some(c) => c,
+                None => {
+                    x += 1;
+                    continue;
+                }
+            };
+
+            if !is_link_style(&cell.style()) {
+                x += 1;
+                continue;
+            }
+
+            // Start of a link run
+            let start_x = x;
+            let mut text = String::new();
+
+            while x < right_edge {
+                match buf.cell(Position::new(x, y)) {
+                    Some(c) if is_link_style(&c.style()) => {
+                        let sym = c.symbol();
+                        if !sym.is_empty() {
+                            text.push_str(sym);
+                        }
+                        x += 1;
+                    }
+                    _ => break,
+                }
+            }
+
+            if text.is_empty() {
+                continue;
+            }
+
+            // Determine URL: use continuation URL if this is a wrapped link
+            let url = if start_x == area.x {
+                if let Some(ref wu) = wrap_url {
+                    wu.clone()
+                } else {
+                    extract_url(&text)
+                }
+            } else {
+                extract_url(&text)
+            };
+
+            let reached_edge = x >= right_edge;
+            row_last_url = Some(url.clone());
+            row_last_reached_edge = reached_edge;
+
+            regions.push(LinkRegion {
+                x: start_x,
+                y,
+                url,
+                text,
+            });
+        }
+
+        // Propagate URL for wrapped links
+        wrap_url = if row_last_reached_edge {
+            row_last_url
+        } else {
+            None
+        };
+    }
+
+    regions
+}
+
+/// Split a message body into spans, styling any URI (https://, http://, file:///) as
+/// underlined blue text. Non-URI text is rendered as plain spans.
+fn styled_uri_spans(body: &str) -> Vec<Span<'static>> {
+    let link_style = Style::default()
+        .fg(Color::Blue)
+        .add_modifier(Modifier::UNDERLINED);
+
+    // Style entire body as a link for image/attachment patterns with file URIs
+    if (body.starts_with("[image:") || body.starts_with("[attachment:"))
+        && body.contains("file:///")
+    {
+        return vec![Span::styled(body.to_string(), link_style)];
+    }
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut rest = body;
+
+    while !rest.is_empty() {
+        // Find the earliest URI scheme
+        let next_uri = ["https://", "http://", "file:///"]
+            .iter()
+            .filter_map(|scheme| rest.find(scheme).map(|pos| (pos, scheme)))
+            .min_by_key(|(pos, _)| *pos);
+
+        match next_uri {
+            Some((pos, _scheme)) => {
+                // Push text before the URI
+                if pos > 0 {
+                    spans.push(Span::raw(rest[..pos].to_string()));
+                }
+                // Find the end of the URI (first whitespace or end of string)
+                let uri_start = &rest[pos..];
+                let uri_end = uri_start
+                    .find(|c: char| c.is_whitespace())
+                    .unwrap_or(uri_start.len());
+                spans.push(Span::styled(uri_start[..uri_end].to_string(), link_style));
+                rest = &uri_start[uri_end..];
+            }
+            None => {
+                spans.push(Span::raw(rest.to_string()));
+                break;
+            }
+        }
+    }
+
+    spans
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -95,6 +252,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.show_help {
         draw_help(frame, size);
     }
+
+    // Collect link regions from the rendered buffer for OSC 8 injection
+    let area = frame.area();
+    app.link_regions = collect_link_regions(frame.buffer_mut(), area);
 }
 
 fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
@@ -382,7 +543,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             )));
         } else {
             let time = msg.format_time();
-            lines.push(Line::from(vec![
+            let mut spans = vec![
                 Span::styled(
                     format!("[{}] ", time),
                     Style::default().fg(Color::DarkGray),
@@ -393,8 +554,14 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                         .fg(sender_color(&msg.sender))
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(format!(" {}", msg.body)),
-            ]));
+            ];
+
+            // Style URIs (https://, http://, file:///) as underlined links
+            let body_spans = styled_uri_spans(&msg.body);
+            spans.push(Span::raw(" ".to_string()));
+            spans.extend(body_spans);
+
+            lines.push(Line::from(spans));
 
             // Render inline image preview if available
             if let Some(ref image_lines) = msg.image_lines {
@@ -668,7 +835,7 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect) {
 
 fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
     let popup_width: u16 = 42.min(area.width.saturating_sub(4));
-    let popup_height: u16 = 9.min(area.height.saturating_sub(2));
+    let popup_height: u16 = 10.min(area.height.saturating_sub(2));
 
     let x = (area.width.saturating_sub(popup_width)) / 2;
     let y = (area.height.saturating_sub(popup_height)) / 2;

@@ -23,6 +23,10 @@ pub struct Config {
     /// Terminal bell for group messages in background conversations
     #[serde(default = "default_true")]
     pub notify_group: bool,
+
+    /// Show inline halfblock image previews in chat
+    #[serde(default = "default_true")]
+    pub inline_images: bool,
 }
 
 fn default_true() -> bool {
@@ -47,6 +51,7 @@ impl Default for Config {
             download_dir: default_download_dir(),
             notify_direct: true,
             notify_group: true,
+            inline_images: true,
         }
     }
 }
