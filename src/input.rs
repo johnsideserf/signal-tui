@@ -1,3 +1,22 @@
+/// Metadata for a slash command (used for autocomplete + help)
+pub struct CommandInfo {
+    pub name: &'static str,
+    pub alias: &'static str,
+    pub args: &'static str,
+    pub description: &'static str,
+}
+
+pub const COMMANDS: &[CommandInfo] = &[
+    CommandInfo { name: "/join",     alias: "/j",  args: "<name>",  description: "Switch to a conversation" },
+    CommandInfo { name: "/part",     alias: "/p",  args: "",        description: "Leave current conversation" },
+    CommandInfo { name: "/sidebar",  alias: "/sb", args: "",        description: "Toggle sidebar" },
+    CommandInfo { name: "/bell",     alias: "",    args: "[type]",  description: "Toggle notifications (direct/group)" },
+    CommandInfo { name: "/mute",     alias: "",    args: "",        description: "Mute/unmute current chat" },
+    CommandInfo { name: "/settings", alias: "",    args: "",        description: "Open settings" },
+    CommandInfo { name: "/help",     alias: "/h",  args: "",        description: "Show help" },
+    CommandInfo { name: "/quit",     alias: "/q",  args: "",        description: "Exit signal-tui" },
+];
+
 /// Parsed user input — either a command or plain text to send
 #[derive(Debug)]
 pub enum InputAction {
@@ -17,6 +36,8 @@ pub enum InputAction {
     ToggleMute,
     /// Show help text
     Help,
+    /// Open settings overlay
+    Settings,
     /// Unknown command
     Unknown(String),
 }
@@ -55,6 +76,7 @@ pub fn parse_input(input: &str) -> InputAction {
             }
         }
         "/mute" => InputAction::ToggleMute,
+        "/settings" => InputAction::Settings,
         "/help" | "/h" => InputAction::Help,
         _ => InputAction::Unknown(format!("Unknown command: {cmd}")),
     }

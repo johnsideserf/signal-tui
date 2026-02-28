@@ -323,6 +323,102 @@ async fn run_app(
                 };
 
                 if !handled {
+                    // === Settings overlay captures all keys ===
+                    if app.show_settings {
+                        match key.code {
+                            KeyCode::Char('j') | KeyCode::Down => {
+                                if app.settings_index < 2 {
+                                    app.settings_index += 1;
+                                }
+                            }
+                            KeyCode::Char('k') | KeyCode::Up => {
+                                app.settings_index = app.settings_index.saturating_sub(1);
+                            }
+                            KeyCode::Char(' ') | KeyCode::Enter => {
+                                match app.settings_index {
+                                    0 => app.notify_direct = !app.notify_direct,
+                                    1 => app.notify_group = !app.notify_group,
+                                    2 => app.sidebar_visible = !app.sidebar_visible,
+                                    _ => {}
+                                }
+                            }
+                            KeyCode::Esc | KeyCode::Char('q') => {
+                                app.show_settings = false;
+                            }
+                            _ => {}
+                        }
+                    } else if app.autocomplete_visible {
+                        // === Autocomplete popup intercepts before normal Insert mode ===
+                        match key.code {
+                            KeyCode::Up => {
+                                let len = app.autocomplete_candidates.len();
+                                if len > 0 {
+                                    app.autocomplete_index = if app.autocomplete_index == 0 {
+                                        len - 1
+                                    } else {
+                                        app.autocomplete_index - 1
+                                    };
+                                }
+                            }
+                            KeyCode::Down => {
+                                let len = app.autocomplete_candidates.len();
+                                if len > 0 {
+                                    app.autocomplete_index = (app.autocomplete_index + 1) % len;
+                                }
+                            }
+                            KeyCode::Tab => {
+                                app.apply_autocomplete();
+                            }
+                            KeyCode::Esc => {
+                                app.autocomplete_visible = false;
+                                app.autocomplete_candidates.clear();
+                                app.autocomplete_index = 0;
+                            }
+                            KeyCode::Enter => {
+                                // Accept candidate into buffer, then submit
+                                app.apply_autocomplete();
+                                if let Some((recipient, body, is_group)) = app.handle_input() {
+                                    if let Err(e) =
+                                        signal_client
+                                            .send_message(&recipient, &body, is_group)
+                                            .await
+                                    {
+                                        app.status_message = format!("send error: {e}");
+                                    }
+                                }
+                            }
+                            _ => {
+                                // Handle normally, then refresh autocomplete
+                                match (key.modifiers, key.code) {
+                                    (_, KeyCode::Backspace) => {
+                                        if app.input_cursor > 0 {
+                                            app.input_cursor -= 1;
+                                            app.input_buffer.remove(app.input_cursor);
+                                        }
+                                    }
+                                    (_, KeyCode::Delete) => {
+                                        if app.input_cursor < app.input_buffer.len() {
+                                            app.input_buffer.remove(app.input_cursor);
+                                        }
+                                    }
+                                    (_, KeyCode::Left) => {
+                                        app.input_cursor = app.input_cursor.saturating_sub(1);
+                                    }
+                                    (_, KeyCode::Right) => {
+                                        if app.input_cursor < app.input_buffer.len() {
+                                            app.input_cursor += 1;
+                                        }
+                                    }
+                                    (_, KeyCode::Char(c)) => {
+                                        app.input_buffer.insert(app.input_cursor, c);
+                                        app.input_cursor += 1;
+                                    }
+                                    _ => {}
+                                }
+                                app.update_autocomplete();
+                            }
+                        }
+                    } else {
                     match app.mode {
                         // === Normal mode ===
                         InputMode::Normal => match (key.modifiers, key.code) {
@@ -451,6 +547,7 @@ async fn run_app(
                                 app.input_buffer = "/".to_string();
                                 app.input_cursor = 1;
                                 app.mode = InputMode::Insert;
+                                app.update_autocomplete();
                             }
                             (_, KeyCode::Esc) => {
                                 // Clear buffer if non-empty
@@ -467,6 +564,7 @@ async fn run_app(
                         InputMode::Insert => match (key.modifiers, key.code) {
                             (_, KeyCode::Esc) => {
                                 app.mode = InputMode::Normal;
+                                app.autocomplete_visible = false;
                             }
                             (_, KeyCode::Enter) => {
                                 if let Some((recipient, body, is_group)) = app.handle_input() {
@@ -484,11 +582,13 @@ async fn run_app(
                                     app.input_cursor -= 1;
                                     app.input_buffer.remove(app.input_cursor);
                                 }
+                                app.update_autocomplete();
                             }
                             (_, KeyCode::Delete) => {
                                 if app.input_cursor < app.input_buffer.len() {
                                     app.input_buffer.remove(app.input_cursor);
                                 }
+                                app.update_autocomplete();
                             }
                             (_, KeyCode::Left) => {
                                 app.input_cursor = app.input_cursor.saturating_sub(1);
@@ -507,9 +607,11 @@ async fn run_app(
                             (_, KeyCode::Char(c)) => {
                                 app.input_buffer.insert(app.input_cursor, c);
                                 app.input_cursor += 1;
+                                app.update_autocomplete();
                             }
                             _ => {}
                         },
+                    }
                     }
                 }
             }
