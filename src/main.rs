@@ -1,6 +1,7 @@
 mod app;
 mod config;
 mod input;
+mod link;
 mod signal;
 mod ui;
 
@@ -76,15 +77,33 @@ async fn main() -> Result<()> {
         std::fs::create_dir_all(&config.download_dir)?;
     }
 
-    // Spawn signal-cli backend
-    let mut signal_client = SignalClient::spawn(&config).await?;
+    // Pre-flight: check if account needs linking
+    let needs_linking = if config.account.is_empty() {
+        true
+    } else {
+        !link::check_account_registered(&config).await?
+    };
 
-    // Set up terminal
+    // Set up terminal (before linking so QR renders in TUI)
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+
+    // If not registered, run interactive linking flow
+    if needs_linking {
+        if let Err(e) = link::run_linking_flow(&mut terminal, &config).await {
+            // Restore terminal before reporting error
+            disable_raw_mode()?;
+            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+            terminal.show_cursor()?;
+            anyhow::bail!("Device linking failed: {e}");
+        }
+    }
+
+    // Spawn signal-cli backend
+    let mut signal_client = SignalClient::spawn(&config).await?;
 
     // Run the app
     let result = run_app(&mut terminal, &mut signal_client, &config).await;
