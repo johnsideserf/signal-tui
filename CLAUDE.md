@@ -53,9 +53,18 @@ Insert mode (default) for typing messages. Normal mode (Esc) for vim-style navig
 
 Never commit directly to master. Always follow this process:
 
-1. **Create a feature branch** before making any changes (e.g. `git checkout -b feature/my-change`)
-2. **Commit and push** the branch to origin
-3. **Create a PR** via `gh pr create` targeting master
-4. **Review** the PR, then merge once approved
+1. **Create a feature branch** before making any changes
+2. **Run checks** before pushing: `cargo clippy --tests -- -D warnings && cargo test`
+3. **Push** the branch to origin with `-u`
+4. **Create a PR** via `gh pr create` targeting master
+5. **Review** the PR, then merge once approved
 
 Master is force-push protected.
+
+### Branch Naming
+
+Use prefixed names: `feature/`, `fix/`, `refactor/`, `docs/` (e.g. `feature/dark-mode`, `fix/unread-count`, `docs/update-readme`).
+
+### Exceptions
+
+Trivial docs-only changes (CLAUDE.md tweaks, typo fixes) may be committed directly to master. All code changes must go through a PR.
