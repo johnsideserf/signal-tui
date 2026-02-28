@@ -180,7 +180,7 @@ async fn run_app(
                                     }
                                 }
                             }
-                            (KeyModifiers::SHIFT, KeyCode::Char('G')) => {
+                            (_, KeyCode::Char('G')) => {
                                 // Scroll to bottom
                                 app.scroll_offset = 0;
                             }
@@ -196,11 +196,11 @@ async fn run_app(
                                 }
                                 app.mode = InputMode::Insert;
                             }
-                            (KeyModifiers::SHIFT, KeyCode::Char('I')) => {
+                            (_, KeyCode::Char('I')) => {
                                 app.input_cursor = 0;
                                 app.mode = InputMode::Insert;
                             }
-                            (KeyModifiers::SHIFT, KeyCode::Char('A')) => {
+                            (_, KeyCode::Char('A')) => {
                                 app.input_cursor = app.input_buffer.len();
                                 app.mode = InputMode::Insert;
                             }
@@ -222,44 +222,42 @@ async fn run_app(
                             (_, KeyCode::Char('0')) => {
                                 app.input_cursor = 0;
                             }
-                            (KeyModifiers::SHIFT, KeyCode::Char('$')) => {
+                            (_, KeyCode::Char('$')) => {
                                 app.input_cursor = app.input_buffer.len();
                             }
                             (_, KeyCode::Char('w')) => {
-                                // Move cursor forward one word
+                                // Move cursor forward one word (Unicode-safe)
                                 let buf = &app.input_buffer;
                                 let mut pos = app.input_cursor;
                                 // Skip current word chars
-                                while pos < buf.len()
-                                    && !buf.as_bytes()[pos].is_ascii_whitespace()
-                                {
-                                    pos += 1;
+                                while pos < buf.len() {
+                                    let c = buf[pos..].chars().next().unwrap();
+                                    if c.is_whitespace() { break; }
+                                    pos += c.len_utf8();
                                 }
                                 // Skip whitespace
-                                while pos < buf.len()
-                                    && buf.as_bytes()[pos].is_ascii_whitespace()
-                                {
-                                    pos += 1;
+                                while pos < buf.len() {
+                                    let c = buf[pos..].chars().next().unwrap();
+                                    if !c.is_whitespace() { break; }
+                                    pos += c.len_utf8();
                                 }
                                 app.input_cursor = pos;
                             }
                             (_, KeyCode::Char('b')) => {
-                                // Move cursor back one word
+                                // Move cursor back one word (Unicode-safe)
                                 let buf = &app.input_buffer;
                                 let mut pos = app.input_cursor;
                                 // Skip whitespace backwards
-                                while pos > 0
-                                    && buf.as_bytes()[pos.saturating_sub(1)]
-                                        .is_ascii_whitespace()
-                                {
-                                    pos -= 1;
+                                while pos > 0 {
+                                    let prev = buf[..pos].chars().next_back().unwrap();
+                                    if !prev.is_whitespace() { break; }
+                                    pos -= prev.len_utf8();
                                 }
                                 // Skip word chars backwards
-                                while pos > 0
-                                    && !buf.as_bytes()[pos.saturating_sub(1)]
-                                        .is_ascii_whitespace()
-                                {
-                                    pos -= 1;
+                                while pos > 0 {
+                                    let prev = buf[..pos].chars().next_back().unwrap();
+                                    if prev.is_whitespace() { break; }
+                                    pos -= prev.len_utf8();
                                 }
                                 app.input_cursor = pos;
                             }
@@ -276,7 +274,7 @@ async fn run_app(
                                     }
                                 }
                             }
-                            (KeyModifiers::SHIFT, KeyCode::Char('D')) => {
+                            (_, KeyCode::Char('D')) => {
                                 // Delete from cursor to end
                                 app.input_buffer.truncate(app.input_cursor);
                             }
