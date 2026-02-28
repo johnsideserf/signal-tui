@@ -11,7 +11,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Terminal,
 };
-use tokio::io::AsyncBufReadExt;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tokio::process::Command;
 
 use crate::config::Config;
@@ -28,7 +28,16 @@ pub async fn check_account_registered(config: &Config) -> Result<bool> {
             .stderr(std::process::Stdio::null())
             .status()
             .await
-            .context("Failed to run signal-cli")?;
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    anyhow::anyhow!(
+                        "'{}' not found. Is signal-cli installed and in your PATH?",
+                        config.signal_cli_path
+                    )
+                } else {
+                    anyhow::anyhow!("Failed to run '{}': {}", config.signal_cli_path, e)
+                }
+            })?;
         Ok::<bool, anyhow::Error>(output.success())
     })
     .await;
@@ -62,7 +71,16 @@ pub async fn run_linking_flow(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .context("Failed to spawn signal-cli link")?;
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                anyhow::anyhow!(
+                    "'{}' not found. Is signal-cli installed and in your PATH?",
+                    config.signal_cli_path
+                )
+            } else {
+                anyhow::anyhow!("Failed to start '{}': {}", config.signal_cli_path, e)
+            }
+        })?;
 
     let stdout = child.stdout.take().context("No stdout from signal-cli link")?;
     let mut reader = tokio::io::BufReader::new(stdout).lines();
@@ -78,8 +96,17 @@ pub async fn run_linking_flow(
                 }
             }
             Ok(Ok(None)) => {
-                // stdout closed without URI
-                anyhow::bail!("signal-cli link exited without producing a linking URI");
+                // stdout closed without URI — read stderr for details
+                let mut stderr_output = String::new();
+                if let Some(mut stderr) = child.stderr.take() {
+                    let _ = stderr.read_to_string(&mut stderr_output).await;
+                }
+                let detail = stderr_output.trim();
+                if detail.is_empty() {
+                    anyhow::bail!("signal-cli link exited without producing a linking URI");
+                } else {
+                    anyhow::bail!("signal-cli link failed: {detail}");
+                }
             }
             Ok(Err(e)) => {
                 anyhow::bail!("Error reading signal-cli link output: {e}");
