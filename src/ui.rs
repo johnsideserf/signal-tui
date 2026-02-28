@@ -225,29 +225,78 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
             }
         }
         None => {
-            let welcome = Paragraph::new(vec![
+            let mut lines = vec![
                 Line::from(""),
-                Line::from(Span::styled(
+            ];
+
+            // Show connection error prominently if present
+            if let Some(ref err) = app.connection_error {
+                lines.push(Line::from(Span::styled(
+                    "  Connection Error",
+                    Style::default()
+                        .fg(Color::Red)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from(Span::styled(
+                    format!("  {err}"),
+                    Style::default().fg(Color::Red),
+                )));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  Run with --setup to reconfigure.",
+                    Style::default().fg(Color::Gray),
+                )));
+            } else if app.conversation_order.is_empty() {
+                // No conversations yet
+                lines.push(Line::from(Span::styled(
                     "  Welcome to signal-tui",
                     Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
-                )),
-                Line::from(""),
-                Line::from(Span::styled(
+                )));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  No conversations yet",
+                    Style::default().fg(Color::Gray),
+                )));
+                lines.push(Line::from(Span::styled(
+                    "  Messages you send and receive will appear here.",
+                    Style::default().fg(Color::Gray),
+                )));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  Use /join +1234567890 to message someone",
+                    Style::default().fg(Color::Gray),
+                )));
+                lines.push(Line::from(Span::styled(
+                    "  Use /help for all commands",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else {
+                // Has conversations but none selected
+                lines.push(Line::from(Span::styled(
+                    "  Welcome to signal-tui",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
                     "  Use /join <contact> to start a conversation",
                     Style::default().fg(Color::Gray),
-                )),
-                Line::from(Span::styled(
+                )));
+                lines.push(Line::from(Span::styled(
                     "  Use /help for all commands",
                     Style::default().fg(Color::Gray),
-                )),
-                Line::from(""),
-                Line::from(Span::styled(
+                )));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
                     "  Ctrl+←/→ to resize sidebar",
                     Style::default().fg(Color::DarkGray),
-                )),
-            ]);
+                )));
+            }
+
+            let welcome = Paragraph::new(lines);
             frame.render_widget(welcome, inner);
             return;
         }
@@ -456,7 +505,14 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, sidebar_auto_hidden
     segments.push(Span::styled("│ ", Style::default().fg(Color::DarkGray)));
 
     // Connection status dot
-    if app.connected {
+    if let Some(ref err) = app.connection_error {
+        segments.push(Span::styled(" ● ", Style::default().fg(Color::Red)));
+        let display = if err.len() > 30 { &err[..30] } else { err };
+        segments.push(Span::styled(
+            format!("error: {display}"),
+            Style::default().fg(Color::Red),
+        ));
+    } else if app.connected {
         segments.push(Span::styled(" ● ", Style::default().fg(Color::Green)));
         segments.push(Span::styled("connected", Style::default().fg(Color::White)));
     } else {

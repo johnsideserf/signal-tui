@@ -73,6 +73,8 @@ pub struct App {
     pub mode: InputMode,
     /// SQLite database for persistent storage
     pub db: Database,
+    /// Persistent error from signal-cli connection failure
+    pub connection_error: Option<String>,
 }
 
 impl App {
@@ -94,6 +96,7 @@ impl App {
             connected: false,
             mode: InputMode::Insert,
             db,
+            connection_error: None,
         }
     }
 

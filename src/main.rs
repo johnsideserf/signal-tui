@@ -2,6 +2,8 @@ mod app;
 mod config;
 mod db;
 mod input;
+mod link;
+mod setup;
 mod signal;
 mod ui;
 
@@ -14,10 +16,18 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Flex, Layout},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
+    Terminal,
+};
 
 use app::{App, InputMode};
 use config::Config;
+use setup::SetupResult;
 use signal::client::SignalClient;
 
 #[tokio::main]
@@ -26,6 +36,7 @@ async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let mut config_path: Option<&str> = None;
     let mut account: Option<String> = None;
+    let mut force_setup = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -48,6 +59,10 @@ async fn main() -> Result<()> {
                     std::process::exit(1);
                 }
             }
+            "--setup" => {
+                force_setup = true;
+                i += 1;
+            }
             "--help" => {
                 eprintln!("signal-tui - Terminal Signal client");
                 eprintln!();
@@ -56,6 +71,7 @@ async fn main() -> Result<()> {
                 eprintln!("Options:");
                 eprintln!("  -a, --account <NUMBER>  Phone number (E.164 format)");
                 eprintln!("  -c, --config <PATH>     Config file path");
+                eprintln!("      --setup             Run first-time setup wizard");
                 eprintln!("      --help              Show this help");
                 std::process::exit(0);
             }
@@ -72,6 +88,47 @@ async fn main() -> Result<()> {
         config.account = acct;
     }
 
+    // Set up terminal BEFORE anything else so all errors render in the TUI
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    // Run the main flow inside a closure so we can always restore the terminal
+    let result = run_main_flow(&mut terminal, &mut config, force_setup).await;
+
+    // Restore terminal
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+
+    if let Err(e) = result {
+        eprintln!("Error: {e:?}");
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
+async fn run_main_flow(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    config: &mut Config,
+    force_setup: bool,
+) -> Result<()> {
+    // Run setup wizard if needed
+    if config.needs_setup() || force_setup {
+        match setup::run_setup(terminal, config, force_setup).await? {
+            SetupResult::Completed(new_config) => {
+                *config = new_config;
+            }
+            SetupResult::Skipped => {}
+            SetupResult::Cancelled => {
+                return Ok(());
+            }
+        }
+    }
+
     // Create download directory
     if !config.download_dir.exists() {
         std::fs::create_dir_all(&config.download_dir)?;
@@ -85,33 +142,118 @@ async fn main() -> Result<()> {
     let db_path = db_dir.join("signal-tui.db");
     let database = db::Database::open(&db_path)?;
 
-    // Spawn signal-cli backend
-    let mut signal_client = SignalClient::spawn(&config).await?;
+    // Quick pre-flight: check if account is registered
+    match link::check_account_registered(config).await {
+        Ok(false) => {
+            // Not registered — run linking flow
+            match link::run_linking_flow(terminal, config).await {
+                Ok(()) => {}
+                Err(e) => {
+                    let msg = format!("{e}");
+                    if msg.contains("cancelled") {
+                        return Ok(());
+                    }
+                    // Show error and bail
+                    show_error_screen(terminal, "Device Linking Failed", &msg).await?;
+                    return Ok(());
+                }
+            }
+        }
+        Ok(true) => {} // Good to go
+        Err(_) => {}   // Can't check, proceed anyway (graceful degradation)
+    }
 
-    // Set up terminal
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    // Spawn signal-cli backend
+    let signal_result = SignalClient::spawn(config).await;
+    let mut signal_client = match signal_result {
+        Ok(client) => client,
+        Err(e) => {
+            let msg = format!("{e}");
+            show_error_screen(terminal, "Failed to Start signal-cli", &msg).await?;
+            return Ok(());
+        }
+    };
 
     // Run the app
-    let result = run_app(&mut terminal, &mut signal_client, &config, database).await;
-
-    // Restore terminal
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
+    let result = run_app(terminal, &mut signal_client, config, database).await;
 
     // Shut down signal-cli
     signal_client.shutdown().await?;
 
-    if let Err(e) = result {
-        eprintln!("Error: {e:?}");
-        std::process::exit(1);
-    }
+    result
+}
 
-    Ok(())
+/// Show a full-screen error in the TUI instead of crashing to stderr.
+async fn show_error_screen(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    title: &str,
+    message: &str,
+) -> Result<()> {
+    let title = title.to_string();
+    let message = message.to_string();
+
+    loop {
+        let title = title.clone();
+        let message = message.clone();
+        terminal.draw(|frame| {
+            let area = frame.area();
+
+            let [_, content_area, _] = Layout::vertical([
+                Constraint::Min(1),
+                Constraint::Length(12),
+                Constraint::Min(1),
+            ])
+            .flex(Flex::Center)
+            .areas(area);
+
+            let [content] = Layout::horizontal([Constraint::Percentage(70)])
+                .flex(Flex::Center)
+                .areas(content_area);
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(Color::Red))
+                .title(format!(" {} ", title))
+                .title_style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD));
+            let inner = block.inner(content);
+            frame.render_widget(block, content);
+
+            let lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("  {message}"),
+                    Style::default().fg(Color::Red),
+                )),
+                Line::from(""),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  Check that signal-cli is installed and accessible.",
+                    Style::default().fg(Color::Gray),
+                )),
+                Line::from(Span::styled(
+                    "  Run with --setup to reconfigure.",
+                    Style::default().fg(Color::Gray),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  Press any key to exit",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ];
+
+            let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+            frame.render_widget(paragraph, inner);
+        })?;
+
+        if event::poll(Duration::from_millis(100))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
+                    return Ok(());
+                }
+            }
+        }
+    }
 }
 
 async fn run_app(
