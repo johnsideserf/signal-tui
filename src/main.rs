@@ -35,6 +35,16 @@ use signal::client::SignalClient;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Disable the default Windows Ctrl+C handler — crossterm captures it as a
+    // key event in raw mode, so the OS handler just causes a noisy exit code.
+    #[cfg(windows)]
+    unsafe {
+        extern "system" {
+            fn SetConsoleCtrlHandler(handler: usize, add: i32) -> i32;
+        }
+        SetConsoleCtrlHandler(0, 1);
+    }
+
     // Parse CLI args
     let args: Vec<String> = std::env::args().collect();
     let mut config_path: Option<&str> = None;
