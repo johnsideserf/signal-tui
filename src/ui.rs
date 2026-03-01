@@ -443,6 +443,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             if let Some(conv) = app.conversations.get(id) {
                 &conv.messages
             } else {
+                app.focused_message_time = None;
                 return;
             }
         }
@@ -520,6 +521,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 
             let welcome = Paragraph::new(lines);
             frame.render_widget(welcome, inner);
+            app.focused_message_time = None;
             return;
         }
     };
@@ -540,6 +542,9 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let mut lines: Vec<Line> = Vec::new();
     let mut prev_date: Option<String> = None;
+
+    // Map each line to its source message index (None for separators/markers)
+    let mut line_msg_idx: Vec<Option<usize>> = Vec::new();
 
     // Track images for native protocol overlay: (first_line_index, line_count, path)
     let use_native = app.native_images && app.image_protocol != ImageProtocol::Halfblock;
@@ -568,6 +573,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     sep,
                     Style::default().fg(Color::DarkGray),
                 )));
+                line_msg_idx.push(None);
             }
             prev_date = Some(date_str);
         }
@@ -590,6 +596,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     .fg(Color::Red)
                     .add_modifier(Modifier::BOLD),
             )));
+            line_msg_idx.push(None);
         }
 
         if msg.is_system {
@@ -597,6 +604,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                 format!("  {}", msg.body),
                 Style::default().fg(Color::DarkGray),
             )));
+            line_msg_idx.push(Some(msg_index));
         } else {
             let time = msg.format_time();
             let mut spans = Vec::new();
@@ -634,6 +642,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             spans.extend(body_spans);
 
             lines.push(Line::from(spans));
+            line_msg_idx.push(Some(msg_index));
 
             // Render inline image preview if available
             if let Some(ref image_lines) = msg.image_lines {
@@ -641,6 +650,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                 let count = image_lines.len();
                 for line in image_lines {
                     lines.push(line.clone());
+                    line_msg_idx.push(Some(msg_index));
                 }
                 // Record for native protocol overlay
                 if use_native {
@@ -687,6 +697,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     .fg(Color::DarkGray)
                     .add_modifier(Modifier::ITALIC),
             )));
+            line_msg_idx.push(None);
         }
     }
 
@@ -700,6 +711,42 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let base_scroll = content_height.saturating_sub(available_height);
     app.scroll_offset = app.scroll_offset.min(base_scroll);
     let scroll_y = base_scroll - app.scroll_offset;
+
+    // Determine the focused message for full-timestamp display in Normal mode.
+    // The "cursor" is at the bottom of the visible area when scrolled up.
+    if app.mode == InputMode::Normal && app.scroll_offset > 0 {
+        // Find which line index is at the bottom of the viewport (scroll_y + available_height - 1)
+        let target_wrapped = scroll_y + available_height.saturating_sub(1);
+        let mut cumul = 0usize;
+        let mut focused_line_idx = None;
+        for (idx, line) in lines.iter().enumerate() {
+            let w = line.width();
+            let h = if w == 0 { 1 } else { w.div_ceil(inner_width.max(1)) };
+            if cumul + h > target_wrapped {
+                focused_line_idx = Some(idx);
+                break;
+            }
+            cumul += h;
+        }
+        // Walk backwards from the focused line to find the nearest message
+        if let Some(mut li) = focused_line_idx {
+            loop {
+                if let Some(Some(mi)) = line_msg_idx.get(li) {
+                    app.focused_message_time = Some(messages[*mi].timestamp);
+                    break;
+                }
+                if li == 0 {
+                    app.focused_message_time = None;
+                    break;
+                }
+                li -= 1;
+            }
+        } else {
+            app.focused_message_time = None;
+        }
+    } else {
+        app.focused_message_time = None;
+    }
 
     // Compute screen positions for native protocol image overlay (before lines is consumed)
     if !image_records.is_empty() {
@@ -892,13 +939,21 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, sidebar_auto_hidden
         ));
     }
 
-    // Scroll offset indicator
+    // Scroll offset indicator + focused message timestamp
     if app.scroll_offset > 0 {
         segments.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
         segments.push(Span::styled(
             format!("↑{}", app.scroll_offset),
             Style::default().fg(Color::Yellow),
         ));
+        if let Some(ref ts) = app.focused_message_time {
+            let local = ts.with_timezone(&chrono::Local);
+            segments.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+            segments.push(Span::styled(
+                local.format("%a %b %d, %Y %I:%M:%S %p").to_string(),
+                Style::default().fg(Color::White),
+            ));
+        }
     }
 
     // Auto-hidden sidebar indicator
