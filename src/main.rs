@@ -316,6 +316,66 @@ fn emit_osc8_links(
     Ok(())
 }
 
+/// Write native terminal image protocol escape sequences to overlay
+/// full-resolution images on top of the halfblock placeholders.
+fn emit_native_images(
+    backend: &mut CrosstermBackend<io::Stdout>,
+    images: &[app::VisibleImage],
+    protocol: image_render::ImageProtocol,
+) -> Result<()> {
+    if images.is_empty() || protocol == image_render::ImageProtocol::Halfblock {
+        return Ok(());
+    }
+    use base64::Engine;
+    use std::io::Write;
+
+    queue!(backend, SavePosition)?;
+
+    for img in images {
+        let data = match std::fs::read(&img.path) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+
+        queue!(backend, MoveTo(img.x, img.y))?;
+
+        match protocol {
+            image_render::ImageProtocol::Kitty => {
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+                let chunks: Vec<&[u8]> = b64.as_bytes().chunks(4096).collect();
+                for (i, chunk) in chunks.iter().enumerate() {
+                    let m = if i == chunks.len() - 1 { 0 } else { 1 };
+                    let chunk_str = std::str::from_utf8(chunk).unwrap_or("");
+                    if i == 0 {
+                        // f=100 = PNG/JPEG file data, a=T = transmit+display
+                        // c/r = display size in cells, C=1 = don't move cursor
+                        write!(
+                            backend,
+                            "\x1b_Gf=100,a=T,c={},r={},C=1,m={m};{chunk_str}\x1b\\",
+                            img.width, img.height
+                        )?;
+                    } else {
+                        write!(backend, "\x1b_Gm={m};{chunk_str}\x1b\\")?;
+                    }
+                }
+            }
+            image_render::ImageProtocol::Iterm2 => {
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+                write!(
+                    backend,
+                    "\x1b]1337;File=inline=1;width={};height={};preserveAspectRatio=1:{b64}\x07",
+                    img.width, img.height
+                )?;
+            }
+            image_render::ImageProtocol::Halfblock => {}
+        }
+    }
+
+    queue!(backend, RestorePosition)?;
+    backend.flush()?;
+    Ok(())
+}
+
 async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     signal_client: &mut SignalClient,
@@ -340,6 +400,7 @@ async fn run_app(
         // Render
         terminal.draw(|frame| ui::draw(frame, &mut app))?;
         emit_osc8_links(terminal.backend_mut(), &app.link_regions)?;
+        emit_native_images(terminal.backend_mut(), &app.visible_images, app.image_protocol)?;
 
         // Poll for events with a short timeout so we stay responsive to signal events
         let has_terminal_event = event::poll(Duration::from_millis(50))?;
@@ -634,6 +695,7 @@ async fn run_demo_app(
     loop {
         terminal.draw(|frame| ui::draw(frame, &mut app))?;
         emit_osc8_links(terminal.backend_mut(), &app.link_regions)?;
+        emit_native_images(terminal.backend_mut(), &app.visible_images, app.image_protocol)?;
 
         let has_terminal_event = event::poll(Duration::from_millis(50))?;
 
@@ -866,6 +928,7 @@ fn populate_demo_data(app: &mut App) {
             body: body.to_string(),
             is_system: false,
             image_lines: None,
+            image_path: None,
         }
     };
 

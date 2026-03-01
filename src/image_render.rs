@@ -6,6 +6,34 @@ use ratatui::{
     text::{Line, Span},
 };
 
+/// Terminal image display protocol.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ImageProtocol {
+    /// Kitty Graphics Protocol (Kitty, Ghostty, WezTerm)
+    Kitty,
+    /// iTerm2 Inline Images Protocol (iTerm2, WezTerm)
+    Iterm2,
+    /// Unicode halfblock fallback (universal)
+    Halfblock,
+}
+
+/// Detect the best available image protocol by checking environment variables.
+pub fn detect_protocol() -> ImageProtocol {
+    // Kitty sets KITTY_WINDOW_ID
+    if std::env::var("KITTY_WINDOW_ID").is_ok() {
+        return ImageProtocol::Kitty;
+    }
+    if let Ok(term) = std::env::var("TERM_PROGRAM") {
+        match term.as_str() {
+            "ghostty" => return ImageProtocol::Kitty,
+            "iTerm.app" => return ImageProtocol::Iterm2,
+            "WezTerm" => return ImageProtocol::Iterm2,
+            _ => {}
+        }
+    }
+    ImageProtocol::Halfblock
+}
+
 /// Render an image file as halfblock-character lines for display in a terminal.
 ///
 /// Each terminal cell represents two vertical pixels using the upper-half-block
@@ -15,8 +43,8 @@ use ratatui::{
 pub fn render_image(path: &Path, max_width: u32) -> Option<Vec<Line<'static>>> {
     let img = image::open(path).ok()?;
 
-    let cap_width = max_width.min(40);
-    let cap_height: u32 = 40; // 20 cell-rows × 2 pixels per row
+    let cap_width = max_width;
+    let cap_height: u32 = 60; // 30 cell-rows × 2 pixels per row
 
     let (orig_w, orig_h) = img.dimensions();
     if orig_w == 0 || orig_h == 0 {

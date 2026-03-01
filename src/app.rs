@@ -7,8 +7,18 @@ use std::time::Instant;
 
 use crate::db::Database;
 use crate::image_render;
+use crate::image_render::ImageProtocol;
 use crate::input::{self, InputAction, COMMANDS};
 use crate::signal::types::{Contact, Group, SignalEvent, SignalMessage};
+
+/// An image visible on screen, for native protocol overlay rendering.
+pub struct VisibleImage {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+    pub path: String,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
@@ -25,6 +35,8 @@ pub struct DisplayMessage {
     pub is_system: bool,
     /// Pre-rendered halfblock image lines (for image attachments)
     pub image_lines: Option<Vec<Line<'static>>>,
+    /// Local filesystem path for native protocol rendering (Kitty/iTerm2)
+    pub image_path: Option<String>,
 }
 
 impl DisplayMessage {
@@ -114,6 +126,12 @@ pub struct App {
     pub inline_images: bool,
     /// Link regions detected in the last rendered frame (for OSC 8 injection)
     pub link_regions: Vec<crate::ui::LinkRegion>,
+    /// Maps display text → hidden URL for attachment links (cleared each frame)
+    pub link_url_map: HashMap<String, String>,
+    /// Detected terminal image protocol (Kitty, iTerm2, or Halfblock)
+    pub image_protocol: ImageProtocol,
+    /// Images visible on screen for native protocol overlay (cleared each frame)
+    pub visible_images: Vec<VisibleImage>,
     /// Incognito mode — in-memory DB, no local persistence
     pub incognito: bool,
 }
@@ -243,6 +261,9 @@ impl App {
             show_help: false,
             inline_images: true,
             link_regions: Vec::new(),
+            link_url_map: HashMap::new(),
+            image_protocol: image_render::detect_protocol(),
+            visible_images: Vec::new(),
             incognito: false,
         }
     }
@@ -261,7 +282,9 @@ impl App {
             for msg in &mut conv.messages {
                 if msg.body.starts_with("[image:") {
                     let path_str = if let Some(uri_pos) = msg.body.find("file:///") {
-                        Some(file_uri_to_path(&msg.body[uri_pos..]))
+                        // Trim trailing ')' from new format: [image: label](file:///path)
+                        let uri_slice = msg.body[uri_pos..].trim_end_matches(')');
+                        Some(file_uri_to_path(uri_slice))
                     } else if let Some(arrow_pos) = msg.body.find(" -> ") {
                         Some(msg.body[arrow_pos + 4..].trim_end_matches(']').to_string())
                     } else {
@@ -269,8 +292,11 @@ impl App {
                     };
                     if let Some(p) = path_str {
                         let path = Path::new(&p);
-                        if self.inline_images && path.exists() {
-                            msg.image_lines = image_render::render_image(path, 40);
+                        if path.exists() {
+                            msg.image_path = Some(p.clone());
+                            if self.inline_images {
+                                msg.image_lines = image_render::render_image(path, 80);
+                            }
                         }
                     }
                 }
@@ -397,6 +423,7 @@ impl App {
                     body: body.clone(),
                     is_system: false,
                     image_lines: None,
+                    image_path: None,
                 });
             }
             let _ = self.db.insert_message(
@@ -431,15 +458,10 @@ impl App {
                 };
 
                 let path_info = att.local_path.as_deref()
-                    .map(|p| format!(" {}", path_to_file_uri(p)))
+                    .map(|p| format!("({})", path_to_file_uri(p)))
                     .unwrap_or_default();
 
-                let att_body = if rendered.is_some() {
-                    format!("[image: {label}]{path_info}")
-                } else {
-                    // Render failed — show path as fallback
-                    format!("[image: {label}]{path_info}")
-                };
+                let att_body = format!("[image: {label}]{path_info}");
 
                 if let Some(conv) = self.conversations.get_mut(&conv_id) {
                     conv.messages.push(DisplayMessage {
@@ -448,6 +470,7 @@ impl App {
                         body: att_body.clone(),
                         is_system: false,
                         image_lines: rendered,
+                        image_path: att.local_path.clone(),
                     });
                 }
                 let _ = self.db.insert_message(
@@ -459,7 +482,7 @@ impl App {
                 );
             } else {
                 let path_info = att.local_path.as_deref()
-                    .map(|p| format!(" {}", path_to_file_uri(p)))
+                    .map(|p| format!("({})", path_to_file_uri(p)))
                     .unwrap_or_default();
                 let att_body = format!("[attachment: {label}]{path_info}");
                 if let Some(conv) = self.conversations.get_mut(&conv_id) {
@@ -469,6 +492,7 @@ impl App {
                         body: att_body.clone(),
                         is_system: false,
                         image_lines: None,
+                        image_path: None,
                     });
                 }
                 let _ = self.db.insert_message(
@@ -590,6 +614,7 @@ impl App {
                             body: text.clone(),
                             is_system: false,
                             image_lines: None,
+                            image_path: None,
                         });
                     }
                     let _ = self.db.insert_message(

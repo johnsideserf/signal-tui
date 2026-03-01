@@ -10,7 +10,8 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, InputMode, SETTINGS_ITEMS};
+use crate::app::{App, InputMode, VisibleImage, SETTINGS_ITEMS};
+use crate::image_render::ImageProtocol;
 use crate::input::COMMANDS;
 
 /// Hash a sender name to one of ~8 distinct colors. "you" always gets Green.
@@ -155,16 +156,40 @@ fn collect_link_regions(buf: &Buffer, area: Rect) -> Vec<LinkRegion> {
 
 /// Split a message body into spans, styling any URI (https://, http://, file:///) as
 /// underlined blue text. Non-URI text is rendered as plain spans.
-fn styled_uri_spans(body: &str) -> Vec<Span<'static>> {
+///
+/// Returns `(spans, Option<hidden_url>)`. For attachment bodies like
+/// `[image: label](file:///path)`, the bracket text is the visible link and
+/// the URI inside parens is returned separately (not displayed).
+fn styled_uri_spans(body: &str) -> (Vec<Span<'static>>, Option<String>) {
     let link_style = Style::default()
         .fg(Color::Blue)
         .add_modifier(Modifier::UNDERLINED);
 
-    // Style entire body as a link for image/attachment patterns with file URIs
-    if (body.starts_with("[image:") || body.starts_with("[attachment:"))
-        && body.contains("file:///")
-    {
-        return vec![Span::styled(body.to_string(), link_style)];
+    // Attachment/image patterns: extract bracket text as display, URI as hidden metadata
+    if body.starts_with("[image:") || body.starts_with("[attachment:") {
+        // Extract the bracket portion: [image: label] or [attachment: label]
+        if let Some(bracket_end) = body.find(']') {
+            let display_text = &body[..=bracket_end]; // e.g. "[image: photo.jpg]"
+
+            // Extract URI from either new format ](file:///...) or old format ] file:///...
+            let hidden_url = if let Some(uri_pos) = body.find("file:///") {
+                let uri_start = &body[uri_pos..];
+                // End at whitespace, closing paren, or end of string
+                let uri_end = uri_start
+                    .find(|c: char| c.is_whitespace() || c == ')')
+                    .unwrap_or(uri_start.len());
+                Some(uri_start[..uri_end].to_string())
+            } else {
+                None
+            };
+
+            if hidden_url.is_some() {
+                return (
+                    vec![Span::styled(display_text.to_string(), link_style)],
+                    hidden_url,
+                );
+            }
+        }
     }
 
     let mut spans: Vec<Span<'static>> = Vec::new();
@@ -198,10 +223,12 @@ fn styled_uri_spans(body: &str) -> Vec<Span<'static>> {
         }
     }
 
-    spans
+    (spans, None)
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
+    app.link_url_map.clear();
+    app.visible_images.clear();
     let size = frame.area();
     let terminal_width = size.width;
 
@@ -256,6 +283,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Collect link regions from the rendered buffer for OSC 8 injection
     let area = frame.area();
     app.link_regions = collect_link_regions(frame.buffer_mut(), area);
+
+    // Resolve hidden URLs for attachment links (display text has no URI scheme)
+    for link in &mut app.link_regions {
+        if !link.url.contains("://") {
+            if let Some(url) = app.link_url_map.get(&link.text) {
+                link.url = url.clone();
+            }
+        }
+    }
 }
 
 fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
@@ -489,6 +525,10 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
     let mut prev_date: Option<String> = None;
 
+    // Track images for native protocol overlay: (first_line_index, line_count, path)
+    let use_native = app.image_protocol != ImageProtocol::Halfblock;
+    let mut image_records: Vec<(usize, usize, String)> = Vec::new();
+
     for (i, msg) in visible.iter().enumerate() {
         let msg_index = start + i;
 
@@ -557,7 +597,12 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             ];
 
             // Style URIs (https://, http://, file:///) as underlined links
-            let body_spans = styled_uri_spans(&msg.body);
+            let (body_spans, hidden_url) = styled_uri_spans(&msg.body);
+            if let Some(url) = hidden_url {
+                // Collect display text for link_url_map lookup
+                let display_text: String = body_spans.iter().map(|s| s.content.as_ref()).collect();
+                app.link_url_map.insert(display_text, url);
+            }
             spans.push(Span::raw(" ".to_string()));
             spans.extend(body_spans);
 
@@ -565,8 +610,16 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 
             // Render inline image preview if available
             if let Some(ref image_lines) = msg.image_lines {
+                let first_idx = lines.len();
+                let count = image_lines.len();
                 for line in image_lines {
                     lines.push(line.clone());
+                }
+                // Record for native protocol overlay
+                if use_native {
+                    if let Some(ref path) = msg.image_path {
+                        image_records.push((first_idx, count, path.clone()));
+                    }
                 }
             }
         }
@@ -620,10 +673,55 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let base_scroll = content_height.saturating_sub(available_height);
     app.scroll_offset = app.scroll_offset.min(base_scroll);
     let scroll_y = base_scroll - app.scroll_offset;
-    let paragraph = Paragraph::new(lines)
+    let paragraph = Paragraph::new(lines.clone())
         .wrap(Wrap { trim: false })
         .scroll((scroll_y as u16, 0));
     frame.render_widget(paragraph, inner);
+
+    // Compute screen positions for native protocol image overlay
+    if !image_records.is_empty() {
+        // Build cumulative wrapped-line positions
+        let mut wrapped_positions: Vec<usize> = Vec::with_capacity(lines.len() + 1);
+        let mut cumulative = 0usize;
+        for line in &lines {
+            wrapped_positions.push(cumulative);
+            let w = line.width();
+            cumulative += if w == 0 { 1 } else { w.div_ceil(inner_width.max(1)) };
+        }
+
+        for (first_idx, count, path) in &image_records {
+            let img_start = wrapped_positions[*first_idx];
+            let img_end = if first_idx + count < wrapped_positions.len() {
+                wrapped_positions[first_idx + count]
+            } else {
+                cumulative
+            };
+
+            let screen_start = img_start as i64 - scroll_y as i64;
+            let screen_end = img_end as i64 - scroll_y as i64;
+
+            // Clip to visible area
+            let vis_start = screen_start.max(0) as u16;
+            let vis_end = (screen_end as u16).min(inner.height);
+
+            if vis_start < vis_end {
+                // Image width = first image line width minus 2-char indent
+                let img_width = if *first_idx < lines.len() {
+                    (lines[*first_idx].width()).saturating_sub(2) as u16
+                } else {
+                    0
+                };
+
+                app.visible_images.push(VisibleImage {
+                    x: inner.x + 2, // account for 2-char indent
+                    y: inner.y + vis_start,
+                    width: img_width,
+                    height: vis_end - vis_start,
+                    path: path.clone(),
+                });
+            }
+        }
+    }
 
     // Scrollbar on right border, inset to preserve rounded corners
     if content_height > available_height {
