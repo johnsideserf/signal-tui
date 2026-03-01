@@ -20,15 +20,13 @@ pub enum ImageProtocol {
 
 /// Detect the best available image protocol by checking environment variables.
 pub fn detect_protocol() -> ImageProtocol {
-    // Kitty sets KITTY_WINDOW_ID
     if std::env::var("KITTY_WINDOW_ID").is_ok() {
         return ImageProtocol::Kitty;
     }
     if let Ok(term) = std::env::var("TERM_PROGRAM") {
         match term.as_str() {
             "ghostty" => return ImageProtocol::Kitty,
-            "iTerm.app" => return ImageProtocol::Iterm2,
-            "WezTerm" => return ImageProtocol::Iterm2,
+            "iTerm.app" | "WezTerm" => return ImageProtocol::Iterm2,
             _ => {}
         }
     }
