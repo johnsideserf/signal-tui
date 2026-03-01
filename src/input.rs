@@ -12,6 +12,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { name: "/sidebar",  alias: "/sb", args: "",        description: "Toggle sidebar" },
     CommandInfo { name: "/bell",     alias: "",    args: "[type]",  description: "Toggle notifications (direct/group)" },
     CommandInfo { name: "/mute",     alias: "",    args: "",        description: "Mute/unmute current chat" },
+    CommandInfo { name: "/contacts", alias: "/c",  args: "",        description: "Browse contacts" },
     CommandInfo { name: "/settings", alias: "",    args: "",        description: "Open settings" },
     CommandInfo { name: "/help",     alias: "/h",  args: "",        description: "Show help" },
     CommandInfo { name: "/quit",     alias: "/q",  args: "",        description: "Exit signal-tui" },
@@ -38,6 +39,8 @@ pub enum InputAction {
     Help,
     /// Open settings overlay
     Settings,
+    /// Open contacts overlay
+    Contacts,
     /// Unknown command
     Unknown(String),
 }
@@ -76,6 +79,7 @@ pub fn parse_input(input: &str) -> InputAction {
             }
         }
         "/mute" => InputAction::ToggleMute,
+        "/contacts" | "/c" => InputAction::Contacts,
         "/settings" => InputAction::Settings,
         "/help" | "/h" => InputAction::Help,
         _ => InputAction::Unknown(format!("Unknown command: {cmd}")),
@@ -205,6 +209,16 @@ mod tests {
     #[test]
     fn settings_command() {
         assert!(matches!(parse_input("/settings"), InputAction::Settings));
+    }
+
+    #[test]
+    fn contacts_command() {
+        assert!(matches!(parse_input("/contacts"), InputAction::Contacts));
+    }
+
+    #[test]
+    fn contacts_alias() {
+        assert!(matches!(parse_input("/c"), InputAction::Contacts));
     }
 
     #[test]

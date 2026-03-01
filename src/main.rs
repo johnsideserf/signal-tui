@@ -494,6 +494,8 @@ async fn run_app(
                     if app.show_help {
                         // Any key dismisses the help overlay
                         app.show_help = false;
+                    } else if app.show_contacts {
+                        app.handle_contacts_key(key.code);
                     } else if app.show_settings {
                         app.handle_settings_key(key.code);
                     } else if app.autocomplete_visible {
@@ -812,6 +814,8 @@ async fn run_demo_app(
                 if !handled {
                     if app.show_help {
                         app.show_help = false;
+                    } else if app.show_contacts {
+                        app.handle_contacts_key(key.code);
                     } else if app.show_settings {
                         app.handle_settings_key(key.code);
                     } else if app.autocomplete_visible {

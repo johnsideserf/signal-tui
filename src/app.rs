@@ -126,6 +126,14 @@ pub struct App {
     pub settings_index: usize,
     /// Help overlay visible
     pub show_help: bool,
+    /// Contacts overlay visible
+    pub show_contacts: bool,
+    /// Cursor position in contacts list
+    pub contacts_index: usize,
+    /// Type-to-filter text for contacts overlay
+    pub contacts_filter: String,
+    /// Filtered list of (phone_number, display_name) for contacts overlay
+    pub contacts_filtered: Vec<(String, String)>,
     /// Show inline halfblock image previews in chat
     pub inline_images: bool,
     /// Link regions detected in the last rendered frame (for OSC 8 injection)
@@ -258,6 +266,73 @@ impl App {
         }
     }
 
+    /// Build the filtered contacts list from contact_names using the current filter.
+    pub fn refresh_contacts_filter(&mut self) {
+        let filter_lower = self.contacts_filter.to_lowercase();
+        let mut contacts: Vec<(String, String)> = self
+            .contact_names
+            .iter()
+            .filter(|(_, name)| !name.is_empty())
+            .filter(|(number, name)| {
+                if filter_lower.is_empty() {
+                    return true;
+                }
+                name.to_lowercase().contains(&filter_lower)
+                    || number.to_lowercase().contains(&filter_lower)
+            })
+            .map(|(number, name)| (number.clone(), name.clone()))
+            .collect();
+        contacts.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+        self.contacts_filtered = contacts;
+        // Clamp index
+        if self.contacts_filtered.is_empty() {
+            self.contacts_index = 0;
+        } else if self.contacts_index >= self.contacts_filtered.len() {
+            self.contacts_index = self.contacts_filtered.len() - 1;
+        }
+    }
+
+    /// Handle a key press while the contacts overlay is open.
+    pub fn handle_contacts_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                if !self.contacts_filtered.is_empty()
+                    && self.contacts_index < self.contacts_filtered.len() - 1
+                {
+                    self.contacts_index += 1;
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.contacts_index = self.contacts_index.saturating_sub(1);
+            }
+            KeyCode::Enter => {
+                if let Some((number, _)) = self.contacts_filtered.get(self.contacts_index) {
+                    let number = number.clone();
+                    self.show_contacts = false;
+                    self.contacts_filter.clear();
+                    self.join_conversation(&number);
+                }
+            }
+            KeyCode::Esc => {
+                self.show_contacts = false;
+                self.contacts_filter.clear();
+            }
+            KeyCode::Backspace => {
+                self.contacts_filter.pop();
+                self.refresh_contacts_filter();
+            }
+            KeyCode::Char(c) => {
+                // j/k are handled above for navigation, so only printable chars
+                // that aren't j/k fall through to here — but since j/k are matched
+                // first, we need a different approach: use the filter for all chars
+                // Actually j/k are already matched above, so this won't fire for them
+                self.contacts_filter.push(c);
+                self.refresh_contacts_filter();
+            }
+            _ => {}
+        }
+    }
+
     /// Handle a key press while the autocomplete popup is visible.
     /// Returns `Some((recipient, body, is_group, local_ts_ms))` when the user submits a command
     /// that requires sending a message. Returns `None` otherwise.
@@ -332,6 +407,10 @@ impl App {
             show_settings: false,
             settings_index: 0,
             show_help: false,
+            show_contacts: false,
+            contacts_index: 0,
+            contacts_filter: String::new(),
+            contacts_filtered: Vec::new(),
             inline_images: true,
             link_regions: Vec::new(),
             link_url_map: HashMap::new(),
@@ -948,6 +1027,12 @@ impl App {
             InputAction::Settings => {
                 self.show_settings = true;
                 self.settings_index = 0;
+            }
+            InputAction::Contacts => {
+                self.show_contacts = true;
+                self.contacts_index = 0;
+                self.contacts_filter.clear();
+                self.refresh_contacts_filter();
             }
             InputAction::Help => {
                 self.show_help = true;
