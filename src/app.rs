@@ -9,7 +9,7 @@ use crate::db::Database;
 use crate::image_render;
 use crate::image_render::ImageProtocol;
 use crate::input::{self, InputAction, COMMANDS};
-use crate::signal::types::{Contact, Group, MessageStatus, SignalEvent, SignalMessage};
+use crate::signal::types::{Contact, Group, MessageStatus, Reaction, SignalEvent, SignalMessage};
 
 /// Log a database error via debug_log (no-op when --debug is off).
 fn db_warn<T>(result: Result<T, impl std::fmt::Display>, context: &str) {
@@ -48,6 +48,8 @@ pub struct DisplayMessage {
     pub status: Option<MessageStatus>,
     /// Millisecond epoch timestamp for receipt matching
     pub timestamp_ms: i64,
+    /// Emoji reactions on this message
+    pub reactions: Vec<Reaction>,
 }
 
 impl DisplayMessage {
@@ -171,6 +173,32 @@ pub struct App {
     pub pending_receipts: Vec<(String, String, Vec<i64>)>,
     /// Timestamp of the message at the scroll cursor (set during draw, cleared at scroll_offset=0)
     pub focused_message_time: Option<DateTime<Utc>>,
+    /// Reaction picker overlay visible
+    pub show_reaction_picker: bool,
+    /// Selected index in the reaction picker
+    pub reaction_picker_index: usize,
+    /// Show verbose reaction display (usernames instead of counts)
+    pub reaction_verbose: bool,
+}
+
+pub const QUICK_REACTIONS: &[&str] = &["\u{1f44d}", "\u{1f44e}", "\u{2764}\u{fe0f}", "\u{1f602}", "\u{1f62e}", "\u{1f622}", "\u{1f64f}", "\u{1f525}"];
+
+/// A request from the UI to the main loop to send something.
+pub enum SendRequest {
+    Message {
+        recipient: String,
+        body: String,
+        is_group: bool,
+        local_ts_ms: i64,
+    },
+    Reaction {
+        conv_id: String,
+        emoji: String,
+        is_group: bool,
+        target_author: String,
+        target_timestamp: i64,
+        remove: bool,
+    },
 }
 
 /// A single settings toggle entry: label, getter, setter, and optional config persistence.
@@ -237,6 +265,13 @@ pub const SETTINGS: &[SettingDef] = &[
         get: |a| a.nerd_fonts,
         set: |a, v| a.nerd_fonts = v,
         save: Some(|c, v| c.nerd_fonts = v),
+        on_toggle: None,
+    },
+    SettingDef {
+        label: "Verbose reactions",
+        get: |a| a.reaction_verbose,
+        set: |a, v| a.reaction_verbose = v,
+        save: Some(|c, v| c.reaction_verbose = v),
         on_toggle: None,
     },
 ];
@@ -336,6 +371,95 @@ impl App {
         }
     }
 
+    /// Handle a key press while the reaction picker overlay is open.
+    fn handle_reaction_picker_key(&mut self, code: KeyCode) -> Option<SendRequest> {
+        match code {
+            KeyCode::Char('h') | KeyCode::Left => {
+                self.reaction_picker_index = self.reaction_picker_index.saturating_sub(1);
+                None
+            }
+            KeyCode::Char('l') | KeyCode::Right => {
+                if self.reaction_picker_index < QUICK_REACTIONS.len() - 1 {
+                    self.reaction_picker_index += 1;
+                }
+                None
+            }
+            KeyCode::Char(c @ '1'..='8') => {
+                let idx = (c as u8 - b'1') as usize;
+                if idx < QUICK_REACTIONS.len() {
+                    self.reaction_picker_index = idx;
+                    self.show_reaction_picker = false;
+                    self.prepare_reaction_send()
+                } else {
+                    None
+                }
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                self.show_reaction_picker = false;
+                self.prepare_reaction_send()
+            }
+            KeyCode::Esc => {
+                self.show_reaction_picker = false;
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Build a SendRequest::Reaction from the current picker selection and focused message.
+    fn prepare_reaction_send(&mut self) -> Option<SendRequest> {
+        let emoji = QUICK_REACTIONS.get(self.reaction_picker_index)?.to_string();
+        let conv_id = self.active_conversation.clone()?;
+        let conv = self.conversations.get(&conv_id)?;
+        let is_group = conv.is_group;
+
+        let total = conv.messages.len();
+        let index = total.saturating_sub(1).saturating_sub(self.scroll_offset);
+        let msg = conv.messages.get(index)?;
+
+        let target_timestamp = msg.timestamp_ms;
+        let target_author = if msg.sender == "you" {
+            self.account.clone()
+        } else {
+            // Reverse lookup: find the phone number for this display name
+            self.contact_names
+                .iter()
+                .find(|(_, name)| name.as_str() == msg.sender)
+                .map(|(num, _)| num.clone())
+                .unwrap_or_else(|| msg.sender.clone())
+        };
+
+        // Optimistic local update
+        if let Some(conv) = self.conversations.get_mut(&conv_id) {
+            if let Some(msg) = conv.messages.get_mut(index) {
+                // One reaction per user — replace or push
+                if let Some(existing) = msg.reactions.iter_mut().find(|r| r.sender == "you") {
+                    existing.emoji = emoji.clone();
+                } else {
+                    msg.reactions.push(Reaction {
+                        emoji: emoji.clone(),
+                        sender: "you".to_string(),
+                    });
+                }
+            }
+        }
+
+        // Persist to DB
+        db_warn(
+            self.db.upsert_reaction(&conv_id, target_timestamp, &target_author, "you", &emoji),
+            "upsert_reaction",
+        );
+
+        Some(SendRequest::Reaction {
+            conv_id,
+            emoji,
+            is_group,
+            target_author,
+            target_timestamp,
+            remove: false,
+        })
+    }
+
     /// Handle a key press while the contacts overlay is open.
     pub fn handle_contacts_key(&mut self, code: KeyCode) {
         match code {
@@ -378,9 +502,9 @@ impl App {
     }
 
     /// Handle a key press while the autocomplete popup is visible.
-    /// Returns `Some((recipient, body, is_group, local_ts_ms))` when the user submits a command
+    /// Returns `Some(SendRequest)` when the user submits a command
     /// that requires sending a message. Returns `None` otherwise.
-    pub fn handle_autocomplete_key(&mut self, code: KeyCode) -> Option<(String, String, bool, i64)> {
+    pub fn handle_autocomplete_key(&mut self, code: KeyCode) -> Option<SendRequest> {
         match code {
             KeyCode::Up => {
                 let len = self.autocomplete_candidates.len();
@@ -470,6 +594,9 @@ impl App {
             pending_sends: HashMap::new(),
             pending_receipts: Vec::new(),
             focused_message_time: None,
+            show_reaction_picker: false,
+            reaction_picker_index: 0,
+            reaction_verbose: false,
         }
     }
 
@@ -596,7 +723,11 @@ impl App {
     /// Returns `Some((recipient, body, is_group, local_ts_ms))` if an autocomplete
     /// command triggers a message send. Returns `None` otherwise.
     /// Returns `Ok(true)` if the key was consumed by an overlay.
-    pub fn handle_overlay_key(&mut self, code: KeyCode) -> (bool, Option<(String, String, bool, i64)>) {
+    pub fn handle_overlay_key(&mut self, code: KeyCode) -> (bool, Option<SendRequest>) {
+        if self.show_reaction_picker {
+            let send = self.handle_reaction_picker_key(code);
+            return (true, send);
+        }
         if self.show_help {
             self.show_help = false;
             return (true, None);
@@ -736,6 +867,14 @@ impl App {
                 self.copy_selected_message(true);
             }
 
+            // React to focused message
+            (_, KeyCode::Char('r')) => {
+                if self.selected_message().is_some() {
+                    self.show_reaction_picker = true;
+                    self.reaction_picker_index = 0;
+                }
+            }
+
             // Quick actions
             (_, KeyCode::Char('/')) => {
                 self.input_buffer = "/".to_string();
@@ -755,9 +894,8 @@ impl App {
     }
 
     /// Handle Insert mode key.
-    /// Returns `Some((recipient, body, is_group, local_ts_ms))` if Enter triggers
-    /// a message send (via handle_input). Returns `None` otherwise.
-    pub fn handle_insert_key(&mut self, modifiers: KeyModifiers, code: KeyCode) -> Option<(String, String, bool, i64)> {
+    /// Returns `Some(SendRequest)` if Enter triggers a message send (via handle_input).
+    pub fn handle_insert_key(&mut self, modifiers: KeyModifiers, code: KeyCode) -> Option<SendRequest> {
         match (modifiers, code) {
             (_, KeyCode::Esc) => {
                 self.mode = InputMode::Normal;
@@ -804,6 +942,14 @@ impl App {
                 } else {
                     self.typing_indicators.remove(&sender);
                 }
+            }
+            SignalEvent::ReactionReceived {
+                conv_id, emoji, sender, sender_name, target_author, target_timestamp, is_remove,
+            } => {
+                if let Some(ref name) = sender_name {
+                    self.contact_names.entry(sender.clone()).or_insert_with(|| name.clone());
+                }
+                self.handle_reaction(&conv_id, &emoji, &sender, &target_author, target_timestamp, is_remove);
             }
             SignalEvent::ContactList(contacts) => self.handle_contact_list(contacts),
             SignalEvent::GroupList(groups) => self.handle_group_list(groups),
@@ -876,6 +1022,7 @@ impl App {
                     image_path,
                     status: msg_status,
                     timestamp_ms: msg_ts_ms,
+                    reactions: Vec::new(),
                 });
             }
             db_warn(
@@ -937,6 +1084,62 @@ impl App {
             if type_enabled && !self.muted_conversations.contains(&conv_id) {
                 self.pending_bell = true;
             }
+        }
+    }
+
+    fn handle_reaction(
+        &mut self,
+        conv_id: &str,
+        emoji: &str,
+        sender: &str,
+        target_author: &str,
+        target_timestamp: i64,
+        is_remove: bool,
+    ) {
+        // Find the message in memory and update reactions
+        // Pre-resolve target_author display name to avoid borrow conflict
+        let account = &self.account;
+        let target_display = self.contact_names.get(target_author).cloned();
+        if let Some(conv) = self.conversations.get_mut(conv_id) {
+            let found = conv.messages.iter_mut().rev().find(|m| {
+                if m.timestamp_ms != target_timestamp {
+                    return false;
+                }
+                if m.sender == "you" {
+                    target_author == account.as_str()
+                } else {
+                    m.sender == target_author
+                        || target_display.as_deref() == Some(m.sender.as_str())
+                }
+            });
+            if let Some(msg) = found {
+                if is_remove {
+                    msg.reactions.retain(|r| r.sender != sender);
+                } else {
+                    // One reaction per user — replace or push
+                    if let Some(existing) = msg.reactions.iter_mut().find(|r| r.sender == sender) {
+                        existing.emoji = emoji.to_string();
+                    } else {
+                        msg.reactions.push(Reaction {
+                            emoji: emoji.to_string(),
+                            sender: sender.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Persist to DB regardless of whether message is in memory
+        if is_remove {
+            db_warn(
+                self.db.remove_reaction(conv_id, target_timestamp, target_author, sender),
+                "remove_reaction",
+            );
+        } else {
+            db_warn(
+                self.db.upsert_reaction(conv_id, target_timestamp, target_author, sender, emoji),
+                "upsert_reaction",
+            );
         }
     }
 
@@ -1129,7 +1332,7 @@ impl App {
     }
 
     /// Handle a line of user input; returns Some((conv_id, body, is_group, local_ts_ms)) if we need to send a message
-    pub fn handle_input(&mut self) -> Option<(String, String, bool, i64)> {
+    pub fn handle_input(&mut self) -> Option<SendRequest> {
         let input = self.input_buffer.clone();
         let trimmed = input.trim();
         if !trimmed.is_empty() {
@@ -1166,6 +1369,7 @@ impl App {
                             image_path: None,
                             status: Some(MessageStatus::Sending),
                             timestamp_ms: local_ts_ms,
+                            reactions: Vec::new(),
                         });
                     }
                     db_warn(self.db.insert_message(
@@ -1178,7 +1382,12 @@ impl App {
                         local_ts_ms,
                     ), "insert_message");
                     self.scroll_offset = 0;
-                    return Some((conv_id, text, is_group, local_ts_ms));
+                    return Some(SendRequest::Message {
+                        recipient: conv_id,
+                        body: text,
+                        is_group,
+                        local_ts_ms,
+                    });
                 } else {
                     self.status_message =
                         "No active conversation. Use /join <name> first.".to_string();
@@ -2110,6 +2319,7 @@ mod tests {
                 image_path: None,
                 status: Some(MessageStatus::Sent),
                 timestamp_ms: ts_ms,
+                reactions: Vec::new(),
             });
         }
 
@@ -2153,6 +2363,7 @@ mod tests {
                 image_path: None,
                 status: Some(MessageStatus::Read),
                 timestamp_ms: ts_ms,
+                reactions: Vec::new(),
             });
         }
 
@@ -2187,6 +2398,7 @@ mod tests {
                 image_path: None,
                 status: Some(MessageStatus::Sending),
                 timestamp_ms: local_ts,
+                reactions: Vec::new(),
             });
         }
 
@@ -2221,6 +2433,7 @@ mod tests {
                 image_path: None,
                 status: Some(MessageStatus::Sending),
                 timestamp_ms: local_ts,
+                reactions: Vec::new(),
             });
         }
 
@@ -2276,6 +2489,7 @@ mod tests {
                 image_path: None,
                 status: Some(MessageStatus::Sending),
                 timestamp_ms: local_ts,
+                reactions: Vec::new(),
             });
         }
 
