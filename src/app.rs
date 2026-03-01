@@ -152,6 +152,8 @@ pub struct App {
     pub nerd_fonts: bool,
     /// Pending send RPCs: rpc_id → (conv_id, local_timestamp_ms)
     pub pending_sends: HashMap<String, (String, i64)>,
+    /// Receipts that arrived before their matching SendTimestamp — replayed after each SendTimestamp
+    pub pending_receipts: Vec<(String, String, Vec<i64>)>,
 }
 
 pub const SETTINGS_ITEMS: &[&str] = &[
@@ -302,6 +304,7 @@ impl App {
             color_receipts: true,
             nerd_fonts: false,
             pending_sends: HashMap::new(),
+            pending_receipts: Vec::new(),
         }
     }
 
@@ -314,6 +317,14 @@ impl App {
             let id = conv.id.clone();
             let msg_count = conv.messages.len();
             conv.unread = unread;
+
+            // Promote stale Sending messages to Sent — if they're in the DB, the
+            // send completed but the app exited before the RPC response arrived.
+            for msg in &mut conv.messages {
+                if msg.status == Some(MessageStatus::Sending) {
+                    msg.status = Some(MessageStatus::Sent);
+                }
+            }
 
             // Re-render image previews from stored paths
             for msg in &mut conv.messages {
@@ -637,6 +648,14 @@ impl App {
                     }
                 }
             }
+
+            // Replay any buffered receipts that may have arrived before this SendTimestamp
+            if !self.pending_receipts.is_empty() {
+                let receipts = std::mem::take(&mut self.pending_receipts);
+                for (sender, receipt_type, timestamps) in receipts {
+                    self.handle_receipt(&sender, &receipt_type, &timestamps);
+                }
+            }
         }
     }
 
@@ -667,13 +686,14 @@ impl App {
             _ => return,
         };
 
-        // Receipts come from the recipient — look up 1:1 conversation by sender
+        let mut matched_any = false;
+
+        // Try matching in the 1:1 conversation keyed by the receipt sender
         let conv_id = sender.to_string();
         if let Some(conv) = self.conversations.get_mut(&conv_id) {
             for ts in timestamps {
                 for msg in conv.messages.iter_mut().rev() {
                     if msg.sender == "you" && msg.timestamp_ms == *ts {
-                        // Only upgrade status, never downgrade
                         if let Some(current) = msg.status {
                             if new_status > current {
                                 msg.status = Some(new_status);
@@ -684,10 +704,51 @@ impl App {
                                 );
                             }
                         }
+                        matched_any = true;
                         break;
                     }
                 }
             }
+        }
+
+        // If no match in 1:1, scan all conversations (handles group receipts
+        // where sender is a member but conv is keyed by group ID)
+        if !matched_any {
+            for ts in timestamps {
+                let mut found = false;
+                for (cid, conv) in &mut self.conversations {
+                    for msg in conv.messages.iter_mut().rev() {
+                        if msg.sender == "you" && msg.timestamp_ms == *ts {
+                            if let Some(current) = msg.status {
+                                if new_status > current {
+                                    msg.status = Some(new_status);
+                                    let _ = self.db.update_message_status(
+                                        cid,
+                                        *ts,
+                                        new_status.to_i32(),
+                                    );
+                                }
+                            }
+                            found = true;
+                            break;
+                        }
+                    }
+                    if found {
+                        matched_any = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // If still no match, the receipt may have arrived before the SendTimestamp
+        // that assigns the server timestamp. Buffer it for replay.
+        if !matched_any && !timestamps.is_empty() {
+            self.pending_receipts.push((
+                sender.to_string(),
+                receipt_type.to_string(),
+                timestamps.to_vec(),
+            ));
         }
     }
 
@@ -1785,5 +1846,58 @@ mod tests {
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
 
         assert_eq!(app.conversations["+1"].messages[0].status, None);
+    }
+
+    #[test]
+    fn receipt_before_send_timestamp_is_buffered_and_replayed() {
+        let mut app = test_app();
+
+        let conv_id = "+1";
+        app.get_or_create_conversation(conv_id, "Alice", false);
+        let local_ts = 1700000000000_i64;
+        let server_ts = 1700000000123_i64;
+
+        // Create outgoing message with local timestamp (Sending state)
+        if let Some(conv) = app.conversations.get_mut(conv_id) {
+            conv.messages.push(DisplayMessage {
+                sender: "you".to_string(),
+                timestamp: chrono::Utc::now(),
+                body: "hello".to_string(),
+                is_system: false,
+                image_lines: None,
+                image_path: None,
+                status: Some(MessageStatus::Sending),
+                timestamp_ms: local_ts,
+            });
+        }
+
+        app.pending_sends.insert("rpc-1".to_string(), (conv_id.to_string(), local_ts));
+
+        // Receipt arrives BEFORE SendTimestamp (references server_ts which we don't know yet)
+        app.handle_signal_event(SignalEvent::ReceiptReceived {
+            sender: conv_id.to_string(),
+            receipt_type: "DELIVERY".to_string(),
+            timestamps: vec![server_ts],
+        });
+
+        // Receipt should be buffered, message still Sending
+        assert_eq!(
+            app.conversations[conv_id].messages[0].status,
+            Some(MessageStatus::Sending)
+        );
+        assert_eq!(app.pending_receipts.len(), 1);
+
+        // Now SendTimestamp arrives — updates timestamp_ms and replays buffered receipts
+        app.handle_signal_event(SignalEvent::SendTimestamp {
+            rpc_id: "rpc-1".to_string(),
+            server_ts,
+        });
+
+        // Message should now be Delivered (Sending → Sent by SendTimestamp, then → Delivered by replayed receipt)
+        assert_eq!(
+            app.conversations[conv_id].messages[0].status,
+            Some(MessageStatus::Delivered)
+        );
+        assert!(app.pending_receipts.is_empty());
     }
 }
