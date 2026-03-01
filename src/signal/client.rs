@@ -20,6 +20,7 @@ pub struct SignalClient {
     pub event_rx: mpsc::Receiver<SignalEvent>,
     account: String,
     pending_requests: Arc<Mutex<HashMap<String, (String, Instant)>>>,
+    stderr_buffer: Arc<Mutex<String>>,
 }
 
 impl SignalClient {
@@ -42,6 +43,7 @@ impl SignalClient {
 
         let stdout = child.stdout.take().context("Failed to capture stdout")?;
         let stdin = child.stdin.take().context("Failed to capture stdin")?;
+        let stderr = child.stderr.take().context("Failed to capture stderr")?;
 
         let (event_tx, event_rx) = mpsc::channel::<SignalEvent>(256);
         let (stdin_tx, mut stdin_rx) = mpsc::channel::<String>(64);
@@ -128,12 +130,30 @@ impl SignalClient {
             }
         });
 
+        // Stderr reader task — capture signal-cli error output
+        let stderr_buffer: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+        let stderr_clone = Arc::clone(&stderr_buffer);
+        tokio::spawn(async move {
+            let reader = BufReader::new(stderr);
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                crate::debug_log::logf(format_args!("signal-cli stderr: {line}"));
+                if let Ok(mut buf) = stderr_clone.lock() {
+                    if !buf.is_empty() {
+                        buf.push('\n');
+                    }
+                    buf.push_str(&line);
+                }
+            }
+        });
+
         Ok(Self {
             child,
             stdin_tx,
             event_rx,
             account: config.account.clone(),
             pending_requests,
+            stderr_buffer,
         })
     }
 
@@ -274,6 +294,19 @@ impl SignalClient {
             .await
             .context("Failed to send reaction to signal-cli stdin")?;
         Ok(())
+    }
+
+    /// Returns accumulated stderr output from the signal-cli process.
+    pub fn stderr_output(&self) -> String {
+        self.stderr_buffer.lock().map(|buf| buf.clone()).unwrap_or_default()
+    }
+
+    /// Non-blocking check: returns `Some(exit_code)` if the child has exited.
+    pub fn try_child_exit(&mut self) -> Option<Option<i32>> {
+        match self.child.try_wait() {
+            Ok(Some(status)) => Some(status.code()),
+            _ => None,
+        }
     }
 
     pub async fn shutdown(&mut self) -> Result<()> {

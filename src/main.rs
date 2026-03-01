@@ -213,7 +213,9 @@ async fn run_main_flow(
                 }
             }
             Ok(true) => {} // Good to go
-            Err(_) => {}   // Can't check, proceed anyway (graceful degradation)
+            Err(e) => {
+                debug_log::logf(format_args!("check_account_registered failed: {e}"));
+            }
         }
     }
 
@@ -532,7 +534,20 @@ async fn run_app(
                 Ok(ev) => app.handle_signal_event(ev),
                 Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
                     if app.connection_error.is_none() {
-                        app.connection_error = Some("signal-cli disconnected".to_string());
+                        let stderr = signal_client.stderr_output();
+                        let exit_info = signal_client.try_child_exit();
+                        let msg = if let Some(last_line) = stderr.lines().last().filter(|l| !l.is_empty()) {
+                            format!("signal-cli: {last_line}")
+                        } else if let Some(code) = exit_info {
+                            match code {
+                                Some(c) => format!("signal-cli exited with code {c}"),
+                                None => "signal-cli killed by signal".to_string(),
+                            }
+                        } else {
+                            "signal-cli disconnected".to_string()
+                        };
+                        debug_log::logf(format_args!("disconnect: {msg}"));
+                        app.connection_error = Some(msg);
                         app.connected = false;
                     }
                     break;
