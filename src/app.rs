@@ -1201,6 +1201,55 @@ impl App {
     pub fn total_unread(&self) -> usize {
         self.conversations.values().map(|c| c.unread).sum()
     }
+
+    /// Get the message at the current scroll position.
+    /// Returns the message at the bottom of the visible viewport.
+    /// scroll_offset=0 means the newest message; higher values go older.
+    fn selected_message(&self) -> Option<&DisplayMessage> {
+        let conv_id = self.active_conversation.as_ref()?;
+        let conv = self.conversations.get(conv_id)?;
+        let total = conv.messages.len();
+        if total == 0 {
+            return None;
+        }
+        let index = total.saturating_sub(1).saturating_sub(self.scroll_offset);
+        conv.messages.get(index)
+    }
+
+    /// Copy the selected message text to the system clipboard.
+    /// If `full_line` is true, copies "[HH:MM] <sender> body"; otherwise just the body.
+    pub fn copy_selected_message(&mut self, full_line: bool) {
+        let text = match self.selected_message() {
+            Some(msg) if msg.is_system => Some(msg.body.clone()),
+            Some(msg) => {
+                if full_line {
+                    Some(format!("[{}] <{}> {}", msg.format_time(), msg.sender, msg.body))
+                } else {
+                    Some(msg.body.clone())
+                }
+            }
+            None => None,
+        };
+
+        let Some(text) = text else {
+            self.status_message = "No message to copy".to_string();
+            return;
+        };
+
+        match arboard::Clipboard::new() {
+            Ok(mut clipboard) => match clipboard.set_text(&text) {
+                Ok(()) => {
+                    self.status_message = "Copied to clipboard".to_string();
+                }
+                Err(e) => {
+                    self.status_message = format!("Clipboard error: {e}");
+                }
+            },
+            Err(e) => {
+                self.status_message = format!("Clipboard error: {e}");
+            }
+        }
+    }
 }
 
 /// Shorten a phone number for display: +15551234567 -> +1***4567
