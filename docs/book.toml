@@ -9,8 +9,8 @@ src = "src"
 build-dir = "book"
 
 [output.html]
-default-theme = "coal"
-preferred-dark-theme = "coal"
+default-theme = "light"
+preferred-dark-theme = "light"
 additional-css = ["theme/css/irc-theme.css"]
 site-url = "/signal-tui/"
 git-repository-url = "https://github.com/johnsideserf/signal-tui"

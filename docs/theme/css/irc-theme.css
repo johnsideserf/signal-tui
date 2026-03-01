@@ -1,63 +1,90 @@
 /* ═══════════════════════════════════════════════════════════════
- *  signal-tui docs — IRC theme
- *  "mIRC meets Blade Runner"
- *  90s IRC aesthetic with modern CSS flourishes.
- *  Overrides the mdBook "coal" theme.
+ *  signal-tui docs — mIRC theme
+ *  Light 90s IRC aesthetic (mIRC / Win95 era) with modern polish.
+ *  Overrides ALL mdBook themes — we force a single look.
  * ═══════════════════════════════════════════════════════════════ */
 
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Share+Tech+Mono&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap');
 
 /* ── palette ───────────────────────────────────────────── */
 :root {
-    --bg-void:       #05050e;
-    --bg-deep:       #0a0a1a;
-    --bg-main:       #0e0e20;
-    --bg-sidebar:    #08081a;
-    --bg-code:       #060614;
-    --bg-elevated:   #121230;
+    --irc-bg:         #eeeeee;
+    --irc-bg-alt:     #e4e4e4;
+    --irc-sidebar-bg: #d6d6d6;
+    --irc-code-bg:    #dcdcdc;
+    --irc-panel-bg:   #c8c8c8;
 
-    --text-primary:  #b0b0c8;
-    --text-dim:      #606080;
-    --text-bright:   #e0e0f0;
+    --irc-text:       #111111;
+    --irc-text-dim:   #555555;
+    --irc-text-light: #777777;
 
-    --green-crt:     #00ff88;
-    --green-dim:     #00cc66;
-    --green-glow:    rgba(0, 255, 136, 0.15);
+    /* classic mIRC nick palette */
+    --irc-blue:       #0000cc;
+    --irc-green:      #007700;
+    --irc-red:        #cc0000;
+    --irc-brown:      #7b5804;
+    --irc-purple:     #7700aa;
+    --irc-teal:       #008080;
+    --irc-navy:       #000077;
+    --irc-magenta:    #cc00cc;
 
-    --cyan-bright:   #00e5ff;
-    --cyan-dim:      #0099aa;
-    --cyan-glow:     rgba(0, 229, 255, 0.12);
+    /* UI borders — Win95-style bevels */
+    --bevel-light:    #ffffff;
+    --bevel-dark:     #808080;
+    --bevel-shadow:   #404040;
+    --border-mid:     #aaaaaa;
 
-    --amber:         #ffb000;
-    --amber-dim:     #aa7500;
-    --amber-glow:    rgba(255, 176, 0, 0.1);
-
-    --magenta:       #ff44cc;
-    --red-alert:     #ff3344;
-
-    --border-dim:    #1a1a3a;
-    --border-mid:    #252550;
-    --border-bright: #3a3a6a;
-
-    /* noise overlay for CRT grain */
-    --noise: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+    --link-blue:      #0000ee;
+    --link-visited:   #551a8b;
 }
 
-/* ── mdBook coal overrides ─────────────────────────────── */
-.coal {
-    --bg:                var(--bg-main);
-    --fg:                var(--text-primary);
-    --sidebar-bg:        var(--bg-sidebar);
-    --sidebar-fg:        var(--text-dim);
-    --sidebar-active:    var(--cyan-bright);
-    --links:             var(--cyan-bright);
-    --inline-code-color: var(--green-crt);
-    --theme-popup-bg:    var(--bg-deep);
+/* ── force our theme on ALL mdBook theme classes ───────── */
+.coal, .light, .ayu, .navy, .rust,
+html:not(.js) {
+    --bg:                 var(--irc-bg);
+    --fg:                 var(--irc-text);
+    --sidebar-bg:         var(--irc-sidebar-bg);
+    --sidebar-fg:         var(--irc-text);
+    --sidebar-active:     var(--irc-blue);
+    --sidebar-non-existant: var(--irc-text-light);
+    --sidebar-spacer:     var(--border-mid);
+    --links:              var(--link-blue);
+    --inline-code-color:  var(--irc-teal);
+    --theme-popup-bg:     var(--irc-bg);
     --theme-popup-border: var(--border-mid);
-    --search-mark-bg:    rgba(0, 229, 255, 0.18);
+    --theme-hover:        var(--irc-bg-alt);
+    --icons:              var(--irc-text-dim);
+    --icons-hover:        var(--irc-text);
+    --scrollbar:          var(--border-mid);
+    --quote-bg:           var(--irc-bg-alt);
+    --quote-border:       var(--border-mid);
+    --table-border-color: var(--border-mid);
+    --table-header-bg:    var(--irc-panel-bg);
+    --table-alternate-bg: #e8e8e8;
+    --searchbar-border-color: var(--border-mid);
+    --searchbar-bg:       #ffffff;
+    --searchbar-fg:       var(--irc-text);
+    --searchbar-shadow-color: var(--bevel-dark);
+    --searchresults-header-fg: var(--irc-text-dim);
+    --searchresults-border-color: var(--border-mid);
+    --searchresults-li-bg: var(--irc-bg-alt);
+    --search-mark-bg:     #ffff00;
+    --warning-border:     #ff8e00;
+    --color-scheme:       light;
+    --sidebar-header-border-color: var(--irc-blue);
+
+    --copy-button-filter: invert(45.49%);
+    --copy-button-filter-hover: invert(14%) sepia(93%) saturate(4250%) hue-rotate(243deg) brightness(99%) contrast(130%);
+    --overlay-bg: rgba(200, 200, 205, 0.5);
 }
 
-/* ── global ────────────────────────────────────────────── */
+/* ── hide theme picker & hamburger ─────────────────────── */
+#mdbook-theme-toggle,
+#mdbook-theme-list {
+    display: none !important;
+}
+
+/* ── global typography ─────────────────────────────────── */
 body,
 .content,
 .sidebar,
@@ -66,551 +93,415 @@ pre,
 pre > code,
 input,
 textarea {
-    font-family: 'IBM Plex Mono', 'Cascadia Code', 'Consolas', monospace !important;
+    font-family: 'IBM Plex Mono', 'Cascadia Code', 'Consolas', 'Courier New', monospace !important;
 }
 
 html {
-    background-color: var(--bg-void) !important;
+    background-color: var(--irc-bg) !important;
 }
 
 body {
-    color: var(--text-primary);
+    color: var(--irc-text);
     font-size: 14px;
-    line-height: 1.75;
-}
-
-/* ── CRT noise overlay ─────────────────────────────────── */
-html::before {
-    content: '';
-    position: fixed;
-    inset: 0;
-    background-image: var(--noise);
-    background-repeat: repeat;
-    pointer-events: none;
-    z-index: 99999;
-    opacity: 0.35;
-    mix-blend-mode: overlay;
-}
-
-/* ── scanlines (desktop) ───────────────────────────────── */
-@media (min-width: 768px) {
-    html::after {
-        content: '';
-        position: fixed;
-        inset: 0;
-        pointer-events: none;
-        z-index: 99998;
-        background: repeating-linear-gradient(
-            0deg,
-            transparent 0px,
-            transparent 2px,
-            rgba(0, 0, 0, 0.08) 2px,
-            rgba(0, 0, 0, 0.08) 4px
-        );
-    }
-}
-
-/* ── headings ──────────────────────────────────────────── */
-.content h1 {
-    color: var(--green-crt);
-    font-family: 'Share Tech Mono', 'IBM Plex Mono', monospace !important;
-    font-size: 1.55em;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    border-bottom: none;
-    padding-bottom: 0.5em;
-    margin-bottom: 0.8em;
-    position: relative;
-    text-shadow:
-        0 0 8px var(--green-glow),
-        0 0 20px rgba(0, 255, 136, 0.08);
-}
-
-/* ASCII-style double-line border under h1 */
-.content h1::after {
-    content: '════════════════════════════════════════════════════════════';
-    display: block;
-    color: var(--border-bright);
-    font-size: 0.55em;
-    letter-spacing: -0.05em;
-    margin-top: 0.5em;
-    overflow: hidden;
-    white-space: nowrap;
-    text-shadow: none;
-}
-
-.content h2 {
-    color: var(--amber);
-    font-family: 'Share Tech Mono', 'IBM Plex Mono', monospace !important;
-    font-size: 1.2em;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    border-bottom: none;
-    padding: 0.4em 0 0.4em 0;
-    margin-top: 1.8em;
-    position: relative;
-    text-shadow: 0 0 10px var(--amber-glow);
-}
-
-/* dashed leader after h2 */
-.content h2::after {
-    content: ' ────────────────────────────────────────';
-    color: var(--border-dim);
-    font-size: 0.8em;
-    letter-spacing: -0.02em;
-}
-
-.content h3 {
-    color: var(--cyan-bright);
-    font-size: 1.05em;
-    letter-spacing: 0.02em;
-    text-shadow: 0 0 8px var(--cyan-glow);
-}
-
-.content h4 {
-    color: var(--magenta);
-    font-size: 0.95em;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-}
-
-.content h5,
-.content h6 {
-    color: var(--text-bright);
-}
-
-/* ── links ─────────────────────────────────────────────── */
-.content a {
-    color: var(--cyan-bright);
-    text-decoration: none;
-    border-bottom: 1px dotted var(--cyan-dim);
-    transition: all 0.2s ease;
-}
-
-.content a:hover {
-    color: #fff;
-    border-bottom: 1px solid var(--cyan-bright);
-    text-shadow: 0 0 8px var(--cyan-glow), 0 0 16px rgba(0, 229, 255, 0.1);
-    background-color: rgba(0, 229, 255, 0.05);
-}
-
-/* ── inline code ───────────────────────────────────────── */
-.content code {
-    color: var(--green-crt);
-    background-color: rgba(0, 255, 136, 0.04);
-    border: 1px solid rgba(0, 255, 136, 0.12);
-    border-radius: 2px;
-    padding: 0.1em 0.4em;
-    font-size: 0.88em;
-    text-shadow: 0 0 6px rgba(0, 255, 136, 0.1);
-}
-
-/* ── code blocks ───────────────────────────────────────── */
-.content pre {
-    background-color: var(--bg-code) !important;
-    border: 1px solid var(--border-mid);
-    border-top: none;
-    border-radius: 0 0 3px 3px;
-    padding: 1em 1.2em 1em 1.2em;
-    position: relative;
-    overflow-x: auto;
-    margin-top: 0;
-}
-
-/* terminal title bar */
-.content pre::before {
-    content: '  TERMINAL ─── signal-tui ';
-    display: block;
-    background: linear-gradient(90deg, var(--border-mid), var(--bg-deep));
-    color: var(--text-dim);
-    font-size: 0.72em;
-    letter-spacing: 0.08em;
-    padding: 0.35em 0.8em;
-    margin: -1em -1.2em 0.8em -1.2em;
-    border-bottom: 1px solid var(--border-mid);
-    text-transform: uppercase;
-    position: relative;
-}
-
-/* traffic-light dots on terminal bar */
-.content pre::after {
-    content: '● ● ●';
-    position: absolute;
-    top: 0.28em;
-    right: 0.8em;
-    font-size: 0.6em;
-    letter-spacing: 0.3em;
-    color: var(--border-bright);
-}
-
-.content pre > code {
-    color: var(--text-primary);
-    background: none;
-    border: none;
-    padding: 0;
-    text-shadow: none;
-    font-size: 0.92em;
-}
-
-/* ── blockquotes ───────────────────────────────────────── */
-.content blockquote {
-    border-left: 3px solid var(--amber);
-    border-right: 1px solid var(--border-dim);
-    background:
-        linear-gradient(90deg, rgba(255, 176, 0, 0.04), transparent 40%);
-    color: var(--text-dim);
-    padding: 0.8em 1.2em;
-    margin: 1.2em 0;
-    position: relative;
-}
-
-.content blockquote::before {
-    content: '>';
-    position: absolute;
-    left: -1.5em;
-    top: 0.7em;
-    color: var(--amber-dim);
-    font-size: 0.85em;
-    opacity: 0;
-}
-
-/* ── tables ────────────────────────────────────────────── */
-.content table {
-    border-collapse: collapse;
-    width: 100%;
-    margin: 1.2em 0;
-    border: 1px solid var(--border-mid);
-}
-
-.content table th {
-    color: var(--amber);
-    background: linear-gradient(180deg, var(--bg-elevated), var(--bg-deep));
-    border: 1px solid var(--border-mid);
-    border-bottom: 2px solid var(--amber-dim);
-    padding: 0.55em 0.9em;
-    text-align: left;
-    text-transform: uppercase;
-    font-size: 0.8em;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-}
-
-.content table td {
-    border: 1px solid var(--border-dim);
-    padding: 0.45em 0.9em;
-    font-size: 0.93em;
-}
-
-.content table tr:hover {
-    background-color: rgba(0, 229, 255, 0.03);
-}
-
-.content table tr:nth-child(even) {
-    background-color: rgba(8, 8, 26, 0.5);
-}
-
-.content table tr:nth-child(even):hover {
-    background-color: rgba(0, 229, 255, 0.05);
-}
-
-/* ── lists ─────────────────────────────────────────────── */
-.content li {
-    margin-bottom: 0.2em;
-}
-
-/* checkbox-style list items */
-.content li > input[type="checkbox"] {
-    accent-color: var(--green-crt);
-}
-
-/* ── horizontal rules ──────────────────────────────────── */
-.content hr {
-    border: none;
-    height: 1px;
-    background: linear-gradient(
-        90deg,
-        transparent,
-        var(--border-bright) 20%,
-        var(--border-bright) 80%,
-        transparent
-    );
-    margin: 2em 0;
-}
-
-/* ── strong / emphasis ─────────────────────────────────── */
-.content strong {
-    color: var(--text-bright);
-    font-weight: 600;
-}
-
-.content em {
-    color: var(--text-primary);
-    font-style: italic;
+    line-height: 1.7;
 }
 
 /* ═══════════════════════════════════════════════════════════
- *  SIDEBAR — styled as IRC channel list
+ *  MENU BAR — styled as IRC status/title bar
+ * ═══════════════════════════════════════════════════════════ */
+#mdbook-menu-bar,
+#mdbook-menu-bar.bordered {
+    background-color: var(--irc-panel-bg) !important;
+    border-bottom: 2px solid var(--bevel-dark) !important;
+    border-top: 1px solid var(--bevel-light) !important;
+}
+
+.menu-bar .icon-button {
+    color: var(--irc-text-dim);
+}
+
+.menu-bar .icon-button:hover {
+    color: var(--irc-text);
+}
+
+/* title in menu bar */
+.menu-bar h1.menu-title {
+    color: var(--irc-navy) !important;
+    font-weight: 700;
+    font-size: 0.9em;
+    letter-spacing: 0.02em;
+}
+
+/* ═══════════════════════════════════════════════════════════
+ *  SIDEBAR — IRC channel list
  * ═══════════════════════════════════════════════════════════ */
 .sidebar {
-    background-color: var(--bg-sidebar) !important;
-    border-right: 1px solid var(--border-mid);
-    position: relative;
+    background-color: var(--irc-sidebar-bg) !important;
+    border-right: 2px solid var(--bevel-dark);
 }
 
 .sidebar .sidebar-scrollbox {
-    background-color: var(--bg-sidebar) !important;
-}
-
-/* ── sidebar top: looks like an IRC client title bar ───── */
-.sidebar .sidebar-scrollbox::before {
-    content: '╔══ channels ═══════════╗';
-    display: block;
-    color: var(--border-bright);
-    font-family: 'Share Tech Mono', monospace !important;
-    font-size: 0.7em;
-    letter-spacing: 0.05em;
-    padding: 0.8em 0 0.5em 0.8em;
-    text-transform: uppercase;
+    background-color: var(--irc-sidebar-bg) !important;
 }
 
 /* section headers = IRC network names */
 .sidebar .chapter li.part-title {
-    color: var(--amber);
-    font-family: 'Share Tech Mono', monospace !important;
+    color: var(--irc-navy);
     text-transform: uppercase;
     font-size: 0.72em;
-    letter-spacing: 0.14em;
-    padding: 1em 0 0.35em 0.8em;
-    border-top: 1px solid var(--border-dim);
-    border-bottom: 1px solid var(--border-dim);
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    padding: 0.9em 0 0.35em 10px;
     margin-top: 0.3em;
-    background: linear-gradient(90deg, rgba(255, 176, 0, 0.04), transparent 60%);
-    text-shadow: 0 0 12px var(--amber-glow);
+    border-top: 1px solid var(--border-mid);
+    border-bottom: 1px solid var(--border-mid);
+    background-color: var(--irc-panel-bg);
 }
 
-/* chapter links = IRC channel names */
+/* chapter links */
 .sidebar .chapter a {
-    color: var(--text-dim);
+    color: var(--irc-text);
     border-left: 3px solid transparent;
-    padding: 0.3em 0.8em 0.3em 0.8em;
+    padding: 0.25em 0.8em;
     display: block;
-    transition: all 0.15s ease;
+    transition: background-color 0.1s ease;
     font-size: 0.9em;
-    position: relative;
 }
 
 .sidebar .chapter a:hover {
-    color: var(--cyan-bright);
-    border-left-color: var(--cyan-bright);
-    background: linear-gradient(90deg, rgba(0, 229, 255, 0.06), transparent 80%);
-    text-shadow: 0 0 6px var(--cyan-glow);
+    color: var(--irc-blue);
+    background-color: var(--irc-bg-alt);
+    border-left-color: var(--irc-blue);
 }
 
 .sidebar .chapter li.chapter-item.expanded > a,
 .sidebar .chapter a.active {
-    color: var(--cyan-bright);
-    border-left-color: var(--cyan-bright);
-    background: linear-gradient(90deg, rgba(0, 229, 255, 0.08), transparent 70%);
+    color: #ffffff;
+    background-color: var(--irc-blue);
+    border-left-color: var(--irc-blue);
     font-weight: 600;
-    text-shadow: 0 0 8px var(--cyan-glow);
 }
 
-/* blinking cursor on active channel */
-.sidebar .chapter a.active::after {
-    content: '█';
-    color: var(--cyan-bright);
-    font-size: 0.75em;
-    margin-left: 0.3em;
-    animation: blink-cursor 1s step-end infinite;
-    opacity: 0.6;
-}
-
-@keyframes blink-cursor {
-    0%, 100% { opacity: 0.6; }
-    50%      { opacity: 0; }
-}
-
-/* ── sidebar resize handle ─────────────────────────────── */
+/* resize handle */
 .sidebar-resize-handle {
     border-right-color: var(--border-mid) !important;
 }
 
 /* ═══════════════════════════════════════════════════════════
- *  MENU BAR — IRC status line feel
+ *  HEADINGS
  * ═══════════════════════════════════════════════════════════ */
-.menu-bar,
-.menu-bar.bordered {
-    background-color: var(--bg-void) !important;
-    border-bottom: 1px solid var(--border-mid) !important;
-}
-
-.menu-bar .icon-button {
-    color: var(--text-dim);
-    transition: color 0.15s ease, text-shadow 0.15s ease;
-}
-
-.menu-bar .icon-button:hover {
-    color: var(--cyan-bright);
-    filter: drop-shadow(0 0 4px var(--cyan-glow));
-}
-
-/* book title in menu bar */
-.menu-bar h1.menu-title {
-    color: var(--green-crt) !important;
-    font-family: 'Share Tech Mono', monospace !important;
+.content h1 {
+    color: var(--irc-navy);
+    font-size: 1.5em;
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.12em;
-    font-size: 0.85em;
-    text-shadow: 0 0 10px var(--green-glow);
+    letter-spacing: 0.04em;
+    border-bottom: 2px solid var(--irc-navy);
+    padding-bottom: 0.3em;
+    margin-bottom: 0.8em;
+}
+
+.content h2 {
+    color: var(--irc-green);
+    font-size: 1.2em;
+    font-weight: 700;
+    border-bottom: 1px solid var(--border-mid);
+    padding-bottom: 0.25em;
+    margin-top: 1.8em;
+}
+
+.content h3 {
+    color: var(--irc-brown);
+    font-size: 1.05em;
+    font-weight: 600;
+}
+
+.content h4 {
+    color: var(--irc-purple);
+    font-size: 0.95em;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.content h5,
+.content h6 {
+    color: var(--irc-text-dim);
+    font-weight: 600;
+}
+
+/* ═══════════════════════════════════════════════════════════
+ *  LINKS — classic blue underline
+ * ═══════════════════════════════════════════════════════════ */
+.content a {
+    color: var(--link-blue);
+    text-decoration: underline;
+}
+
+.content a:visited {
+    color: var(--link-visited);
+}
+
+.content a:hover {
+    color: var(--irc-red);
+}
+
+/* header anchor links: no underline */
+.content a.header {
+    text-decoration: none;
+    color: inherit;
+}
+
+.content a.header:hover {
+    color: inherit;
+    text-decoration: underline;
+}
+
+/* ═══════════════════════════════════════════════════════════
+ *  INLINE CODE
+ * ═══════════════════════════════════════════════════════════ */
+.content code {
+    color: var(--irc-teal);
+    background-color: var(--irc-code-bg);
+    border: 1px solid var(--border-mid);
+    border-radius: 2px;
+    padding: 0.1em 0.35em;
+    font-size: 0.9em;
+}
+
+/* ═══════════════════════════════════════════════════════════
+ *  CODE BLOCKS — Win95 sunken panel + title bar
+ * ═══════════════════════════════════════════════════════════ */
+.content pre {
+    background-color: #ffffff !important;
+    border: 2px solid;
+    border-color: var(--bevel-dark) var(--bevel-light) var(--bevel-light) var(--bevel-dark);
+    border-radius: 0;
+    padding: 0.8em 1em;
+    position: relative;
+    overflow-x: auto;
+    margin-top: 0;
+}
+
+/* title bar on code blocks */
+.content pre::before {
+    content: ' Terminal';
+    display: block;
+    background: linear-gradient(90deg, var(--irc-navy), #1040a0);
+    color: #ffffff;
+    font-size: 0.75em;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 0.2em 0.6em;
+    margin: -0.8em -1em 0.6em -1em;
+    border-bottom: 1px solid var(--bevel-dark);
+}
+
+.content pre > code {
+    color: var(--irc-text);
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 0.92em;
+}
+
+/* ═══════════════════════════════════════════════════════════
+ *  BLOCKQUOTES
+ * ═══════════════════════════════════════════════════════════ */
+.content blockquote {
+    border-left: 3px solid var(--irc-green);
+    background-color: var(--irc-bg-alt);
+    color: var(--irc-text-dim);
+    padding: 0.6em 1em;
+    margin: 1em 0;
+}
+
+/* ═══════════════════════════════════════════════════════════
+ *  TABLES — Win95 grid with header bar
+ * ═══════════════════════════════════════════════════════════ */
+.content table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1em 0;
+    border: 2px solid;
+    border-color: var(--bevel-dark) var(--bevel-light) var(--bevel-light) var(--bevel-dark);
+}
+
+.content table th {
+    color: #ffffff;
+    background: linear-gradient(90deg, var(--irc-navy), #1040a0);
+    border: 1px solid var(--bevel-dark);
+    padding: 0.4em 0.8em;
+    text-align: left;
+    text-transform: uppercase;
+    font-size: 0.8em;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+}
+
+.content table td {
+    border: 1px solid var(--border-mid);
+    padding: 0.4em 0.8em;
+    font-size: 0.93em;
+}
+
+.content table tr:nth-child(even) {
+    background-color: #e8e8e8;
+}
+
+.content table tr:hover {
+    background-color: #d0d8ff;
+}
+
+/* ═══════════════════════════════════════════════════════════
+ *  LISTS
+ * ═══════════════════════════════════════════════════════════ */
+.content li {
+    margin-bottom: 0.15em;
+}
+
+.content li > input[type="checkbox"] {
+    accent-color: var(--irc-green);
+}
+
+/* ═══════════════════════════════════════════════════════════
+ *  HORIZONTAL RULES
+ * ═══════════════════════════════════════════════════════════ */
+.content hr {
+    border: none;
+    height: 2px;
+    border-top: 1px solid var(--bevel-dark);
+    border-bottom: 1px solid var(--bevel-light);
+    margin: 1.5em 0;
+}
+
+/* ═══════════════════════════════════════════════════════════
+ *  STRONG / EMPHASIS
+ * ═══════════════════════════════════════════════════════════ */
+.content strong {
+    color: var(--irc-text);
+    font-weight: 700;
 }
 
 /* ═══════════════════════════════════════════════════════════
  *  SEARCH
  * ═══════════════════════════════════════════════════════════ */
 #searchbar {
-    background-color: var(--bg-code) !important;
-    border: 1px solid var(--border-mid) !important;
-    color: var(--text-primary) !important;
+    background-color: #ffffff !important;
+    border: 2px solid !important;
+    border-color: var(--bevel-dark) var(--bevel-light) var(--bevel-light) var(--bevel-dark) !important;
+    color: var(--irc-text) !important;
     font-family: 'IBM Plex Mono', monospace !important;
-    transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 #searchbar:focus {
-    border-color: var(--cyan-bright) !important;
-    box-shadow:
-        0 0 6px rgba(0, 229, 255, 0.15),
-        inset 0 0 8px rgba(0, 229, 255, 0.05);
+    border-color: var(--irc-blue) !important;
+    box-shadow: none;
+    outline: 1px dotted var(--irc-navy);
+    outline-offset: 1px;
 }
 
 #searchresults a {
-    color: var(--cyan-bright);
+    color: var(--link-blue);
 }
 
 #searchresults .teaser {
-    color: var(--text-dim);
+    color: var(--irc-text-dim);
 }
 
 /* ═══════════════════════════════════════════════════════════
- *  NAVIGATION
+ *  NAVIGATION ARROWS
  * ═══════════════════════════════════════════════════════════ */
 .nav-chapters {
-    color: var(--text-dim);
-    transition: color 0.15s ease;
-    opacity: 0.7;
+    color: var(--irc-text-dim);
+    transition: color 0.1s ease;
 }
 
 .nav-chapters:hover {
-    color: var(--cyan-bright);
-    opacity: 1;
-}
-
-/* ── theme popup ───────────────────────────────────────── */
-.theme-popup {
-    background-color: var(--bg-deep) !important;
-    border: 1px solid var(--border-mid) !important;
-}
-
-.theme-popup .theme:hover {
-    background-color: var(--bg-elevated) !important;
-    color: var(--cyan-bright) !important;
-}
-
-/* ═══════════════════════════════════════════════════════════
- *  CONTENT AREA — main page styling
- * ═══════════════════════════════════════════════════════════ */
-
-/* subtle vignette on content area */
-#mdbook-content.content {
-    background:
-        radial-gradient(
-            ellipse at 50% 0%,
-            transparent 60%,
-            rgba(5, 5, 14, 0.3) 100%
-        );
-}
-
-/* "MOTD" style for the first paragraph on intro page */
-.content main > h1:first-child + p {
-    color: var(--text-bright);
-    border-left: 3px solid var(--green-crt);
-    padding-left: 1em;
-    background: linear-gradient(90deg, rgba(0, 255, 136, 0.03), transparent 50%);
-}
-
-/* ── warnings / admonitions ────────────────────────────── */
-.content .warning {
-    border-left: 3px solid var(--red-alert);
-    background: linear-gradient(90deg, rgba(255, 51, 68, 0.05), transparent 40%);
-    color: var(--text-primary);
-}
-
-/* ═══════════════════════════════════════════════════════════
- *  SELECTION
- * ═══════════════════════════════════════════════════════════ */
-::selection {
-    background-color: rgba(0, 229, 255, 0.2);
-    color: #fff;
-    text-shadow: none;
-}
-
-/* ═══════════════════════════════════════════════════════════
- *  SCROLLBAR
- * ═══════════════════════════════════════════════════════════ */
-::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-}
-
-::-webkit-scrollbar-track {
-    background: var(--bg-void);
-}
-
-::-webkit-scrollbar-thumb {
-    background: var(--border-mid);
-    border-radius: 0;
-}
-
-::-webkit-scrollbar-thumb:hover {
-    background: var(--border-bright);
+    color: var(--irc-blue);
 }
 
 /* ═══════════════════════════════════════════════════════════
  *  HELP POPUP
  * ═══════════════════════════════════════════════════════════ */
 #mdbook-help-popup {
-    background-color: var(--bg-deep) !important;
-    border: 1px solid var(--border-mid) !important;
+    background-color: var(--irc-bg) !important;
+    border: 2px solid;
+    border-color: var(--bevel-light) var(--bevel-dark) var(--bevel-dark) var(--bevel-light) !important;
 }
 
 #mdbook-help-popup h2 {
-    color: var(--green-crt);
+    color: var(--irc-navy);
 }
 
 #mdbook-help-popup kbd {
-    background-color: var(--bg-elevated);
-    border: 1px solid var(--border-bright);
-    color: var(--amber);
+    background-color: var(--irc-panel-bg);
+    border: 2px solid;
+    border-color: var(--bevel-light) var(--bevel-dark) var(--bevel-dark) var(--bevel-light);
+    color: var(--irc-text);
     font-family: 'IBM Plex Mono', monospace;
     border-radius: 2px;
+    padding: 0.1em 0.4em;
 }
 
 /* ═══════════════════════════════════════════════════════════
- *  AMBIENT GLOW — subtle colored light at page edges
+ *  WARNINGS / ADMONITIONS
  * ═══════════════════════════════════════════════════════════ */
-@media (min-width: 768px) {
-    .page-wrapper {
-        background:
-            radial-gradient(
-                ellipse at 0% 30%,
-                rgba(0, 229, 255, 0.015),
-                transparent 50%
-            ),
-            radial-gradient(
-                ellipse at 100% 70%,
-                rgba(0, 255, 136, 0.01),
-                transparent 50%
-            );
-    }
+.content .warning {
+    border-left-color: var(--irc-red);
+    background-color: #ffeeee;
+}
+
+/* ═══════════════════════════════════════════════════════════
+ *  SELECTION
+ * ═══════════════════════════════════════════════════════════ */
+::selection {
+    background-color: var(--irc-blue);
+    color: #ffffff;
+}
+
+/* ═══════════════════════════════════════════════════════════
+ *  SCROLLBAR
+ * ═══════════════════════════════════════════════════════════ */
+::-webkit-scrollbar {
+    width: 16px;
+    height: 16px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--irc-bg-alt);
+    border: 1px solid var(--border-mid);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--irc-panel-bg);
+    border: 2px solid;
+    border-color: var(--bevel-light) var(--bevel-dark) var(--bevel-dark) var(--bevel-light);
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #b8b8b8;
+}
+
+::-webkit-scrollbar-button {
+    display: block;
+    height: 16px;
+    width: 16px;
+    background: var(--irc-panel-bg);
+    border: 2px solid;
+    border-color: var(--bevel-light) var(--bevel-dark) var(--bevel-dark) var(--bevel-light);
+}
+
+/* ═══════════════════════════════════════════════════════════
+ *  FOOTER / STATUS BAR FEEL
+ * ═══════════════════════════════════════════════════════════ */
+
+/* bottom of the content area — subtle status-bar border */
+#mdbook-content.content main {
+    border-bottom: 2px solid;
+    border-bottom-color: var(--bevel-dark);
+    padding-bottom: 2em;
+    margin-bottom: 1em;
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -625,31 +516,14 @@ html::before {
         font-size: 1.3em;
     }
 
-    .content h1::after {
-        content: '════════════════════════════════';
-    }
-
     .content h2 {
         font-size: 1.05em;
     }
 
-    .content h2::after {
-        content: ' ────────────────────';
-    }
-
     /* simpler code blocks on mobile */
     .content pre::before {
-        content: '> ';
-        background: none;
-        padding: 0;
-        margin: -1em -1.2em 0.6em -1.2em;
-        padding-left: 1.2em;
-        border-bottom: 1px solid var(--border-dim);
-        padding-bottom: 0.3em;
-    }
-
-    .content pre::after {
-        display: none;
+        font-size: 0.7em;
+        padding: 0.15em 0.5em;
     }
 }
 
@@ -657,13 +531,7 @@ html::before {
  *  PRINT — strip decorative elements
  * ═══════════════════════════════════════════════════════════ */
 @media print {
-    html::before,
-    html::after,
-    .content pre::before,
-    .content pre::after,
-    .content h1::after,
-    .content h2::after,
-    .sidebar .chapter a.active::after {
+    .content pre::before {
         display: none !important;
     }
 }
