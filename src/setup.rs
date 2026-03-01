@@ -163,6 +163,9 @@ pub async fn run_setup(
                                 step = Step::SignalCli;
                                 signal_cli_found = false;
                                 custom_path_mode = false;
+                                phone_input.clear();
+                                phone_cursor = 0;
+                                phone_error = None;
                             }
                             (_, KeyCode::Enter) => {
                                 match validate_phone(&phone_input) {
