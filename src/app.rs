@@ -9,7 +9,7 @@ use crate::db::Database;
 use crate::image_render;
 use crate::image_render::ImageProtocol;
 use crate::input::{self, InputAction, COMMANDS};
-use crate::signal::types::{Contact, Group, MessageStatus, Reaction, SignalEvent, SignalMessage};
+use crate::signal::types::{Contact, Group, Mention, MessageStatus, Reaction, SignalEvent, SignalMessage};
 
 /// Log a database error via debug_log (no-op when --debug is off).
 fn db_warn<T>(result: Result<T, impl std::fmt::Display>, context: &str) {
@@ -33,6 +33,12 @@ pub enum InputMode {
     Insert,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutocompleteMode {
+    Command,
+    Mention,
+}
+
 /// A single displayed message in a conversation
 #[derive(Debug, Clone)]
 pub struct DisplayMessage {
@@ -50,6 +56,8 @@ pub struct DisplayMessage {
     pub timestamp_ms: i64,
     /// Emoji reactions on this message
     pub reactions: Vec<Reaction>,
+    /// Byte ranges of @mentions in body (for styling)
+    pub mention_ranges: Vec<(usize, usize)>,
 }
 
 impl DisplayMessage {
@@ -179,6 +187,22 @@ pub struct App {
     pub reaction_picker_index: usize,
     /// Show verbose reaction display (usernames instead of counts)
     pub reaction_verbose: bool,
+    /// Groups indexed by group_id (with member lists for @mention autocomplete)
+    pub groups: HashMap<String, Group>,
+    /// UUID → display name mapping (built from contact list)
+    pub uuid_to_name: HashMap<String, String>,
+    /// Phone number → UUID mapping (for sending mentions)
+    pub number_to_uuid: HashMap<String, String>,
+    /// Current autocomplete mode (Command vs Mention)
+    pub autocomplete_mode: AutocompleteMode,
+    /// Mention autocomplete candidates: (phone, display_name, uuid)
+    pub mention_candidates: Vec<(String, String, Option<String>)>,
+    /// Byte offset of the '@' trigger in input_buffer
+    pub mention_trigger_pos: usize,
+    /// Completed mentions for the current input: (display_name, uuid)
+    pub pending_mentions: Vec<(String, Option<String>)>,
+    /// Demo mode — prevents config writes
+    pub is_demo: bool,
 }
 
 pub const QUICK_REACTIONS: &[&str] = &["\u{1f44d}", "\u{1f44e}", "\u{2764}\u{fe0f}", "\u{1f602}", "\u{1f62e}", "\u{1f622}", "\u{1f64f}", "\u{1f525}"];
@@ -190,6 +214,7 @@ pub enum SendRequest {
         body: String,
         is_group: bool,
         local_ts_ms: i64,
+        mentions: Vec<(usize, String)>,
     },
     Reaction {
         conv_id: String,
@@ -293,6 +318,9 @@ impl App {
 
     /// Persist current settings to the config file.
     fn save_settings(&self) {
+        if self.is_demo {
+            return;
+        }
         let mut config = crate::config::Config::load(None).unwrap_or_default();
         config.account = self.account.clone();
         for def in SETTINGS {
@@ -505,21 +533,23 @@ impl App {
     /// Returns `Some(SendRequest)` when the user submits a command
     /// that requires sending a message. Returns `None` otherwise.
     pub fn handle_autocomplete_key(&mut self, code: KeyCode) -> Option<SendRequest> {
+        let list_len = match self.autocomplete_mode {
+            AutocompleteMode::Command => self.autocomplete_candidates.len(),
+            AutocompleteMode::Mention => self.mention_candidates.len(),
+        };
         match code {
             KeyCode::Up => {
-                let len = self.autocomplete_candidates.len();
-                if len > 0 {
+                if list_len > 0 {
                     self.autocomplete_index = if self.autocomplete_index == 0 {
-                        len - 1
+                        list_len - 1
                     } else {
                         self.autocomplete_index - 1
                     };
                 }
             }
             KeyCode::Down => {
-                let len = self.autocomplete_candidates.len();
-                if len > 0 {
-                    self.autocomplete_index = (self.autocomplete_index + 1) % len;
+                if list_len > 0 {
+                    self.autocomplete_index = (self.autocomplete_index + 1) % list_len;
                 }
             }
             KeyCode::Tab => {
@@ -528,11 +558,17 @@ impl App {
             KeyCode::Esc => {
                 self.autocomplete_visible = false;
                 self.autocomplete_candidates.clear();
+                self.mention_candidates.clear();
                 self.autocomplete_index = 0;
             }
             KeyCode::Enter => {
-                self.apply_autocomplete();
-                return self.handle_input();
+                if self.autocomplete_mode == AutocompleteMode::Mention {
+                    self.apply_autocomplete();
+                    // Don't submit on Enter for mentions — just complete
+                } else {
+                    self.apply_autocomplete();
+                    return self.handle_input();
+                }
             }
             _ => {
                 self.apply_input_edit(code);
@@ -597,6 +633,14 @@ impl App {
             show_reaction_picker: false,
             reaction_picker_index: 0,
             reaction_verbose: false,
+            groups: HashMap::new(),
+            uuid_to_name: HashMap::new(),
+            number_to_uuid: HashMap::new(),
+            autocomplete_mode: AutocompleteMode::Command,
+            mention_candidates: Vec::new(),
+            mention_trigger_pos: 0,
+            pending_mentions: Vec::new(),
+            is_demo: false,
         }
     }
 
@@ -691,7 +735,7 @@ impl App {
                 self.should_quit = true;
                 true
             }
-            (KeyModifiers::NONE, KeyCode::Tab) => {
+            (KeyModifiers::NONE, KeyCode::Tab) if !self.autocomplete_visible => {
                 self.next_conversation();
                 true
             }
@@ -886,6 +930,7 @@ impl App {
                 if !self.input_buffer.is_empty() {
                     self.input_buffer.clear();
                     self.input_cursor = 0;
+                    self.pending_mentions.clear();
                 }
             }
 
@@ -1009,10 +1054,16 @@ impl App {
         // Outgoing synced messages already have a server timestamp; incoming messages have no status
         let msg_status = if msg.is_outgoing { Some(MessageStatus::Sent) } else { None };
 
+        // Resolve @mentions before the push closure borrows self mutably
+        let resolved_body = msg.body.as_ref().map(|body| {
+            self.resolve_mentions(body, &msg.mentions)
+        });
+
         // Helper: push a DisplayMessage and persist to DB
         let mut push_msg = |body: String,
                             image_lines: Option<Vec<Line<'static>>>,
-                            image_path: Option<String>| {
+                            image_path: Option<String>,
+                            mention_ranges: Vec<(usize, usize)>| {
             if let Some(conv) = self.conversations.get_mut(&conv_id) {
                 conv.messages.push(DisplayMessage {
                     sender: sender_display.clone(),
@@ -1024,6 +1075,7 @@ impl App {
                     status: msg_status,
                     timestamp_ms: msg_ts_ms,
                     reactions: Vec::new(),
+                    mention_ranges,
                 });
             }
             db_warn(
@@ -1034,9 +1086,9 @@ impl App {
             );
         };
 
-        // Add text body
-        if let Some(ref body) = msg.body {
-            push_msg(body.clone(), None, None);
+        // Add text body (with resolved @mentions)
+        if let Some((resolved, ranges)) = resolved_body {
+            push_msg(resolved, None, None, ranges);
         }
 
         // Add attachment notices
@@ -1065,9 +1117,10 @@ impl App {
                     format!("[image: {label}]{path_info}"),
                     rendered,
                     att.local_path.clone(),
+                    Vec::new(),
                 );
             } else {
-                push_msg(format!("[attachment: {label}]{path_info}"), None, None);
+                push_msg(format!("[attachment: {label}]{path_info}"), None, None, Vec::new());
             }
         }
 
@@ -1163,6 +1216,15 @@ impl App {
                     self.contact_names.insert(contact.number.clone(), name.clone());
                 }
             }
+            // Build UUID maps for @mention resolution
+            if let Some(ref uuid) = contact.uuid {
+                if let Some(ref name) = contact.name {
+                    if !name.is_empty() {
+                        self.uuid_to_name.insert(uuid.clone(), name.clone());
+                    }
+                }
+                self.number_to_uuid.insert(contact.number.clone(), uuid.clone());
+            }
             // Update name on existing conversations only — don't create new ones
             if let Some(conv) = self.conversations.get_mut(&contact.number) {
                 if let Some(ref contact_name) = contact.name {
@@ -1181,6 +1243,12 @@ impl App {
             if !group.name.is_empty() {
                 self.contact_names.insert(group.id.clone(), group.name.clone());
             }
+            // Store UUID↔phone mappings from group members
+            for (phone, uuid) in &group.member_uuids {
+                self.number_to_uuid.entry(phone.clone()).or_insert_with(|| uuid.clone());
+            }
+            // Store group for @mention member lookup
+            self.groups.insert(group.id.clone(), group.clone());
             // Groups are always "active" (you're a member), so create conversations
             let conv = self.get_or_create_conversation(&group.id, &group.name, true);
             if !group.name.is_empty() && conv.name != group.name {
@@ -1188,6 +1256,140 @@ impl App {
                 db_warn(self.db.upsert_conversation(&group.id, &group.name, true), "upsert_conversation");
             }
         }
+    }
+
+    /// Resolve U+FFFC placeholders in a message body using bodyRanges mentions.
+    /// Returns (resolved_body, mention_byte_ranges) where mention_byte_ranges are
+    /// (start, end) byte offsets of each `@Name` in the resolved body.
+    fn resolve_mentions(&self, body: &str, mentions: &[Mention]) -> (String, Vec<(usize, usize)>) {
+        if mentions.is_empty() {
+            return (body.to_string(), Vec::new());
+        }
+
+        // Sort mentions by start descending so replacements don't shift earlier offsets
+        let mut sorted: Vec<&Mention> = mentions.iter().collect();
+        sorted.sort_by(|a, b| b.start.cmp(&a.start));
+
+        // Convert body to UTF-16 for offset mapping
+        let utf16: Vec<u16> = body.encode_utf16().collect();
+        let mut result_utf16 = utf16.clone();
+        // Track replacement info: (utf16_start, old_utf16_len, replacement_utf16)
+        let mut replacements: Vec<(usize, usize, Vec<u16>)> = Vec::new();
+
+        for mention in &sorted {
+            if mention.start >= result_utf16.len() {
+                continue;
+            }
+            let name = self
+                .uuid_to_name
+                .get(&mention.uuid)
+                .cloned()
+                .unwrap_or_else(|| {
+                    // Truncated UUID fallback
+                    let short = if mention.uuid.len() > 8 {
+                        &mention.uuid[..8]
+                    } else {
+                        &mention.uuid
+                    };
+                    short.to_string()
+                });
+            let replacement = format!("@{name}");
+            let replacement_utf16: Vec<u16> = replacement.encode_utf16().collect();
+            let end = (mention.start + mention.length).min(result_utf16.len());
+            replacements.push((mention.start, end - mention.start, replacement_utf16.clone()));
+            result_utf16.splice(mention.start..end, replacement_utf16);
+        }
+
+        let resolved = String::from_utf16_lossy(&result_utf16);
+
+        // Compute byte ranges for each @Name in the resolved string
+        // Replacements were applied in reverse order, so recalculate forward
+        let mut ranges: Vec<(usize, usize)> = Vec::new();
+        let mut sorted_fwd: Vec<&Mention> = mentions.iter().collect();
+        sorted_fwd.sort_by_key(|m| m.start);
+
+        // Re-build with forward pass to get accurate byte offsets
+        let resolved_utf16: Vec<u16> = resolved.encode_utf16().collect();
+        let mut byte_pos = 0;
+        let resolved_bytes = resolved.as_bytes();
+
+        // Build utf16_offset -> byte_offset mapping
+        let mut utf16_to_byte: Vec<usize> = Vec::with_capacity(resolved_utf16.len() + 1);
+        for ch in resolved.chars() {
+            let utf16_len = ch.len_utf16();
+            let utf8_len = ch.len_utf8();
+            for _ in 0..utf16_len {
+                utf16_to_byte.push(byte_pos);
+            }
+            byte_pos += utf8_len;
+        }
+        utf16_to_byte.push(byte_pos); // sentinel for end
+
+        // Calculate where each mention ended up after all replacements
+        // We need to track how earlier replacements shifted offsets
+        let mut offset_shift: i64 = 0;
+        for mention in &sorted_fwd {
+            let adjusted_start = (mention.start as i64 + offset_shift) as usize;
+            let name = self
+                .uuid_to_name
+                .get(&mention.uuid)
+                .cloned()
+                .unwrap_or_else(|| {
+                    let short = if mention.uuid.len() > 8 {
+                        &mention.uuid[..8]
+                    } else {
+                        &mention.uuid
+                    };
+                    short.to_string()
+                });
+            let replacement_utf16_len = format!("@{name}").encode_utf16().count();
+            let byte_start = utf16_to_byte.get(adjusted_start).copied().unwrap_or(resolved_bytes.len());
+            let byte_end = utf16_to_byte
+                .get(adjusted_start + replacement_utf16_len)
+                .copied()
+                .unwrap_or(resolved_bytes.len());
+            ranges.push((byte_start, byte_end));
+            // This mention replaced `mention.length` UTF-16 units with `replacement_utf16_len`
+            offset_shift += replacement_utf16_len as i64 - mention.length as i64;
+        }
+
+        (resolved, ranges)
+    }
+
+    /// Prepare outgoing mentions: replace @Name with U+FFFC and compute UTF-16 offsets.
+    /// Returns (wire_body, mentions_for_rpc).
+    fn prepare_outgoing_mentions(&self, text: &str) -> (String, Vec<(usize, String)>) {
+        if self.pending_mentions.is_empty() {
+            return (text.to_string(), Vec::new());
+        }
+
+        let mut wire = text.to_string();
+        let mut mentions: Vec<(usize, String)> = Vec::new();
+
+        // Process mentions in reverse order of their position in the string
+        // to avoid offset invalidation
+        let mut found: Vec<(usize, usize, String)> = Vec::new(); // (byte_start, byte_end, uuid)
+        for (name, uuid) in &self.pending_mentions {
+            let pattern = format!("@{name}");
+            if let Some(uuid) = uuid {
+                if let Some(pos) = wire.find(&pattern) {
+                    found.push((pos, pos + pattern.len(), uuid.clone()));
+                }
+            }
+        }
+        found.sort_by(|a, b| b.0.cmp(&a.0)); // reverse order
+
+        for (byte_start, byte_end, uuid) in &found {
+            // Compute UTF-16 offset before replacement
+            let utf16_offset = wire[..*byte_start].encode_utf16().count();
+            wire.replace_range(*byte_start..*byte_end, "\u{FFFC}");
+            mentions.push((utf16_offset, uuid.clone()));
+        }
+
+        // Re-sort mentions by UTF-16 offset ascending for the RPC
+        mentions.sort_by_key(|(off, _)| *off);
+
+        (wire, mentions)
     }
 
     fn handle_send_timestamp(&mut self, rpc_id: &str, server_ts: i64) {
@@ -1368,7 +1570,20 @@ impl App {
                         .unwrap_or(false);
                     let conv_id = conv_id.clone();
 
-                    // Add our own message to the display
+                    // Compute mention byte ranges for display styling
+                    let mut mention_ranges = Vec::new();
+                    for (name, _uuid) in &self.pending_mentions {
+                        let needle = format!("@{name}");
+                        if let Some(pos) = text.find(&needle) {
+                            mention_ranges.push((pos, pos + needle.len()));
+                        }
+                    }
+
+                    // Prepare outgoing mentions (replace @Name with U+FFFC for wire)
+                    let (wire_body, wire_mentions) = self.prepare_outgoing_mentions(&text);
+                    self.pending_mentions.clear();
+
+                    // Add our own message to the display (human-readable @Name)
                     let now = Utc::now();
                     let local_ts_ms = now.timestamp_millis();
                     if let Some(conv) = self.conversations.get_mut(&conv_id) {
@@ -1382,6 +1597,7 @@ impl App {
                             status: Some(MessageStatus::Sending),
                             timestamp_ms: local_ts_ms,
                             reactions: Vec::new(),
+                            mention_ranges,
                         });
                     }
                     db_warn(self.db.insert_message(
@@ -1396,9 +1612,10 @@ impl App {
                     self.scroll_offset = 0;
                     return Some(SendRequest::Message {
                         recipient: conv_id,
-                        body: text,
+                        body: wire_body,
                         is_group,
                         local_ts_ms,
+                        mentions: wire_mentions,
                     });
                 } else {
                     self.status_message =
@@ -1488,36 +1705,113 @@ impl App {
     pub fn update_autocomplete(&mut self) {
         let buf = &self.input_buffer;
 
-        // Only show autocomplete if buffer starts with '/' and has no space yet
-        if !buf.starts_with('/') || buf.contains(' ') {
-            self.autocomplete_visible = false;
-            self.autocomplete_candidates.clear();
-            self.autocomplete_index = 0;
-            return;
-        }
+        // Try command autocomplete first: starts with '/' and no space yet
+        if buf.starts_with('/') && !buf.contains(' ') {
+            let prefix = buf.to_lowercase();
+            let mut candidates = Vec::new();
+            for (i, cmd) in COMMANDS.iter().enumerate() {
+                if cmd.name.starts_with(&prefix)
+                    || (!cmd.alias.is_empty() && cmd.alias.starts_with(&prefix))
+                {
+                    candidates.push(i);
+                }
+            }
 
-        let prefix = buf.to_lowercase();
-        let mut candidates = Vec::new();
-        for (i, cmd) in COMMANDS.iter().enumerate() {
-            if cmd.name.starts_with(&prefix)
-                || (!cmd.alias.is_empty() && cmd.alias.starts_with(&prefix))
-            {
-                candidates.push(i);
+            if !candidates.is_empty() {
+                self.autocomplete_visible = true;
+                self.autocomplete_mode = AutocompleteMode::Command;
+                self.autocomplete_candidates = candidates;
+                if self.autocomplete_index >= self.autocomplete_candidates.len() {
+                    self.autocomplete_index = 0;
+                }
+                return;
             }
         }
 
-        if candidates.is_empty() {
-            self.autocomplete_visible = false;
-            self.autocomplete_candidates.clear();
-            self.autocomplete_index = 0;
-        } else {
-            self.autocomplete_visible = true;
-            self.autocomplete_candidates = candidates;
-            // Clamp index
-            if self.autocomplete_index >= self.autocomplete_candidates.len() {
-                self.autocomplete_index = 0;
+        // Try @mention autocomplete
+        if let Some(ref conv_id) = self.active_conversation.clone() {
+            if let Some(conv) = self.conversations.get(conv_id) {
+                if let Some(trigger_pos) = self.find_mention_trigger() {
+                    let after_at = &self.input_buffer[trigger_pos + 1..self.input_cursor];
+                    let filter_lower = after_at.to_lowercase();
+
+                    let mut candidates: Vec<(String, String, Option<String>)> = Vec::new();
+                    if conv.is_group {
+                        // Group: offer all group members
+                        if let Some(group) = self.groups.get(conv_id) {
+                            for member_phone in &group.members {
+                                let name = self
+                                    .contact_names
+                                    .get(member_phone)
+                                    .cloned()
+                                    .unwrap_or_else(|| member_phone.clone());
+                                let uuid = self.number_to_uuid.get(member_phone).cloned();
+                                if filter_lower.is_empty()
+                                    || name.to_lowercase().contains(&filter_lower)
+                                    || member_phone.contains(&filter_lower)
+                                {
+                                    candidates.push((member_phone.clone(), name, uuid));
+                                }
+                            }
+                        }
+                    } else {
+                        // 1:1 chat: offer the contact as a mention candidate
+                        let name = self
+                            .contact_names
+                            .get(conv_id)
+                            .cloned()
+                            .unwrap_or_else(|| conv_id.clone());
+                        let uuid = self.number_to_uuid.get(conv_id).cloned();
+                        if filter_lower.is_empty()
+                            || name.to_lowercase().contains(&filter_lower)
+                            || conv_id.contains(&filter_lower)
+                        {
+                            candidates.push((conv_id.clone(), name, uuid));
+                        }
+                    }
+                    candidates.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+
+                    if !candidates.is_empty() {
+                        self.autocomplete_visible = true;
+                        self.autocomplete_mode = AutocompleteMode::Mention;
+                        self.mention_candidates = candidates;
+                        self.mention_trigger_pos = trigger_pos;
+                        if self.autocomplete_index >= self.mention_candidates.len() {
+                            self.autocomplete_index = 0;
+                        }
+                        return;
+                    }
+                }
             }
         }
+
+        // No autocomplete match
+        self.autocomplete_visible = false;
+        self.autocomplete_candidates.clear();
+        self.mention_candidates.clear();
+        self.autocomplete_index = 0;
+    }
+
+    /// Find the byte position of the `@` trigger for mention autocomplete.
+    /// Returns Some(pos) if `@` is found before cursor, at start or after whitespace,
+    /// with no spaces between `@` and cursor.
+    fn find_mention_trigger(&self) -> Option<usize> {
+        let before_cursor = &self.input_buffer[..self.input_cursor];
+        // Find rightmost '@' before cursor
+        let at_pos = before_cursor.rfind('@')?;
+        // '@' must be at start or preceded by whitespace
+        if at_pos > 0 {
+            let prev_char = before_cursor[..at_pos].chars().next_back()?;
+            if !prev_char.is_whitespace() {
+                return None;
+            }
+        }
+        // No spaces between '@' and cursor
+        let after_at = &before_cursor[at_pos + 1..];
+        if after_at.contains(' ') {
+            return None;
+        }
+        Some(at_pos)
     }
 
     /// Handle basic cursor/editing keys (Backspace, Delete, Left, Right, Home, End, Char).
@@ -1609,17 +1903,38 @@ impl App {
 
     /// Accept the currently selected autocomplete candidate.
     pub fn apply_autocomplete(&mut self) {
-        if let Some(&cmd_idx) = self.autocomplete_candidates.get(self.autocomplete_index) {
-            let cmd = &COMMANDS[cmd_idx];
-            if cmd.args.is_empty() {
-                self.input_buffer = cmd.name.to_string();
-            } else {
-                self.input_buffer = format!("{} ", cmd.name);
+        match self.autocomplete_mode {
+            AutocompleteMode::Command => {
+                if let Some(&cmd_idx) = self.autocomplete_candidates.get(self.autocomplete_index) {
+                    let cmd = &COMMANDS[cmd_idx];
+                    if cmd.args.is_empty() {
+                        self.input_buffer = cmd.name.to_string();
+                    } else {
+                        self.input_buffer = format!("{} ", cmd.name);
+                    }
+                    self.input_cursor = self.input_buffer.len();
+                    self.autocomplete_visible = false;
+                    self.autocomplete_candidates.clear();
+                    self.autocomplete_index = 0;
+                }
             }
-            self.input_cursor = self.input_buffer.len();
-            self.autocomplete_visible = false;
-            self.autocomplete_candidates.clear();
-            self.autocomplete_index = 0;
+            AutocompleteMode::Mention => {
+                if let Some((_phone, name, uuid)) =
+                    self.mention_candidates.get(self.autocomplete_index).cloned()
+                {
+                    // Replace @partial with @FullName followed by a space
+                    let replacement = format!("@{name} ");
+                    let before = &self.input_buffer[..self.mention_trigger_pos];
+                    let after = &self.input_buffer[self.input_cursor..];
+                    self.input_buffer = format!("{before}{replacement}{after}");
+                    self.input_cursor = self.mention_trigger_pos + replacement.len();
+                    // Record for outgoing mention
+                    self.pending_mentions.push((name, uuid));
+                    self.autocomplete_visible = false;
+                    self.mention_candidates.clear();
+                    self.autocomplete_index = 0;
+                }
+            }
         }
     }
 
@@ -1830,8 +2145,8 @@ mod tests {
         assert!(app.conversations.is_empty());
 
         app.handle_signal_event(SignalEvent::ContactList(vec![
-            Contact { number: "+1".to_string(), name: Some("Alice".to_string()) },
-            Contact { number: "+2".to_string(), name: Some("Bob".to_string()) },
+            Contact { number: "+1".to_string(), name: Some("Alice".to_string()), uuid: None },
+            Contact { number: "+2".to_string(), name: Some("Bob".to_string()), uuid: None },
         ]));
 
         // No conversations created — only name lookup populated
@@ -1846,8 +2161,8 @@ mod tests {
         let mut app = test_app();
 
         app.handle_signal_event(SignalEvent::GroupList(vec![
-            Group { id: "g1".to_string(), name: "Family".to_string(), members: vec![] },
-            Group { id: "g2".to_string(), name: "Work".to_string(), members: vec![] },
+            Group { id: "g1".to_string(), name: "Family".to_string(), members: vec![], member_uuids: vec![] },
+            Group { id: "g2".to_string(), name: "Work".to_string(), members: vec![], member_uuids: vec![] },
         ]));
 
         // Groups always create conversations (you're a member)
@@ -1875,13 +2190,14 @@ mod tests {
             group_name: None,
             is_outgoing: false,
             destination: None,
+            mentions: vec![],
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         assert_eq!(app.conversations["+15551234567"].name, "+15551234567");
 
         // Contact list arrives with a proper name — updates existing conv
         app.handle_signal_event(SignalEvent::ContactList(vec![
-            Contact { number: "+15551234567".to_string(), name: Some("Alice".to_string()) },
+            Contact { number: "+15551234567".to_string(), name: Some("Alice".to_string()), uuid: None },
         ]));
 
         assert_eq!(app.conversations["+15551234567"].name, "Alice");
@@ -1902,13 +2218,14 @@ mod tests {
             group_name: None,
             is_outgoing: false,
             destination: None,
+            mentions: vec![],
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         assert_eq!(app.conversations["+1"].name, "Alice");
 
         // Contact arrives with no name — should NOT overwrite
         app.handle_signal_event(SignalEvent::ContactList(vec![
-            Contact { number: "+1".to_string(), name: None },
+            Contact { number: "+1".to_string(), name: None, uuid: None },
         ]));
 
         assert_eq!(app.conversations["+1"].name, "Alice");
@@ -1922,7 +2239,7 @@ mod tests {
 
         // Contacts loaded first (no conversations created)
         app.handle_signal_event(SignalEvent::ContactList(vec![
-            Contact { number: "+1".to_string(), name: Some("Alice".to_string()) },
+            Contact { number: "+1".to_string(), name: Some("Alice".to_string()), uuid: None },
         ]));
         assert!(app.conversations.is_empty());
 
@@ -1937,6 +2254,7 @@ mod tests {
             group_name: None,
             is_outgoing: false,
             destination: None,
+            mentions: vec![],
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
 
@@ -1951,7 +2269,7 @@ mod tests {
 
         // Groups loaded — conversation created
         app.handle_signal_event(SignalEvent::GroupList(vec![
-            Group { id: "g1".to_string(), name: "Family".to_string(), members: vec![] },
+            Group { id: "g1".to_string(), name: "Family".to_string(), members: vec![], member_uuids: vec![] },
         ]));
         assert_eq!(app.conversations.len(), 1);
 
@@ -1966,6 +2284,7 @@ mod tests {
             group_name: None,
             is_outgoing: false,
             destination: None,
+            mentions: vec![],
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
 
@@ -1982,7 +2301,7 @@ mod tests {
         let mut app = test_app();
 
         app.handle_signal_event(SignalEvent::ContactList(vec![
-            Contact { number: "+1".to_string(), name: Some("Alice".to_string()) },
+            Contact { number: "+1".to_string(), name: Some("Alice".to_string()), uuid: None },
         ]));
 
         for _ in 0..3 {
@@ -1996,6 +2315,7 @@ mod tests {
                 group_name: None,
                 is_outgoing: false,
                 destination: None,
+                mentions: vec![],
             };
             app.handle_signal_event(SignalEvent::MessageReceived(msg));
         }
@@ -2332,6 +2652,7 @@ mod tests {
                 status: Some(MessageStatus::Sent),
                 timestamp_ms: ts_ms,
                 reactions: Vec::new(),
+                mention_ranges: Vec::new(),
             });
         }
 
@@ -2376,6 +2697,7 @@ mod tests {
                 status: Some(MessageStatus::Read),
                 timestamp_ms: ts_ms,
                 reactions: Vec::new(),
+                mention_ranges: Vec::new(),
             });
         }
 
@@ -2411,6 +2733,7 @@ mod tests {
                 status: Some(MessageStatus::Sending),
                 timestamp_ms: local_ts,
                 reactions: Vec::new(),
+                mention_ranges: Vec::new(),
             });
         }
 
@@ -2446,6 +2769,7 @@ mod tests {
                 status: Some(MessageStatus::Sending),
                 timestamp_ms: local_ts,
                 reactions: Vec::new(),
+                mention_ranges: Vec::new(),
             });
         }
 
@@ -2475,6 +2799,7 @@ mod tests {
             group_name: None,
             is_outgoing: false,
             destination: None,
+            mentions: vec![],
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
 
@@ -2502,6 +2827,7 @@ mod tests {
                 status: Some(MessageStatus::Sending),
                 timestamp_ms: local_ts,
                 reactions: Vec::new(),
+                mention_ranges: Vec::new(),
             });
         }
 
@@ -2550,6 +2876,7 @@ mod tests {
             group_name: None,
             is_outgoing: false,
             destination: None,
+            mentions: vec![],
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         let ts_ms = app.conversations["+1"].messages[0].timestamp_ms;
@@ -2585,6 +2912,7 @@ mod tests {
             group_name: None,
             is_outgoing: false,
             destination: None,
+            mentions: vec![],
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         let ts_ms = app.conversations["+1"].messages[0].timestamp_ms;
@@ -2628,6 +2956,7 @@ mod tests {
             group_name: None,
             is_outgoing: false,
             destination: None,
+            mentions: vec![],
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         let ts_ms = app.conversations["+1"].messages[0].timestamp_ms;
@@ -2675,6 +3004,7 @@ mod tests {
                 status: Some(MessageStatus::Sent),
                 timestamp_ms: ts_ms,
                 reactions: Vec::new(),
+                mention_ranges: Vec::new(),
             });
         }
 
@@ -2715,5 +3045,210 @@ mod tests {
         // But it was persisted to DB
         let db_reactions = app.db.load_reactions("+1").unwrap();
         assert_eq!(db_reactions.len(), 1);
+    }
+
+    // --- @Mention tests ---
+
+    #[test]
+    fn resolve_mentions_basic() {
+        let mut app = test_app();
+        app.uuid_to_name.insert("uuid-alice".to_string(), "Alice".to_string());
+
+        let body = "\u{FFFC} check this out";
+        let mentions = vec![Mention { start: 0, length: 1, uuid: "uuid-alice".to_string() }];
+        let (resolved, ranges) = app.resolve_mentions(body, &mentions);
+
+        assert_eq!(resolved, "@Alice check this out");
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(&resolved[ranges[0].0..ranges[0].1], "@Alice");
+    }
+
+    #[test]
+    fn resolve_mentions_multiple() {
+        let mut app = test_app();
+        app.uuid_to_name.insert("uuid-alice".to_string(), "Alice".to_string());
+        app.uuid_to_name.insert("uuid-bob".to_string(), "Bob".to_string());
+
+        let body = "\u{FFFC} and \u{FFFC} should join";
+        let mentions = vec![
+            Mention { start: 0, length: 1, uuid: "uuid-alice".to_string() },
+            Mention { start: 6, length: 1, uuid: "uuid-bob".to_string() },
+        ];
+        let (resolved, ranges) = app.resolve_mentions(body, &mentions);
+
+        assert_eq!(resolved, "@Alice and @Bob should join");
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(&resolved[ranges[0].0..ranges[0].1], "@Alice");
+        assert_eq!(&resolved[ranges[1].0..ranges[1].1], "@Bob");
+    }
+
+    #[test]
+    fn resolve_mentions_unknown_uuid_fallback() {
+        let app = test_app();
+        let body = "\u{FFFC} said hi";
+        let mentions = vec![Mention { start: 0, length: 1, uuid: "abcdef12-3456".to_string() }];
+        let (resolved, _ranges) = app.resolve_mentions(body, &mentions);
+
+        // Falls back to truncated UUID
+        assert_eq!(resolved, "@abcdef12 said hi");
+    }
+
+    #[test]
+    fn resolve_mentions_empty() {
+        let app = test_app();
+        let body = "no mentions here";
+        let (resolved, ranges) = app.resolve_mentions(body, &[]);
+        assert_eq!(resolved, body);
+        assert!(ranges.is_empty());
+    }
+
+    #[test]
+    fn mention_autocomplete_in_direct_chat() {
+        let mut app = test_app();
+
+        // Create a 1:1 conversation with a known contact
+        app.get_or_create_conversation("+1", "Alice", false);
+        app.contact_names.insert("+1".to_string(), "Alice".to_string());
+        app.active_conversation = Some("+1".to_string());
+        app.input_buffer = "@Al".to_string();
+        app.input_cursor = 3;
+        app.update_autocomplete();
+
+        // Should trigger mention autocomplete in 1:1 with the contact
+        assert!(app.autocomplete_visible);
+        assert_eq!(app.autocomplete_mode, AutocompleteMode::Mention);
+        assert_eq!(app.mention_candidates.len(), 1);
+        assert_eq!(app.mention_candidates[0].1, "Alice");
+    }
+
+    #[test]
+    fn mention_autocomplete_in_group() {
+        let mut app = test_app();
+
+        // Set up group with members
+        app.groups.insert("g1".to_string(), Group {
+            id: "g1".to_string(),
+            name: "Test Group".to_string(),
+            members: vec!["+1".to_string(), "+2".to_string()],
+            member_uuids: vec![],
+        });
+        app.contact_names.insert("+1".to_string(), "Alice".to_string());
+        app.contact_names.insert("+2".to_string(), "Bob".to_string());
+        app.get_or_create_conversation("g1", "Test Group", true);
+        app.active_conversation = Some("g1".to_string());
+
+        app.input_buffer = "@Al".to_string();
+        app.input_cursor = 3;
+        app.update_autocomplete();
+
+        assert!(app.autocomplete_visible);
+        assert_eq!(app.autocomplete_mode, AutocompleteMode::Mention);
+        assert_eq!(app.mention_candidates.len(), 1);
+        assert_eq!(app.mention_candidates[0].1, "Alice");
+    }
+
+    #[test]
+    fn apply_mention_autocomplete() {
+        let mut app = test_app();
+
+        // Set up group with members
+        app.groups.insert("g1".to_string(), Group {
+            id: "g1".to_string(),
+            name: "Test Group".to_string(),
+            members: vec!["+1".to_string()],
+            member_uuids: vec![],
+        });
+        app.contact_names.insert("+1".to_string(), "Alice".to_string());
+        app.number_to_uuid.insert("+1".to_string(), "uuid-alice".to_string());
+        app.get_or_create_conversation("g1", "Test Group", true);
+        app.active_conversation = Some("g1".to_string());
+
+        app.input_buffer = "Hey @Al".to_string();
+        app.input_cursor = 7;
+        app.update_autocomplete();
+        assert!(app.autocomplete_visible);
+
+        app.apply_autocomplete();
+        assert_eq!(app.input_buffer, "Hey @Alice ");
+        assert_eq!(app.pending_mentions.len(), 1);
+        assert_eq!(app.pending_mentions[0].0, "Alice");
+        assert_eq!(app.pending_mentions[0].1.as_deref(), Some("uuid-alice"));
+    }
+
+    #[test]
+    fn prepare_outgoing_mentions() {
+        let mut app = test_app();
+        app.pending_mentions = vec![
+            ("Alice".to_string(), Some("uuid-alice".to_string())),
+        ];
+
+        let (wire, mentions) = app.prepare_outgoing_mentions("Hey @Alice what's up");
+        assert_eq!(wire, "Hey \u{FFFC} what's up");
+        assert_eq!(mentions.len(), 1);
+        assert_eq!(mentions[0].0, 4); // UTF-16 offset of U+FFFC
+        assert_eq!(mentions[0].1, "uuid-alice");
+    }
+
+    #[test]
+    fn prepare_outgoing_no_pending_mentions() {
+        let app = test_app();
+        let (wire, mentions) = app.prepare_outgoing_mentions("Hello world");
+        assert_eq!(wire, "Hello world");
+        assert!(mentions.is_empty());
+    }
+
+    #[test]
+    fn contact_list_builds_uuid_maps() {
+        let mut app = test_app();
+        app.handle_signal_event(SignalEvent::ContactList(vec![
+            Contact {
+                number: "+1".to_string(),
+                name: Some("Alice".to_string()),
+                uuid: Some("uuid-alice".to_string()),
+            },
+        ]));
+
+        assert_eq!(app.uuid_to_name.get("uuid-alice").unwrap(), "Alice");
+        assert_eq!(app.number_to_uuid.get("+1").unwrap(), "uuid-alice");
+    }
+
+    #[test]
+    fn group_list_stores_groups() {
+        let mut app = test_app();
+        app.handle_signal_event(SignalEvent::GroupList(vec![
+            Group {
+                id: "g1".to_string(),
+                name: "Test".to_string(),
+                members: vec!["+1".to_string(), "+2".to_string()],
+                member_uuids: vec![],
+            },
+        ]));
+
+        assert!(app.groups.contains_key("g1"));
+        assert_eq!(app.groups["g1"].members.len(), 2);
+    }
+
+    #[test]
+    fn incoming_message_resolves_mentions() {
+        let mut app = test_app();
+        app.uuid_to_name.insert("uuid-bob".to_string(), "Bob".to_string());
+
+        let msg = SignalMessage {
+            source: "+1".to_string(),
+            source_name: Some("Alice".to_string()),
+            timestamp: chrono::Utc::now(),
+            body: Some("\u{FFFC} check this".to_string()),
+            attachments: vec![],
+            group_id: None,
+            group_name: None,
+            is_outgoing: false,
+            destination: None,
+            mentions: vec![Mention { start: 0, length: 1, uuid: "uuid-bob".to_string() }],
+        };
+        app.handle_signal_event(SignalEvent::MessageReceived(msg));
+
+        let conv = &app.conversations["+1"];
+        assert_eq!(conv.messages[0].body, "@Bob check this");
+        assert_eq!(conv.messages[0].mention_ranges.len(), 1);
     }
 }

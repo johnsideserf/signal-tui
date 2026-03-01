@@ -10,7 +10,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, InputMode, VisibleImage, QUICK_REACTIONS, SETTINGS};
+use crate::app::{App, AutocompleteMode, InputMode, VisibleImage, QUICK_REACTIONS, SETTINGS};
 use crate::signal::types::{MessageStatus, Reaction};
 use crate::image_render::ImageProtocol;
 use crate::input::COMMANDS;
@@ -219,10 +219,13 @@ fn collect_link_regions(buf: &Buffer, area: Rect) -> Vec<LinkRegion> {
 /// Returns `(spans, Option<hidden_url>)`. For attachment bodies like
 /// `[image: label](file:///path)`, the bracket text is the visible link and
 /// the URI inside parens is returned separately (not displayed).
-fn styled_uri_spans(body: &str) -> (Vec<Span<'static>>, Option<String>) {
+fn styled_uri_spans(body: &str, mention_ranges: &[(usize, usize)]) -> (Vec<Span<'static>>, Option<String>) {
     let link_style = Style::default()
         .fg(Color::Blue)
         .add_modifier(Modifier::UNDERLINED);
+    let mention_style = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
 
     // Attachment/image patterns: extract bracket text as display, URI as hidden metadata
     if body.starts_with("[image:") || body.starts_with("[attachment:") {
@@ -251,35 +254,60 @@ fn styled_uri_spans(body: &str) -> (Vec<Span<'static>>, Option<String>) {
         }
     }
 
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    let mut rest = body;
+    // Build a sorted list of styled regions: mentions and URIs
+    // Each region: (byte_start, byte_end, style)
+    let mut regions: Vec<(usize, usize, Style)> = Vec::new();
 
-    while !rest.is_empty() {
-        // Find the earliest URI scheme
+    // Add mention regions
+    for &(start, end) in mention_ranges {
+        if start < body.len() && end <= body.len() {
+            regions.push((start, end, mention_style));
+        }
+    }
+
+    // Find URI regions
+    let mut search_pos = 0;
+    while search_pos < body.len() {
+        let rest = &body[search_pos..];
         let next_uri = ["https://", "http://", "file:///"]
             .iter()
-            .filter_map(|scheme| rest.find(scheme).map(|pos| (pos, scheme)))
+            .filter_map(|scheme| rest.find(scheme).map(|pos| (pos, *scheme)))
             .min_by_key(|(pos, _)| *pos);
 
         match next_uri {
-            Some((pos, _scheme)) => {
-                // Push text before the URI
-                if pos > 0 {
-                    spans.push(Span::raw(rest[..pos].to_string()));
-                }
-                // Find the end of the URI (first whitespace or end of string)
-                let uri_start = &rest[pos..];
-                let uri_end = uri_start
+            Some((rel_pos, _scheme)) => {
+                let abs_start = search_pos + rel_pos;
+                let uri_slice = &body[abs_start..];
+                let uri_len = uri_slice
                     .find(|c: char| c.is_whitespace())
-                    .unwrap_or(uri_start.len());
-                spans.push(Span::styled(uri_start[..uri_end].to_string(), link_style));
-                rest = &uri_start[uri_end..];
+                    .unwrap_or(uri_slice.len());
+                let abs_end = abs_start + uri_len;
+                // Only add if not overlapping a mention region
+                let overlaps = regions.iter().any(|(ms, me, _)| abs_start < *me && abs_end > *ms);
+                if !overlaps {
+                    regions.push((abs_start, abs_end, link_style));
+                }
+                search_pos = abs_end;
             }
-            None => {
-                spans.push(Span::raw(rest.to_string()));
-                break;
-            }
+            None => break,
         }
+    }
+
+    // Sort regions by start position
+    regions.sort_by_key(|r| r.0);
+
+    // Build spans by interleaving plain text and styled regions
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut pos = 0;
+    for (start, end, style) in &regions {
+        if *start > pos {
+            spans.push(Span::raw(body[pos..*start].to_string()));
+        }
+        spans.push(Span::styled(body[*start..*end].to_string(), *style));
+        pos = *end;
+    }
+    if pos < body.len() {
+        spans.push(Span::raw(body[pos..].to_string()));
     }
 
     (spans, None)
@@ -325,8 +353,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_status_bar(frame, app, status_area, sidebar_auto_hidden);
 
     // Autocomplete popup (overlays everything)
-    if app.autocomplete_visible && !app.autocomplete_candidates.is_empty() {
-        draw_autocomplete(frame, app, input_area);
+    if app.autocomplete_visible {
+        let has_items = match app.autocomplete_mode {
+            AutocompleteMode::Command => !app.autocomplete_candidates.is_empty(),
+            AutocompleteMode::Mention => !app.mention_candidates.is_empty(),
+        };
+        if has_items {
+            draw_autocomplete(frame, app, input_area);
+        }
     }
 
     // Settings overlay (overlays everything)
@@ -588,8 +622,8 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             ));
 
-            // Style URIs (https://, http://, file:///) as underlined links
-            let (body_spans, hidden_url) = styled_uri_spans(&msg.body);
+            // Style URIs and @mentions
+            let (body_spans, hidden_url) = styled_uri_spans(&msg.body, &msg.mention_ranges);
             if let Some(url) = hidden_url {
                 // Collect display text for link_url_map lookup
                 let display_text: String = body_spans.iter().map(|s| s.content.as_ref()).collect();
@@ -1067,44 +1101,74 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, sidebar_auto_hidden
 }
 
 fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect) {
-    let candidates = &app.autocomplete_candidates;
-    let count = candidates.len();
     let terminal_width = frame.area().width;
-
-    // Build lines and measure max width
-    let mut lines: Vec<Line> = Vec::with_capacity(count);
+    let mut lines: Vec<Line> = Vec::new();
     let mut max_content_width: usize = 0;
-    for (i, &cmd_idx) in candidates.iter().enumerate() {
-        let cmd = &COMMANDS[cmd_idx];
-        let args_part = if cmd.args.is_empty() {
-            String::new()
-        } else {
-            format!(" {}", cmd.args)
-        };
-        let left = format!("  {}{}", cmd.name, args_part);
-        let right = format!("  {}", cmd.description);
-        let total_len = left.len() + right.len() + 2; // padding
-        if total_len > max_content_width {
-            max_content_width = total_len;
+
+    match app.autocomplete_mode {
+        AutocompleteMode::Command => {
+            for (i, &cmd_idx) in app.autocomplete_candidates.iter().enumerate() {
+                let cmd = &COMMANDS[cmd_idx];
+                let args_part = if cmd.args.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {}", cmd.args)
+                };
+                let left = format!("  {}{}", cmd.name, args_part);
+                let right = format!("  {}", cmd.description);
+                let total_len = left.len() + right.len() + 2;
+                if total_len > max_content_width {
+                    max_content_width = total_len;
+                }
+
+                let is_selected = i == app.autocomplete_index;
+                let style = if is_selected {
+                    Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+                let desc_style = if is_selected {
+                    Style::default().bg(Color::DarkGray).fg(Color::Cyan)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+
+                lines.push(Line::from(vec![
+                    Span::styled(left, style),
+                    Span::styled(right, desc_style),
+                ]));
+            }
         }
+        AutocompleteMode::Mention => {
+            for (i, (phone, name, _uuid)) in app.mention_candidates.iter().enumerate() {
+                let left = format!("  @{name}");
+                let right = format!("  {phone}");
+                let total_len = left.len() + right.len() + 2;
+                if total_len > max_content_width {
+                    max_content_width = total_len;
+                }
 
-        let is_selected = i == app.autocomplete_index;
-        let style = if is_selected {
-            Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::Gray)
-        };
-        let desc_style = if is_selected {
-            Style::default().bg(Color::DarkGray).fg(Color::Cyan)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
+                let is_selected = i == app.autocomplete_index;
+                let style = if is_selected {
+                    Style::default().bg(Color::DarkGray).fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Cyan)
+                };
+                let phone_style = if is_selected {
+                    Style::default().bg(Color::DarkGray).fg(Color::DarkGray)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
 
-        lines.push(Line::from(vec![
-            Span::styled(left, style),
-            Span::styled(right, desc_style),
-        ]));
+                lines.push(Line::from(vec![
+                    Span::styled(left, style),
+                    Span::styled(right, phone_style),
+                ]));
+            }
+        }
     }
+
+    let count = lines.len();
 
     // Size the popup
     let popup_width = (max_content_width as u16 + 2).min(terminal_width.saturating_sub(2)).max(20);
@@ -1182,6 +1246,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
     let shortcuts: &[(&str, &str)] = &[
         ("Tab / Shift+Tab", "Next / prev conversation"),
         ("Up / Down", "Recall input history"),
+        ("@", "Mention autocomplete (groups)"),
         ("PgUp / PgDn", "Scroll messages"),
         ("Ctrl+Left/Right", "Resize sidebar"),
         ("Ctrl+C", "Quit"),

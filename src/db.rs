@@ -185,6 +185,7 @@ impl Database {
                         status: MessageStatus::from_i32(status_i32),
                         timestamp_ms,
                         reactions: Vec::new(),
+                        mention_ranges: Vec::new(),
                     })
                 })
                 .collect();
