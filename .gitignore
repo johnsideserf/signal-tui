@@ -5,3 +5,5 @@ Cargo.lock
 *~
 .DS_Store
 docs/book/
+signal-tui-debug.log
+.claude/settings.local.json

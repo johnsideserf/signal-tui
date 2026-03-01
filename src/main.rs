@@ -1,6 +1,7 @@
 mod app;
 mod config;
 mod db;
+mod debug_log;
 mod image_render;
 mod input;
 mod link;
@@ -52,6 +53,7 @@ async fn main() -> Result<()> {
     let mut force_setup = false;
     let mut demo_mode = false;
     let mut incognito = false;
+    let mut debug = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -86,6 +88,10 @@ async fn main() -> Result<()> {
                 incognito = true;
                 i += 1;
             }
+            "--debug" => {
+                debug = true;
+                i += 1;
+            }
             "--help" => {
                 eprintln!("signal-tui - Terminal Signal client");
                 eprintln!();
@@ -97,6 +103,7 @@ async fn main() -> Result<()> {
                 eprintln!("      --setup             Run first-time setup wizard");
                 eprintln!("      --demo              Launch with dummy data (no signal-cli needed)");
                 eprintln!("      --incognito         No local message storage (in-memory only)");
+                eprintln!("      --debug             Write debug log to signal-tui-debug.log");
                 eprintln!("      --help              Show this help");
                 std::process::exit(0);
             }
@@ -105,6 +112,11 @@ async fn main() -> Result<()> {
                 std::process::exit(1);
             }
         }
+    }
+
+    if debug {
+        debug_log::enable();
+        debug_log::log("=== signal-tui debug session started ===");
     }
 
     // Load config
@@ -412,6 +424,9 @@ async fn run_app(
     app.inline_images = config.inline_images;
     app.native_images = config.native_images;
     app.incognito = incognito;
+    app.show_receipts = config.show_receipts;
+    app.color_receipts = config.color_receipts;
+    app.nerd_fonts = config.nerd_fonts;
     app.load_from_db()?;
     app.set_connected();
 
@@ -482,15 +497,19 @@ async fn run_app(
                     } else if app.show_settings {
                         app.handle_settings_key(key.code);
                     } else if app.autocomplete_visible {
-                        if let Some((recipient, body, is_group)) =
+                        if let Some((recipient, body, is_group, local_ts_ms)) =
                             app.handle_autocomplete_key(key.code)
                         {
-                            if let Err(e) =
-                                signal_client
-                                    .send_message(&recipient, &body, is_group)
-                                    .await
+                            match signal_client
+                                .send_message(&recipient, &body, is_group)
+                                .await
                             {
-                                app.status_message = format!("send error: {e}");
+                                Ok(rpc_id) => {
+                                    app.pending_sends.insert(rpc_id, (recipient.clone(), local_ts_ms));
+                                }
+                                Err(e) => {
+                                    app.status_message = format!("send error: {e}");
+                                }
                             }
                         }
                     } else {
@@ -642,13 +661,20 @@ async fn run_app(
                                 app.autocomplete_visible = false;
                             }
                             (_, KeyCode::Enter) => {
-                                if let Some((recipient, body, is_group)) = app.handle_input() {
-                                    if let Err(e) =
-                                        signal_client
-                                            .send_message(&recipient, &body, is_group)
-                                            .await
+                                if let Some((recipient, body, is_group, local_ts_ms)) = app.handle_input() {
+                                    match signal_client
+                                        .send_message(&recipient, &body, is_group)
+                                        .await
                                     {
-                                        app.status_message = format!("send error: {e}");
+                                        Ok(rpc_id) => {
+                                            debug_log::logf(format_args!(
+                                                "send: to={recipient} ts={local_ts_ms}"
+                                            ));
+                                            app.pending_sends.insert(rpc_id, (recipient.clone(), local_ts_ms));
+                                        }
+                                        Err(e) => {
+                                            app.status_message = format!("send error: {e}");
+                                        }
                                     }
                                 }
                             }
@@ -961,6 +987,7 @@ fn populate_demo_data(app: &mut App) {
     };
 
     let dm = |sender: &str, time: chrono::DateTime<Utc>, body: &str| -> DisplayMessage {
+        let is_outgoing = sender == "you";
         DisplayMessage {
             sender: sender.to_string(),
             timestamp: time,
@@ -968,6 +995,8 @@ fn populate_demo_data(app: &mut App) {
             is_system: false,
             image_lines: None,
             image_path: None,
+            status: if is_outgoing { Some(crate::signal::types::MessageStatus::Sent) } else { None },
+            timestamp_ms: time.timestamp_millis(),
         }
     };
 
