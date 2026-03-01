@@ -15,6 +15,17 @@ use crate::image_render::ImageProtocol;
 use crate::input::COMMANDS;
 use crate::signal::types::MessageStatus;
 
+// Layout constants
+const SIDEBAR_AUTO_HIDE_WIDTH: u16 = 60;
+const MIN_CHAT_WIDTH: u16 = 30;
+const MSG_WINDOW_MULTIPLIER: usize = 3;
+
+// Popup dimensions
+const SETTINGS_POPUP_WIDTH: u16 = 42;
+const SETTINGS_POPUP_HEIGHT: u16 = 14;
+const CONTACTS_POPUP_WIDTH: u16 = 50;
+const CONTACTS_MAX_VISIBLE: usize = 20;
+
 /// Map a MessageStatus to its display symbol and color.
 fn status_symbol(status: MessageStatus, nerd_fonts: bool, color: bool) -> (&'static str, Color) {
     let (unicode_sym, nerd_sym, colored) = match status {
@@ -60,6 +71,38 @@ fn truncate(s: &str, max_width: usize) -> String {
         truncated.push('…');
         truncated
     }
+}
+
+/// Build a centered separator line: `───── label ─────`
+fn build_separator(label: &str, width: usize, style: Style) -> Line<'static> {
+    let pad_total = width.saturating_sub(label.len());
+    let pad_left = pad_total / 2;
+    let pad_right = pad_total - pad_left;
+    Line::from(Span::styled(
+        format!("{}{}{}", "─".repeat(pad_left), label, "─".repeat(pad_right)),
+        style,
+    ))
+}
+
+/// Create a centered popup overlay: clears the area, returns the Rect and a styled Block.
+/// Preferred width/height are clamped to fit within the terminal.
+fn centered_popup(
+    frame: &mut Frame, area: Rect, pref_width: u16, pref_height: u16, title: &str,
+) -> (Rect, Block<'static>) {
+    let w = pref_width.min(area.width.saturating_sub(4));
+    let h = pref_height.min(area.height.saturating_sub(2));
+    let x = (area.width.saturating_sub(w)) / 2;
+    let y = (area.height.saturating_sub(h)) / 2;
+    let popup_area = Rect::new(x, y, w, h);
+    frame.render_widget(Clear, popup_area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(title.to_string())
+        .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .style(Style::default().bg(Color::Black));
+    (popup_area, block)
 }
 
 /// A clickable link region detected in the rendered buffer.
@@ -260,8 +303,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let body_area = outer[0];
     let status_area = outer[1];
 
-    // Narrow terminal adaptation: auto-hide sidebar when width < 60
-    let sidebar_auto_hidden = terminal_width < 60;
+    // Narrow terminal adaptation: auto-hide sidebar below threshold
+    let sidebar_auto_hidden = terminal_width < SIDEBAR_AUTO_HIDE_WIDTH;
     let show_sidebar = app.sidebar_visible && !sidebar_auto_hidden;
 
     let input_area = if show_sidebar {
@@ -269,7 +312,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             .direction(Direction::Horizontal)
             .constraints([
                 Constraint::Length(app.sidebar_width),
-                Constraint::Min(30),
+                Constraint::Min(MIN_CHAT_WIDTH),
             ])
             .split(body_area);
 
@@ -453,79 +496,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             }
         }
         None => {
-            let mut lines = vec![
-                Line::from(""),
-            ];
-
-            // Show connection error prominently if present
-            if let Some(ref err) = app.connection_error {
-                lines.push(Line::from(Span::styled(
-                    "  Connection Error",
-                    Style::default()
-                        .fg(Color::Red)
-                        .add_modifier(Modifier::BOLD),
-                )));
-                lines.push(Line::from(Span::styled(
-                    format!("  {err}"),
-                    Style::default().fg(Color::Red),
-                )));
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(
-                    "  Run with --setup to reconfigure.",
-                    Style::default().fg(Color::Gray),
-                )));
-            } else if app.conversation_order.is_empty() {
-                // No conversations yet
-                lines.push(Line::from(Span::styled(
-                    "  Welcome to signal-tui",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                )));
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(
-                    "  No conversations yet",
-                    Style::default().fg(Color::Gray),
-                )));
-                lines.push(Line::from(Span::styled(
-                    "  Messages you send and receive will appear here.",
-                    Style::default().fg(Color::Gray),
-                )));
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(
-                    "  Use /join +1234567890 to message someone",
-                    Style::default().fg(Color::Gray),
-                )));
-                lines.push(Line::from(Span::styled(
-                    "  Use /help for all commands",
-                    Style::default().fg(Color::DarkGray),
-                )));
-            } else {
-                // Has conversations but none selected
-                lines.push(Line::from(Span::styled(
-                    "  Welcome to signal-tui",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                )));
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(
-                    "  Use /join <contact> to start a conversation",
-                    Style::default().fg(Color::Gray),
-                )));
-                lines.push(Line::from(Span::styled(
-                    "  Use /help for all commands",
-                    Style::default().fg(Color::Gray),
-                )));
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(
-                    "  Ctrl+←/→ to resize sidebar",
-                    Style::default().fg(Color::DarkGray),
-                )));
-            }
-
-            let welcome = Paragraph::new(lines);
-            frame.render_widget(welcome, inner);
+            draw_welcome(frame, app, inner);
             app.focused_message_time = None;
             return;
         }
@@ -536,7 +507,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Build lines from a generous window covering the viewport at the current scroll position.
     // Always include messages up to `total`; scroll_offset controls the paragraph scroll instead.
-    let start = total.saturating_sub(available_height * 3 + app.scroll_offset);
+    let start = total.saturating_sub(available_height * MSG_WINDOW_MULTIPLIER + app.scroll_offset);
     let visible = &messages[start..total];
 
     // Get last_read_index for unread marker
@@ -563,21 +534,8 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         let date_str = local.format("%b %d, %Y").to_string();
         if prev_date.as_ref() != Some(&date_str) {
             if prev_date.is_some() {
-                // Insert date separator line
                 let label = format!(" {} ", date_str);
-                let pad_total = inner_width.saturating_sub(label.len());
-                let pad_left = pad_total / 2;
-                let pad_right = pad_total - pad_left;
-                let sep = format!(
-                    "{}{}{}",
-                    "─".repeat(pad_left),
-                    label,
-                    "─".repeat(pad_right)
-                );
-                lines.push(Line::from(Span::styled(
-                    sep,
-                    Style::default().fg(Color::DarkGray),
-                )));
+                lines.push(build_separator(&label, inner_width, Style::default().fg(Color::DarkGray)));
                 line_msg_idx.push(None);
             }
             prev_date = Some(date_str);
@@ -585,22 +543,11 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 
         // Unread marker: between last_read - 1 and last_read
         if msg_index == last_read && last_read > 0 && last_read < total {
-            let label = " new messages ";
-            let pad_total = inner_width.saturating_sub(label.len());
-            let pad_left = pad_total / 2;
-            let pad_right = pad_total - pad_left;
-            let sep = format!(
-                "{}{}{}",
-                "─".repeat(pad_left),
-                label,
-                "─".repeat(pad_right)
-            );
-            lines.push(Line::from(Span::styled(
-                sep,
-                Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
-            )));
+            lines.push(build_separator(
+                " new messages ",
+                inner_width,
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ));
             line_msg_idx.push(None);
         }
 
@@ -718,40 +665,11 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let scroll_y = base_scroll - app.scroll_offset;
 
     // Determine the focused message for full-timestamp display in Normal mode.
-    // The "cursor" is at the bottom of the visible area when scrolled up.
-    if app.mode == InputMode::Normal && app.scroll_offset > 0 {
-        // Find which line index is at the bottom of the viewport (scroll_y + available_height - 1)
-        let target_wrapped = scroll_y + available_height.saturating_sub(1);
-        let mut cumul = 0usize;
-        let mut focused_line_idx = None;
-        for (idx, line) in lines.iter().enumerate() {
-            let w = line.width();
-            let h = if w == 0 { 1 } else { w.div_ceil(inner_width.max(1)) };
-            if cumul + h > target_wrapped {
-                focused_line_idx = Some(idx);
-                break;
-            }
-            cumul += h;
-        }
-        // Walk backwards from the focused line to find the nearest message
-        if let Some(mut li) = focused_line_idx {
-            loop {
-                if let Some(Some(mi)) = line_msg_idx.get(li) {
-                    app.focused_message_time = Some(messages[*mi].timestamp);
-                    break;
-                }
-                if li == 0 {
-                    app.focused_message_time = None;
-                    break;
-                }
-                li -= 1;
-            }
-        } else {
-            app.focused_message_time = None;
-        }
+    app.focused_message_time = if app.mode == InputMode::Normal && app.scroll_offset > 0 {
+        find_focused_message_time(&lines, &line_msg_idx, messages, inner_width, scroll_y, available_height)
     } else {
-        app.focused_message_time = None;
-    }
+        None
+    };
 
     // Compute screen positions for native protocol image overlay (before lines is consumed)
     if !image_records.is_empty() {
@@ -821,6 +739,102 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             .begin_symbol(None)
             .end_symbol(None);
         frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+    }
+}
+
+/// Render the welcome/empty-state screen when no conversation is active.
+fn draw_welcome(frame: &mut Frame, app: &App, area: Rect) {
+    let mut lines = vec![Line::from("")];
+
+    if let Some(ref err) = app.connection_error {
+        lines.push(Line::from(Span::styled(
+            "  Connection Error",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("  {err}"),
+            Style::default().fg(Color::Red),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Run with --setup to reconfigure.",
+            Style::default().fg(Color::Gray),
+        )));
+    } else if app.conversation_order.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  Welcome to signal-tui",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  No conversations yet",
+            Style::default().fg(Color::Gray),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  Messages you send and receive will appear here.",
+            Style::default().fg(Color::Gray),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Use /join +1234567890 to message someone",
+            Style::default().fg(Color::Gray),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  Use /help for all commands",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "  Welcome to signal-tui",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Use /join <contact> to start a conversation",
+            Style::default().fg(Color::Gray),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  Use /help for all commands",
+            Style::default().fg(Color::Gray),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Ctrl+←/→ to resize sidebar",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Find the timestamp of the message at the bottom of the visible viewport.
+/// Used for the full-timestamp status bar display when scrolled in Normal mode.
+fn find_focused_message_time(
+    lines: &[Line], line_msg_idx: &[Option<usize>],
+    messages: &[crate::app::DisplayMessage],
+    inner_width: usize, scroll_y: usize, available_height: usize,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    let target_wrapped = scroll_y + available_height.saturating_sub(1);
+    let mut cumul = 0usize;
+    let mut focused_line_idx = None;
+    for (idx, line) in lines.iter().enumerate() {
+        let w = line.width();
+        let h = if w == 0 { 1 } else { w.div_ceil(inner_width.max(1)) };
+        if cumul + h > target_wrapped {
+            focused_line_idx = Some(idx);
+            break;
+        }
+        cumul += h;
+    }
+    let mut li = focused_line_idx?;
+    loop {
+        if let Some(Some(mi)) = line_msg_idx.get(li) {
+            return Some(messages[*mi].timestamp);
+        }
+        if li == 0 {
+            return None;
+        }
+        li -= 1;
     }
 }
 
@@ -1043,23 +1057,9 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect) {
 }
 
 fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
-    let popup_width: u16 = 42.min(area.width.saturating_sub(4));
-    let popup_height: u16 = 14.min(area.height.saturating_sub(2));
-
-    let x = (area.width.saturating_sub(popup_width)) / 2;
-    let y = (area.height.saturating_sub(popup_height)) / 2;
-    let popup_area = Rect::new(x, y, popup_width, popup_height);
-
-    // Clear behind the overlay so underlying text doesn't leak through
-    frame.render_widget(Clear, popup_area);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(" Settings ")
-        .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-        .style(Style::default().bg(Color::Black));
+    let (popup_area, block) = centered_popup(
+        frame, area, SETTINGS_POPUP_WIDTH, SETTINGS_POPUP_HEIGHT, " Settings ",
+    );
 
     let mut lines: Vec<Line> = Vec::new();
     for (i, &label) in SETTINGS_ITEMS.iter().enumerate() {
@@ -1135,30 +1135,12 @@ fn draw_help(frame: &mut Frame, area: Rect) {
     // Calculate popup size
     let key_col_width = 20;
     let desc_col_width = 28;
-    let popup_width = (key_col_width + desc_col_width + 6) // padding + borders
-        .min(area.width.saturating_sub(4) as usize) as u16;
+    let pref_width = (key_col_width + desc_col_width + 6) as u16;
     let content_lines =
-        commands.len() + shortcuts.len() + vim.len() + cli.len() + 7; // +7 for headers + footer + spacing
-    let popup_height = (content_lines as u16 + 2) // +2 for borders
-        .min(area.height.saturating_sub(2));
+        commands.len() + shortcuts.len() + vim.len() + cli.len() + 7; // headers + footer + spacing
+    let pref_height = content_lines as u16 + 2;
 
-    let x = (area.width.saturating_sub(popup_width)) / 2;
-    let y = (area.height.saturating_sub(popup_height)) / 2;
-    let popup_area = Rect::new(x, y, popup_width, popup_height);
-
-    frame.render_widget(Clear, popup_area);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(" Help ")
-        .title_style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )
-        .style(Style::default().bg(Color::Black));
+    let (popup_area, block) = centered_popup(frame, area, pref_width, pref_height, " Help ");
 
     let header_style = Style::default()
         .fg(Color::Yellow)
@@ -1210,16 +1192,8 @@ fn draw_help(frame: &mut Frame, area: Rect) {
 }
 
 fn draw_contacts(frame: &mut Frame, app: &App, area: Rect) {
-    let popup_width: u16 = 50.min(area.width.saturating_sub(4));
-    // Show up to 20 contacts + 3 lines for border/title + 2 for footer/filter
-    let max_visible = 20.min(app.contacts_filtered.len());
-    let popup_height: u16 = (max_visible as u16 + 5).min(area.height.saturating_sub(2));
-
-    let x = (area.width.saturating_sub(popup_width)) / 2;
-    let y = (area.height.saturating_sub(popup_height)) / 2;
-    let popup_area = Rect::new(x, y, popup_width, popup_height);
-
-    frame.render_widget(Clear, popup_area);
+    let max_visible = CONTACTS_MAX_VISIBLE.min(app.contacts_filtered.len());
+    let pref_height = max_visible as u16 + 5; // +3 border/title +2 footer/filter
 
     let title = if app.contacts_filter.is_empty() {
         " Contacts ".to_string()
@@ -1227,19 +1201,11 @@ fn draw_contacts(frame: &mut Frame, app: &App, area: Rect) {
         format!(" Contacts [{}] ", app.contacts_filter)
     };
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(title)
-        .title_style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )
-        .style(Style::default().bg(Color::Black));
+    let (popup_area, block) = centered_popup(
+        frame, area, CONTACTS_POPUP_WIDTH, pref_height, &title,
+    );
 
-    let inner_height = popup_height.saturating_sub(2) as usize; // minus borders
+    let inner_height = popup_area.height.saturating_sub(2) as usize; // minus borders
     let footer_lines = 2; // footer + empty line
     let visible_rows = inner_height.saturating_sub(footer_lines);
 
@@ -1259,7 +1225,7 @@ fn draw_contacts(frame: &mut Frame, app: &App, area: Rect) {
         )));
     } else {
         let end = (scroll_offset + visible_rows).min(app.contacts_filtered.len());
-        let inner_w = popup_width.saturating_sub(2) as usize;
+        let inner_w = popup_area.width.saturating_sub(2) as usize;
 
         for (i, (number, name)) in app.contacts_filtered[scroll_offset..end].iter().enumerate() {
             let actual_index = scroll_offset + i;
