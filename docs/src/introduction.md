@@ -2,6 +2,8 @@
 
 A terminal-based Signal messenger client with an IRC aesthetic.
 
+![signal-tui screenshot](screenshot.png)
+
 signal-tui wraps [signal-cli](https://github.com/AsamK/signal-cli) via JSON-RPC, giving you a
 full-featured messaging interface that runs entirely in your terminal. Built with
 [Ratatui](https://ratatui.rs/), [Crossterm](https://github.com/crossterm-rs/crossterm), and
