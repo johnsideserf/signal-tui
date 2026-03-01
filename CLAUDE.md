@@ -61,6 +61,10 @@ Never commit directly to master. Always follow this process:
 
 Master is force-push protected.
 
+### Issue Linking
+
+Reference the GitHub issue number in commit messages and PR descriptions (e.g. `closes #29`). This auto-closes the issue when the PR is merged.
+
 ### Branch Naming
 
 Use prefixed names: `feature/`, `fix/`, `refactor/`, `docs/` (e.g. `feature/dark-mode`, `fix/unread-count`, `docs/update-readme`).
