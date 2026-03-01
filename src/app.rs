@@ -395,13 +395,17 @@ impl App {
     pub fn handle_signal_event(&mut self, event: SignalEvent) {
         match event {
             SignalEvent::MessageReceived(msg) => self.handle_message(msg),
-            SignalEvent::ReceiptReceived { sender, receipt_type, timestamps } => {
+            SignalEvent::ReceiptReceived { ref sender, ref receipt_type, ref timestamps } => {
+                let (sender, receipt_type, timestamps) = (sender.clone(), receipt_type.clone(), timestamps.clone());
                 self.handle_receipt(&sender, &receipt_type, &timestamps);
             }
-            SignalEvent::SendTimestamp { rpc_id, server_ts } => {
+            SignalEvent::SendTimestamp { ref rpc_id, server_ts } => {
+                let rpc_id = rpc_id.clone();
                 self.handle_send_timestamp(&rpc_id, server_ts);
             }
-            SignalEvent::SendFailed { rpc_id } => {
+            SignalEvent::SendFailed { ref rpc_id } => {
+                self.status_message = "send failed".to_string();
+                let rpc_id = rpc_id.clone();
                 self.handle_send_failed(&rpc_id);
             }
             SignalEvent::TypingIndicator { sender, sender_name, is_typing } => {
@@ -630,6 +634,9 @@ impl App {
 
     fn handle_send_timestamp(&mut self, rpc_id: &str, server_ts: i64) {
         if let Some((conv_id, local_ts)) = self.pending_sends.remove(rpc_id) {
+            crate::debug_log::logf(format_args!(
+                "send confirmed: conv={conv_id} local_ts={local_ts} server_ts={server_ts}"
+            ));
             if let Some(conv) = self.conversations.get_mut(&conv_id) {
                 // Find the outgoing message with matching local timestamp
                 for msg in conv.messages.iter_mut().rev() {
@@ -744,10 +751,17 @@ impl App {
         // If still no match, the receipt may have arrived before the SendTimestamp
         // that assigns the server timestamp. Buffer it for replay.
         if !matched_any && !timestamps.is_empty() {
+            crate::debug_log::logf(format_args!(
+                "receipt: buffering {receipt_type} from {sender} (no matching ts)"
+            ));
             self.pending_receipts.push((
                 sender.to_string(),
                 receipt_type.to_string(),
                 timestamps.to_vec(),
+            ));
+        } else if matched_any {
+            crate::debug_log::logf(format_args!(
+                "receipt: {receipt_type} from {sender} -> {new_status:?}"
             ));
         }
     }

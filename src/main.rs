@@ -1,6 +1,7 @@
 mod app;
 mod config;
 mod db;
+mod debug_log;
 mod image_render;
 mod input;
 mod link;
@@ -52,6 +53,7 @@ async fn main() -> Result<()> {
     let mut force_setup = false;
     let mut demo_mode = false;
     let mut incognito = false;
+    let mut debug = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -86,6 +88,10 @@ async fn main() -> Result<()> {
                 incognito = true;
                 i += 1;
             }
+            "--debug" => {
+                debug = true;
+                i += 1;
+            }
             "--help" => {
                 eprintln!("signal-tui - Terminal Signal client");
                 eprintln!();
@@ -97,6 +103,7 @@ async fn main() -> Result<()> {
                 eprintln!("      --setup             Run first-time setup wizard");
                 eprintln!("      --demo              Launch with dummy data (no signal-cli needed)");
                 eprintln!("      --incognito         No local message storage (in-memory only)");
+                eprintln!("      --debug             Write debug log to signal-tui-debug.log");
                 eprintln!("      --help              Show this help");
                 std::process::exit(0);
             }
@@ -105,6 +112,11 @@ async fn main() -> Result<()> {
                 std::process::exit(1);
             }
         }
+    }
+
+    if debug {
+        debug_log::enable();
+        debug_log::log("=== signal-tui debug session started ===");
     }
 
     // Load config
@@ -655,6 +667,9 @@ async fn run_app(
                                         .await
                                     {
                                         Ok(rpc_id) => {
+                                            debug_log::logf(format_args!(
+                                                "send: to={recipient} ts={local_ts_ms}"
+                                            ));
                                             app.pending_sends.insert(rpc_id, (recipient.clone(), local_ts_ms));
                                         }
                                         Err(e) => {

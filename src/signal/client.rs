@@ -67,6 +67,7 @@ impl SignalClient {
 
                         let event = if let Some(method) = pending_method {
                             if resp.error.is_some() {
+                                crate::debug_log::logf(format_args!("rpc error: method={method} error={:?}", resp.error));
                                 // RPC error — emit SendFailed for send requests
                                 if method == "send" {
                                     rpc_id.map(|id| SignalEvent::SendFailed { rpc_id: id })
@@ -82,6 +83,10 @@ impl SignalClient {
                             parse_signal_event(&resp, &download_dir)
                         };
 
+                        if let Some(ref event) = event {
+                            crate::debug_log::logf(format_args!("event: {event:?}"));
+                        }
+
                         if let Some(event) = event {
                             if event_tx.send(event).await.is_err() {
                                 break;
@@ -89,6 +94,7 @@ impl SignalClient {
                         }
                     }
                     Err(e) => {
+                        crate::debug_log::logf(format_args!("json parse error: {e}"));
                         let _ = event_tx
                             .send(SignalEvent::Error(format!("JSON parse error: {e}")))
                             .await;
@@ -336,11 +342,17 @@ fn parse_receive_event(
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_string();
-        let receipt_type = receipt
-            .get("type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        // signal-cli uses boolean fields: isDelivery, isRead, isViewed
+        let receipt_type = if receipt.get("isRead").and_then(|v| v.as_bool()).unwrap_or(false) {
+            "READ"
+        } else if receipt.get("isViewed").and_then(|v| v.as_bool()).unwrap_or(false) {
+            "VIEWED"
+        } else if receipt.get("isDelivery").and_then(|v| v.as_bool()).unwrap_or(false) {
+            "DELIVERY"
+        } else {
+            // Fallback: try "type" string field (older signal-cli versions)
+            receipt.get("type").and_then(|v| v.as_str()).unwrap_or("")
+        }.to_string();
         let timestamps: Vec<i64> = receipt
             .get("timestamps")
             .and_then(|v| v.as_array())
@@ -804,6 +816,7 @@ mod tests {
 
     #[test]
     fn parse_receipt_event_extracts_type_and_timestamps() {
+        // signal-cli uses boolean fields: isDelivery, isRead, isViewed
         let resp = JsonRpcResponse {
             jsonrpc: "2.0".to_string(),
             id: None,
@@ -815,7 +828,10 @@ mod tests {
                     "sourceNumber": "+15551234567",
                     "timestamp": 1700000000000_i64,
                     "receiptMessage": {
-                        "type": "DELIVERY",
+                        "when": 1700000000000_i64,
+                        "isDelivery": true,
+                        "isRead": false,
+                        "isViewed": false,
                         "timestamps": [1700000000001_i64, 1700000000002_i64]
                     }
                 }
@@ -827,6 +843,37 @@ mod tests {
                 assert_eq!(sender, "+15551234567");
                 assert_eq!(receipt_type, "DELIVERY");
                 assert_eq!(timestamps, vec![1700000000001, 1700000000002]);
+            }
+            _ => panic!("Expected ReceiptReceived, got {:?}", event),
+        }
+    }
+
+    #[test]
+    fn parse_receipt_event_read() {
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            result: None,
+            error: None,
+            method: Some("receive".to_string()),
+            params: Some(json!({
+                "envelope": {
+                    "sourceNumber": "+15551234567",
+                    "timestamp": 1700000000000_i64,
+                    "receiptMessage": {
+                        "when": 1700000000000_i64,
+                        "isDelivery": false,
+                        "isRead": true,
+                        "isViewed": false,
+                        "timestamps": [1700000000001_i64]
+                    }
+                }
+            })),
+        };
+        let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
+        match event {
+            SignalEvent::ReceiptReceived { receipt_type, .. } => {
+                assert_eq!(receipt_type, "READ");
             }
             _ => panic!("Expected ReceiptReceived, got {:?}", event),
         }
