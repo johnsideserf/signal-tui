@@ -15,7 +15,7 @@ use std::time::Duration;
 use anyhow::Result;
 use crossterm::{
     cursor::{MoveTo, RestorePosition, SavePosition},
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{self, Event, KeyEventKind},
     execute, queue,
     style::{Print, ResetColor, SetForegroundColor},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -411,6 +411,27 @@ fn emit_native_images(
     Ok(())
 }
 
+/// Send a message via signal-cli, tracking the pending send for receipt correlation.
+async fn send_msg(
+    signal_client: &mut SignalClient,
+    app: &mut App,
+    recipient: &str,
+    body: &str,
+    is_group: bool,
+    local_ts_ms: i64,
+) {
+    match signal_client.send_message(recipient, body, is_group).await {
+        Ok(rpc_id) => {
+            debug_log::logf(format_args!("send: to={recipient} ts={local_ts_ms}"));
+            app.pending_sends
+                .insert(rpc_id, (recipient.to_string(), local_ts_ms));
+        }
+        Err(e) => {
+            app.status_message = format!("send error: {e}");
+        }
+    }
+}
+
 async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     signal_client: &mut SignalClient,
@@ -457,249 +478,22 @@ async fn run_app(
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
-                // === Global keys (both modes) ===
-                let handled = match (key.modifiers, key.code) {
-                    (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
-                        app.should_quit = true;
-                        true
+                if !app.handle_global_key(key.modifiers, key.code) {
+                    let (overlay_handled, send_request) = app.handle_overlay_key(key.code);
+                    if let Some((recipient, body, is_group, local_ts_ms)) = send_request {
+                        send_msg(signal_client, &mut app, &recipient, &body, is_group, local_ts_ms).await;
                     }
-                    (KeyModifiers::NONE, KeyCode::Tab) => {
-                        app.next_conversation();
-                        true
-                    }
-                    (KeyModifiers::SHIFT, KeyCode::BackTab) => {
-                        app.prev_conversation();
-                        true
-                    }
-                    (KeyModifiers::CONTROL, KeyCode::Left) => {
-                        app.resize_sidebar(-2);
-                        true
-                    }
-                    (KeyModifiers::CONTROL, KeyCode::Right) => {
-                        app.resize_sidebar(2);
-                        true
-                    }
-                    (_, KeyCode::PageUp) => {
-                        app.scroll_offset = app.scroll_offset.saturating_add(5);
-                        true
-                    }
-                    (_, KeyCode::PageDown) => {
-                        app.scroll_offset = app.scroll_offset.saturating_sub(5);
-                        true
-                    }
-                    _ => false,
-                };
-
-                if !handled {
-                    if app.show_help {
-                        // Any key dismisses the help overlay
-                        app.show_help = false;
-                    } else if app.show_contacts {
-                        app.handle_contacts_key(key.code);
-                    } else if app.show_settings {
-                        app.handle_settings_key(key.code);
-                    } else if app.autocomplete_visible {
-                        if let Some((recipient, body, is_group, local_ts_ms)) =
-                            app.handle_autocomplete_key(key.code)
-                        {
-                            match signal_client
-                                .send_message(&recipient, &body, is_group)
-                                .await
-                            {
-                                Ok(rpc_id) => {
-                                    app.pending_sends.insert(rpc_id, (recipient.clone(), local_ts_ms));
-                                }
-                                Err(e) => {
-                                    app.status_message = format!("send error: {e}");
-                                }
+                    if !overlay_handled {
+                        let send_request = match app.mode {
+                            InputMode::Normal => {
+                                app.handle_normal_key(key.modifiers, key.code);
+                                None
                             }
+                            InputMode::Insert => app.handle_insert_key(key.modifiers, key.code),
+                        };
+                        if let Some((recipient, body, is_group, local_ts_ms)) = send_request {
+                            send_msg(signal_client, &mut app, &recipient, &body, is_group, local_ts_ms).await;
                         }
-                    } else {
-                    match app.mode {
-                        // === Normal mode ===
-                        InputMode::Normal => match (key.modifiers, key.code) {
-                            // Scrolling
-                            (_, KeyCode::Char('j')) => {
-                                app.scroll_offset = app.scroll_offset.saturating_sub(1);
-                            }
-                            (_, KeyCode::Char('k')) => {
-                                app.scroll_offset = app.scroll_offset.saturating_add(1);
-                            }
-                            (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
-                                app.scroll_offset = app.scroll_offset.saturating_sub(10);
-                            }
-                            (KeyModifiers::CONTROL, KeyCode::Char('u')) => {
-                                app.scroll_offset = app.scroll_offset.saturating_add(10);
-                            }
-                            (_, KeyCode::Char('g')) => {
-                                // Scroll to top
-                                if let Some(ref id) = app.active_conversation {
-                                    if let Some(conv) = app.conversations.get(id) {
-                                        app.scroll_offset = conv.messages.len();
-                                    }
-                                }
-                            }
-                            (_, KeyCode::Char('G')) => {
-                                // Scroll to bottom
-                                app.scroll_offset = 0;
-                            }
-
-                            // Switch to Insert mode
-                            (_, KeyCode::Char('i')) => {
-                                app.mode = InputMode::Insert;
-                            }
-                            (_, KeyCode::Char('a')) => {
-                                // Cursor right 1, then Insert
-                                if app.input_cursor < app.input_buffer.len() {
-                                    app.input_cursor += 1;
-                                }
-                                app.mode = InputMode::Insert;
-                            }
-                            (_, KeyCode::Char('I')) => {
-                                app.input_cursor = 0;
-                                app.mode = InputMode::Insert;
-                            }
-                            (_, KeyCode::Char('A')) => {
-                                app.input_cursor = app.input_buffer.len();
-                                app.mode = InputMode::Insert;
-                            }
-                            (_, KeyCode::Char('o')) => {
-                                app.input_buffer.clear();
-                                app.input_cursor = 0;
-                                app.mode = InputMode::Insert;
-                            }
-
-                            // Cursor movement (Normal mode)
-                            (_, KeyCode::Char('h')) => {
-                                app.input_cursor = app.input_cursor.saturating_sub(1);
-                            }
-                            (_, KeyCode::Char('l')) => {
-                                if app.input_cursor < app.input_buffer.len() {
-                                    app.input_cursor += 1;
-                                }
-                            }
-                            (_, KeyCode::Char('0')) => {
-                                app.input_cursor = 0;
-                            }
-                            (_, KeyCode::Char('$')) => {
-                                app.input_cursor = app.input_buffer.len();
-                            }
-                            (_, KeyCode::Char('w')) => {
-                                // Move cursor forward one word (Unicode-safe)
-                                let buf = &app.input_buffer;
-                                let mut pos = app.input_cursor;
-                                // Skip current word chars
-                                while pos < buf.len() {
-                                    let c = buf[pos..].chars().next().unwrap();
-                                    if c.is_whitespace() { break; }
-                                    pos += c.len_utf8();
-                                }
-                                // Skip whitespace
-                                while pos < buf.len() {
-                                    let c = buf[pos..].chars().next().unwrap();
-                                    if !c.is_whitespace() { break; }
-                                    pos += c.len_utf8();
-                                }
-                                app.input_cursor = pos;
-                            }
-                            (_, KeyCode::Char('b')) => {
-                                // Move cursor back one word (Unicode-safe)
-                                let buf = &app.input_buffer;
-                                let mut pos = app.input_cursor;
-                                // Skip whitespace backwards
-                                while pos > 0 {
-                                    let prev = buf[..pos].chars().next_back().unwrap();
-                                    if !prev.is_whitespace() { break; }
-                                    pos -= prev.len_utf8();
-                                }
-                                // Skip word chars backwards
-                                while pos > 0 {
-                                    let prev = buf[..pos].chars().next_back().unwrap();
-                                    if prev.is_whitespace() { break; }
-                                    pos -= prev.len_utf8();
-                                }
-                                app.input_cursor = pos;
-                            }
-
-                            // Buffer editing (stay in Normal mode)
-                            (_, KeyCode::Char('x')) => {
-                                if app.input_cursor < app.input_buffer.len() {
-                                    app.input_buffer.remove(app.input_cursor);
-                                    // Keep cursor within bounds
-                                    if app.input_cursor > 0
-                                        && app.input_cursor >= app.input_buffer.len()
-                                    {
-                                        app.input_cursor = app.input_buffer.len().saturating_sub(1);
-                                    }
-                                }
-                            }
-                            (_, KeyCode::Char('D')) => {
-                                // Delete from cursor to end
-                                app.input_buffer.truncate(app.input_cursor);
-                            }
-
-                            // Copy message to clipboard
-                            (_, KeyCode::Char('y')) => {
-                                app.copy_selected_message(false);
-                            }
-                            (_, KeyCode::Char('Y')) => {
-                                app.copy_selected_message(true);
-                            }
-
-                            // Quick actions
-                            (_, KeyCode::Char('/')) => {
-                                app.input_buffer = "/".to_string();
-                                app.input_cursor = 1;
-                                app.mode = InputMode::Insert;
-                                app.update_autocomplete();
-                            }
-                            (_, KeyCode::Esc) => {
-                                // Clear buffer if non-empty
-                                if !app.input_buffer.is_empty() {
-                                    app.input_buffer.clear();
-                                    app.input_cursor = 0;
-                                }
-                            }
-
-                            _ => {}
-                        },
-
-                        // === Insert mode ===
-                        InputMode::Insert => match (key.modifiers, key.code) {
-                            (_, KeyCode::Esc) => {
-                                app.mode = InputMode::Normal;
-                                app.autocomplete_visible = false;
-                            }
-                            (_, KeyCode::Enter) => {
-                                if let Some((recipient, body, is_group, local_ts_ms)) = app.handle_input() {
-                                    match signal_client
-                                        .send_message(&recipient, &body, is_group)
-                                        .await
-                                    {
-                                        Ok(rpc_id) => {
-                                            debug_log::logf(format_args!(
-                                                "send: to={recipient} ts={local_ts_ms}"
-                                            ));
-                                            app.pending_sends.insert(rpc_id, (recipient.clone(), local_ts_ms));
-                                        }
-                                        Err(e) => {
-                                            app.status_message = format!("send error: {e}");
-                                        }
-                                    }
-                                }
-                            }
-                            _ => {
-                                let needs_ac_update = matches!(
-                                    key.code,
-                                    KeyCode::Backspace | KeyCode::Delete | KeyCode::Char(_)
-                                );
-                                app.apply_input_edit(key.code);
-                                if needs_ac_update {
-                                    app.update_autocomplete();
-                                }
-                            }
-                        },
-                    }
                     }
                 }
             }
@@ -779,192 +573,13 @@ async fn run_demo_app(
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
-                let handled = match (key.modifiers, key.code) {
-                    (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
-                        app.should_quit = true;
-                        true
-                    }
-                    (KeyModifiers::NONE, KeyCode::Tab) => {
-                        app.next_conversation();
-                        true
-                    }
-                    (KeyModifiers::SHIFT, KeyCode::BackTab) => {
-                        app.prev_conversation();
-                        true
-                    }
-                    (KeyModifiers::CONTROL, KeyCode::Left) => {
-                        app.resize_sidebar(-2);
-                        true
-                    }
-                    (KeyModifiers::CONTROL, KeyCode::Right) => {
-                        app.resize_sidebar(2);
-                        true
-                    }
-                    (_, KeyCode::PageUp) => {
-                        app.scroll_offset = app.scroll_offset.saturating_add(5);
-                        true
-                    }
-                    (_, KeyCode::PageDown) => {
-                        app.scroll_offset = app.scroll_offset.saturating_sub(5);
-                        true
-                    }
-                    _ => false,
-                };
-
-                if !handled {
-                    if app.show_help {
-                        app.show_help = false;
-                    } else if app.show_contacts {
-                        app.handle_contacts_key(key.code);
-                    } else if app.show_settings {
-                        app.handle_settings_key(key.code);
-                    } else if app.autocomplete_visible {
-                        // In demo mode, autocomplete commands are no-ops for sending
-                        app.handle_autocomplete_key(key.code);
-                    } else {
+                if !app.handle_global_key(key.modifiers, key.code) {
+                    let (overlay_handled, _) = app.handle_overlay_key(key.code);
+                    if !overlay_handled {
                         match app.mode {
-                            InputMode::Normal => match (key.modifiers, key.code) {
-                                (_, KeyCode::Char('j')) => {
-                                    app.scroll_offset = app.scroll_offset.saturating_sub(1);
-                                }
-                                (_, KeyCode::Char('k')) => {
-                                    app.scroll_offset = app.scroll_offset.saturating_add(1);
-                                }
-                                (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
-                                    app.scroll_offset = app.scroll_offset.saturating_sub(10);
-                                }
-                                (KeyModifiers::CONTROL, KeyCode::Char('u')) => {
-                                    app.scroll_offset = app.scroll_offset.saturating_add(10);
-                                }
-                                (_, KeyCode::Char('g')) => {
-                                    if let Some(ref id) = app.active_conversation {
-                                        if let Some(conv) = app.conversations.get(id) {
-                                            app.scroll_offset = conv.messages.len();
-                                        }
-                                    }
-                                }
-                                (_, KeyCode::Char('G')) => {
-                                    app.scroll_offset = 0;
-                                }
-                                (_, KeyCode::Char('i')) => {
-                                    app.mode = InputMode::Insert;
-                                }
-                                (_, KeyCode::Char('a')) => {
-                                    if app.input_cursor < app.input_buffer.len() {
-                                        app.input_cursor += 1;
-                                    }
-                                    app.mode = InputMode::Insert;
-                                }
-                                (_, KeyCode::Char('I')) => {
-                                    app.input_cursor = 0;
-                                    app.mode = InputMode::Insert;
-                                }
-                                (_, KeyCode::Char('A')) => {
-                                    app.input_cursor = app.input_buffer.len();
-                                    app.mode = InputMode::Insert;
-                                }
-                                (_, KeyCode::Char('o')) => {
-                                    app.input_buffer.clear();
-                                    app.input_cursor = 0;
-                                    app.mode = InputMode::Insert;
-                                }
-                                (_, KeyCode::Char('h')) => {
-                                    app.input_cursor = app.input_cursor.saturating_sub(1);
-                                }
-                                (_, KeyCode::Char('l')) => {
-                                    if app.input_cursor < app.input_buffer.len() {
-                                        app.input_cursor += 1;
-                                    }
-                                }
-                                (_, KeyCode::Char('0')) => {
-                                    app.input_cursor = 0;
-                                }
-                                (_, KeyCode::Char('$')) => {
-                                    app.input_cursor = app.input_buffer.len();
-                                }
-                                (_, KeyCode::Char('w')) => {
-                                    let buf = &app.input_buffer;
-                                    let mut pos = app.input_cursor;
-                                    while pos < buf.len() {
-                                        let c = buf[pos..].chars().next().unwrap();
-                                        if c.is_whitespace() { break; }
-                                        pos += c.len_utf8();
-                                    }
-                                    while pos < buf.len() {
-                                        let c = buf[pos..].chars().next().unwrap();
-                                        if !c.is_whitespace() { break; }
-                                        pos += c.len_utf8();
-                                    }
-                                    app.input_cursor = pos;
-                                }
-                                (_, KeyCode::Char('b')) => {
-                                    let buf = &app.input_buffer;
-                                    let mut pos = app.input_cursor;
-                                    while pos > 0 {
-                                        let prev = buf[..pos].chars().next_back().unwrap();
-                                        if !prev.is_whitespace() { break; }
-                                        pos -= prev.len_utf8();
-                                    }
-                                    while pos > 0 {
-                                        let prev = buf[..pos].chars().next_back().unwrap();
-                                        if prev.is_whitespace() { break; }
-                                        pos -= prev.len_utf8();
-                                    }
-                                    app.input_cursor = pos;
-                                }
-                                (_, KeyCode::Char('x')) => {
-                                    if app.input_cursor < app.input_buffer.len() {
-                                        app.input_buffer.remove(app.input_cursor);
-                                        if app.input_cursor > 0
-                                            && app.input_cursor >= app.input_buffer.len()
-                                        {
-                                            app.input_cursor = app.input_buffer.len().saturating_sub(1);
-                                        }
-                                    }
-                                }
-                                (_, KeyCode::Char('D')) => {
-                                    app.input_buffer.truncate(app.input_cursor);
-                                }
-                                (_, KeyCode::Char('y')) => {
-                                    app.copy_selected_message(false);
-                                }
-                                (_, KeyCode::Char('Y')) => {
-                                    app.copy_selected_message(true);
-                                }
-                                (_, KeyCode::Char('/')) => {
-                                    app.input_buffer = "/".to_string();
-                                    app.input_cursor = 1;
-                                    app.mode = InputMode::Insert;
-                                    app.update_autocomplete();
-                                }
-                                (_, KeyCode::Esc) => {
-                                    if !app.input_buffer.is_empty() {
-                                        app.input_buffer.clear();
-                                        app.input_cursor = 0;
-                                    }
-                                }
-                                _ => {}
-                            },
-                            InputMode::Insert => match (key.modifiers, key.code) {
-                                (_, KeyCode::Esc) => {
-                                    app.mode = InputMode::Normal;
-                                    app.autocomplete_visible = false;
-                                }
-                                (_, KeyCode::Enter) => {
-                                    // In demo mode, messages echo locally but don't send
-                                    app.handle_input();
-                                }
-                                _ => {
-                                    let needs_ac_update = matches!(
-                                        key.code,
-                                        KeyCode::Backspace | KeyCode::Delete | KeyCode::Char(_)
-                                    );
-                                    app.apply_input_edit(key.code);
-                                    if needs_ac_update {
-                                        app.update_autocomplete();
-                                    }
-                                }
-                            },
+                            InputMode::Normal => app.handle_normal_key(key.modifiers, key.code),
+                            // In demo mode, messages echo locally but don't send
+                            InputMode::Insert => { app.handle_insert_key(key.modifiers, key.code); }
                         }
                     }
                 }
