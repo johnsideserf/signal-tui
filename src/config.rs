@@ -27,6 +27,10 @@ pub struct Config {
     /// Show inline halfblock image previews in chat
     #[serde(default = "default_true")]
     pub inline_images: bool,
+
+    /// Experimental: use native terminal image protocols (Kitty/iTerm2) over halfblock
+    #[serde(default)]
+    pub native_images: bool,
 }
 
 fn default_true() -> bool {
@@ -52,6 +56,7 @@ impl Default for Config {
             notify_direct: true,
             notify_group: true,
             inline_images: true,
+            native_images: false,
         }
     }
 }

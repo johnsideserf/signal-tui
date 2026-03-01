@@ -526,7 +526,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut prev_date: Option<String> = None;
 
     // Track images for native protocol overlay: (first_line_index, line_count, path)
-    let use_native = app.image_protocol != ImageProtocol::Halfblock;
+    let use_native = app.native_images && app.image_protocol != ImageProtocol::Halfblock;
     let mut image_records: Vec<(usize, usize, String)> = Vec::new();
 
     for (i, msg) in visible.iter().enumerate() {
@@ -946,7 +946,7 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect) {
 
 fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
     let popup_width: u16 = 42.min(area.width.saturating_sub(4));
-    let popup_height: u16 = 10.min(area.height.saturating_sub(2));
+    let popup_height: u16 = 11.min(area.height.saturating_sub(2));
 
     let x = (area.width.saturating_sub(popup_width)) / 2;
     let y = (area.height.saturating_sub(popup_height)) / 2;

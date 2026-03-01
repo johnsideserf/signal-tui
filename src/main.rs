@@ -410,6 +410,7 @@ async fn run_app(
     app.notify_direct = config.notify_direct;
     app.notify_group = config.notify_group;
     app.inline_images = config.inline_images;
+    app.native_images = config.native_images;
     app.incognito = incognito;
     app.load_from_db()?;
     app.set_connected();
@@ -421,7 +422,7 @@ async fn run_app(
 
     loop {
         // Force full redraw when active conversation changes (clears native image artifacts)
-        if app.active_conversation != app.prev_active_conversation {
+        if app.native_images && app.active_conversation != app.prev_active_conversation {
             app.prev_active_conversation = app.active_conversation.clone();
             terminal.clear()?;
         }
@@ -429,7 +430,9 @@ async fn run_app(
         // Render
         terminal.draw(|frame| ui::draw(frame, &mut app))?;
         emit_osc8_links(terminal.backend_mut(), &app.link_regions)?;
-        emit_native_images(terminal.backend_mut(), &mut app)?;
+        if app.native_images {
+            emit_native_images(terminal.backend_mut(), &mut app)?;
+        }
 
         // Poll for events with a short timeout so we stay responsive to signal events
         let has_terminal_event = event::poll(Duration::from_millis(50))?;
@@ -722,15 +725,16 @@ async fn run_demo_app(
     populate_demo_data(&mut app);
 
     loop {
-        // Force full redraw when active conversation changes (clears native image artifacts)
-        if app.active_conversation != app.prev_active_conversation {
+        if app.native_images && app.active_conversation != app.prev_active_conversation {
             app.prev_active_conversation = app.active_conversation.clone();
             terminal.clear()?;
         }
 
         terminal.draw(|frame| ui::draw(frame, &mut app))?;
         emit_osc8_links(terminal.backend_mut(), &app.link_regions)?;
-        emit_native_images(terminal.backend_mut(), &mut app)?;
+        if app.native_images {
+            emit_native_images(terminal.backend_mut(), &mut app)?;
+        }
 
         let has_terminal_event = event::poll(Duration::from_millis(50))?;
 

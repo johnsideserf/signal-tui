@@ -132,6 +132,8 @@ pub struct App {
     pub image_protocol: ImageProtocol,
     /// Images visible on screen for native protocol overlay (cleared each frame)
     pub visible_images: Vec<VisibleImage>,
+    /// Experimental: use native terminal image protocols (Kitty/iTerm2) instead of halfblock
+    pub native_images: bool,
     /// Cache of base64-encoded pre-resized PNGs for native protocol (path → base64)
     pub native_image_cache: HashMap<String, String>,
     /// Previous active conversation ID, for detecting chat switches
@@ -145,6 +147,7 @@ pub const SETTINGS_ITEMS: &[&str] = &[
     "Group message notifications",
     "Sidebar visible",
     "Inline image previews",
+    "Native images (experimental)",
 ];
 
 impl App {
@@ -154,6 +157,7 @@ impl App {
             1 => self.notify_group = !self.notify_group,
             2 => self.sidebar_visible = !self.sidebar_visible,
             3 => self.inline_images = !self.inline_images,
+            4 => self.native_images = !self.native_images,
             _ => {}
         }
     }
@@ -164,6 +168,7 @@ impl App {
             1 => self.notify_group,
             2 => self.sidebar_visible,
             3 => self.inline_images,
+            4 => self.native_images,
             _ => false,
         }
     }
@@ -268,6 +273,7 @@ impl App {
             link_url_map: HashMap::new(),
             image_protocol: image_render::detect_protocol(),
             visible_images: Vec::new(),
+            native_images: false,
             native_image_cache: HashMap::new(),
             prev_active_conversation: None,
             incognito: false,
