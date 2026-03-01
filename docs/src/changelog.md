@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.4.0
+
+### Contact list
+
+- **`/contacts` command** -- new overlay for browsing all synced contacts,
+  with j/k navigation, type-to-filter by name or number, and Enter to
+  open a conversation (alias: `/c`) (closes #22)
+
+### Clipboard
+
+- **Copy to clipboard** -- in Normal mode, `y` copies the selected
+  message body and `Y` copies the full formatted line
+  (`[HH:MM] <sender> body`) to the system clipboard (closes #28)
+
+### Navigation
+
+- **Full timestamp on scroll** -- when scrolling through messages in
+  Normal mode, the status bar now shows the full date and time of the
+  focused message (e.g. "Sun Mar 01, 2026 12:34:56 PM") (closes #27)
+
+---
+
 ## v0.3.3
 
 ### Bug fixes

@@ -32,6 +32,17 @@
   - Configurable via /settings (receipts, colors, Nerd Font icons)
   - Optional `--debug` flag for protocol diagnostics
 
+- [x] **Contact list overlay**
+  - `/contacts` (alias `/c`) command to browse synced contacts
+  - Type-to-filter, j/k navigation, Enter to open conversation
+
+- [x] **Copy to clipboard**
+  - `y` copies message body, `Y` copies full formatted line
+  - Cross-platform via arboard crate
+
+- [x] **Full timestamp on scroll**
+  - Status bar shows full date+time of focused message when scrolling
+
 - [ ] **Send attachments**
   - Only receiving works today
   - Add `/send-file <path>` command
