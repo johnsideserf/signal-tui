@@ -623,13 +623,16 @@ impl App {
                 // Find the outgoing message with matching local timestamp
                 for msg in conv.messages.iter_mut().rev() {
                     if msg.sender == "you" && msg.timestamp_ms == local_ts {
-                        msg.timestamp_ms = server_ts;
-                        msg.status = Some(MessageStatus::Sent);
-                        let _ = self.db.update_message_status(
+                        let effective_ts = if server_ts != 0 { server_ts } else { local_ts };
+                        // Update the DB row's timestamp_ms from local → server
+                        let _ = self.db.update_message_timestamp_ms(
                             &conv_id,
-                            server_ts,
+                            local_ts,
+                            effective_ts,
                             MessageStatus::Sent.to_i32(),
                         );
+                        msg.timestamp_ms = effective_ts;
+                        msg.status = Some(MessageStatus::Sent);
                         break;
                     }
                 }
@@ -656,7 +659,8 @@ impl App {
     }
 
     fn handle_receipt(&mut self, sender: &str, receipt_type: &str, timestamps: &[i64]) {
-        let new_status = match receipt_type {
+        let receipt_upper = receipt_type.to_uppercase();
+        let new_status = match receipt_upper.as_str() {
             "DELIVERY" => MessageStatus::Delivered,
             "READ" => MessageStatus::Read,
             "VIEWED" => MessageStatus::Viewed,

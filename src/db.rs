@@ -237,6 +237,23 @@ impl Database {
         Ok(())
     }
 
+    /// Update timestamp_ms and status for an outgoing message when the server assigns
+    /// a canonical timestamp (replacing the local one).
+    pub fn update_message_timestamp_ms(
+        &self,
+        conv_id: &str,
+        old_ts: i64,
+        new_ts: i64,
+        status: i32,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE messages SET timestamp_ms = ?3, status = ?4
+             WHERE conversation_id = ?1 AND timestamp_ms = ?2 AND sender = 'you'",
+            params![conv_id, old_ts, new_ts, status],
+        )?;
+        Ok(())
+    }
+
     // --- Read markers ---
 
     pub fn save_read_marker(&self, conv_id: &str, last_rowid: i64) -> Result<()> {

@@ -218,10 +218,11 @@ impl SignalClient {
 fn parse_rpc_result(method: &str, result: &serde_json::Value, rpc_id: Option<&str>) -> Option<SignalEvent> {
     match method {
         "send" => {
+            let id = rpc_id?.to_string();
             // signal-cli send response includes result.timestamp (server-assigned ms epoch)
             let server_ts = result.get("timestamp").and_then(|v| v.as_i64())
-                .or_else(|| result.as_i64())?;
-            let id = rpc_id?.to_string();
+                .or_else(|| result.as_i64())
+                .unwrap_or(0);
             Some(SignalEvent::SendTimestamp { rpc_id: id, server_ts })
         }
         "listContacts" => {
