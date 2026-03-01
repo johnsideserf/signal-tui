@@ -1246,7 +1246,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
     let shortcuts: &[(&str, &str)] = &[
         ("Tab / Shift+Tab", "Next / prev conversation"),
         ("Up / Down", "Recall input history"),
-        ("@", "Mention autocomplete (groups)"),
+        ("@", "Mention autocomplete"),
         ("PgUp / PgDn", "Scroll messages"),
         ("Ctrl+Left/Right", "Resize sidebar"),
         ("Ctrl+C", "Quit"),

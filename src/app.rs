@@ -1273,9 +1273,6 @@ impl App {
         // Convert body to UTF-16 for offset mapping
         let utf16: Vec<u16> = body.encode_utf16().collect();
         let mut result_utf16 = utf16.clone();
-        // Track replacement info: (utf16_start, old_utf16_len, replacement_utf16)
-        let mut replacements: Vec<(usize, usize, Vec<u16>)> = Vec::new();
-
         for mention in &sorted {
             if mention.start >= result_utf16.len() {
                 continue;
@@ -1296,7 +1293,6 @@ impl App {
             let replacement = format!("@{name}");
             let replacement_utf16: Vec<u16> = replacement.encode_utf16().collect();
             let end = (mention.start + mention.length).min(result_utf16.len());
-            replacements.push((mention.start, end - mention.start, replacement_utf16.clone()));
             result_utf16.splice(mention.start..end, replacement_utf16);
         }
 
@@ -1729,7 +1725,7 @@ impl App {
         }
 
         // Try @mention autocomplete
-        if let Some(ref conv_id) = self.active_conversation.clone() {
+        if let Some(ref conv_id) = self.active_conversation {
             if let Some(conv) = self.conversations.get(conv_id) {
                 if let Some(trigger_pos) = self.find_mention_trigger() {
                     let after_at = &self.input_buffer[trigger_pos + 1..self.input_cursor];
