@@ -132,6 +132,10 @@ pub struct App {
     pub image_protocol: ImageProtocol,
     /// Images visible on screen for native protocol overlay (cleared each frame)
     pub visible_images: Vec<VisibleImage>,
+    /// Cache of base64-encoded pre-resized PNGs for native protocol (path → base64)
+    pub native_image_cache: HashMap<String, String>,
+    /// Previous active conversation ID, for detecting chat switches
+    pub prev_active_conversation: Option<String>,
     /// Incognito mode — in-memory DB, no local persistence
     pub incognito: bool,
 }
@@ -264,6 +268,8 @@ impl App {
             link_url_map: HashMap::new(),
             image_protocol: image_render::detect_protocol(),
             visible_images: Vec::new(),
+            native_image_cache: HashMap::new(),
+            prev_active_conversation: None,
             incognito: false,
         }
     }
@@ -295,7 +301,7 @@ impl App {
                         if path.exists() {
                             msg.image_path = Some(p.clone());
                             if self.inline_images {
-                                msg.image_lines = image_render::render_image(path, 80);
+                                msg.image_lines = image_render::render_image(path, 40);
                             }
                         }
                     }
