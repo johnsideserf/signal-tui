@@ -528,10 +528,315 @@ body {
 }
 
 /* ═══════════════════════════════════════════════════════════
+ *  DARK MODE TOGGLE BUTTON
+ * ═══════════════════════════════════════════════════════════ */
+.irc-dark-toggle {
+    cursor: pointer;
+    line-height: var(--menu-bar-height);
+    padding: 0 8px;
+}
+
+.irc-dark-toggle .toggle-icon {
+    font-size: 1.2em;
+}
+
+/* ═══════════════════════════════════════════════════════════
+ *  DARK MODE — irssi / terminal IRC aesthetic
+ *  Activated via data-irc-mode="dark" on <html>
+ * ═══════════════════════════════════════════════════════════ */
+html[data-irc-mode="dark"] {
+    --irc-bg:         #1a1a1a;
+    --irc-bg-alt:     #222222;
+    --irc-sidebar-bg: #141414;
+    --irc-code-bg:    #111111;
+    --irc-panel-bg:   #2a2a2a;
+
+    --irc-text:       #cccccc;
+    --irc-text-dim:   #888888;
+    --irc-text-light: #666666;
+
+    --irc-blue:       #5599ff;
+    --irc-green:      #44bb44;
+    --irc-red:        #ff5555;
+    --irc-brown:      #cc9944;
+    --irc-purple:     #bb77dd;
+    --irc-teal:       #44bbbb;
+    --irc-navy:       #6688cc;
+    --irc-magenta:    #ee66cc;
+
+    --bevel-light:    #3a3a3a;
+    --bevel-dark:     #0a0a0a;
+    --bevel-shadow:   #000000;
+    --border-mid:     #333333;
+
+    --link-blue:      #6699ff;
+    --link-visited:   #aa88cc;
+}
+
+/* override mdBook theme vars in dark mode */
+html[data-irc-mode="dark"] .coal,
+html[data-irc-mode="dark"] .light,
+html[data-irc-mode="dark"] .ayu,
+html[data-irc-mode="dark"] .navy,
+html[data-irc-mode="dark"] .rust,
+html[data-irc-mode="dark"]:not(.js) {
+    --bg:                 var(--irc-bg);
+    --fg:                 var(--irc-text);
+    --sidebar-bg:         var(--irc-sidebar-bg);
+    --sidebar-fg:         var(--irc-text-dim);
+    --sidebar-active:     var(--irc-blue);
+    --sidebar-non-existant: var(--irc-text-light);
+    --sidebar-spacer:     var(--border-mid);
+    --links:              var(--link-blue);
+    --inline-code-color:  var(--irc-teal);
+    --theme-popup-bg:     var(--irc-bg);
+    --theme-popup-border: var(--border-mid);
+    --theme-hover:        var(--irc-bg-alt);
+    --icons:              var(--irc-text-dim);
+    --icons-hover:        var(--irc-text);
+    --scrollbar:          var(--border-mid);
+    --quote-bg:           var(--irc-bg-alt);
+    --quote-border:       var(--border-mid);
+    --table-border-color: var(--border-mid);
+    --table-header-bg:    var(--irc-panel-bg);
+    --table-alternate-bg: #1f1f1f;
+    --searchbar-border-color: var(--border-mid);
+    --searchbar-bg:       #111111;
+    --searchbar-fg:       var(--irc-text);
+    --searchbar-shadow-color: #000;
+    --searchresults-header-fg: var(--irc-text-dim);
+    --searchresults-border-color: var(--border-mid);
+    --searchresults-li-bg: var(--irc-bg-alt);
+    --search-mark-bg:     #555500;
+    --warning-border:     #ff8e00;
+    --color-scheme:       dark;
+    --sidebar-header-border-color: var(--irc-blue);
+
+    --copy-button-filter: invert(55%);
+    --copy-button-filter-hover: invert(75%);
+    --overlay-bg: rgba(0, 0, 0, 0.5);
+}
+
+/* ── dark: page background ─────────────────────────────── */
+html[data-irc-mode="dark"] {
+    background-color: var(--irc-bg) !important;
+}
+
+html[data-irc-mode="dark"] body {
+    color: var(--irc-text);
+}
+
+/* ── dark: menu bar ────────────────────────────────────── */
+html[data-irc-mode="dark"] #mdbook-menu-bar,
+html[data-irc-mode="dark"] #mdbook-menu-bar.bordered {
+    background-color: var(--irc-panel-bg) !important;
+    border-bottom-color: var(--bevel-dark) !important;
+    border-top-color: var(--bevel-light) !important;
+}
+
+html[data-irc-mode="dark"] .menu-bar h1.menu-title {
+    color: var(--irc-navy) !important;
+}
+
+html[data-irc-mode="dark"] .menu-bar .icon-button {
+    color: var(--irc-text-dim);
+}
+
+html[data-irc-mode="dark"] .menu-bar .icon-button:hover {
+    color: var(--irc-text);
+}
+
+/* ── dark: sidebar ─────────────────────────────────────── */
+html[data-irc-mode="dark"] .sidebar {
+    background-color: var(--irc-sidebar-bg) !important;
+    border-right-color: var(--bevel-dark);
+}
+
+html[data-irc-mode="dark"] .sidebar .sidebar-scrollbox {
+    background-color: var(--irc-sidebar-bg) !important;
+}
+
+html[data-irc-mode="dark"] .sidebar .chapter li.part-title {
+    color: var(--irc-navy);
+    background-color: var(--irc-panel-bg);
+    border-color: var(--border-mid);
+}
+
+html[data-irc-mode="dark"] .sidebar .chapter a {
+    color: var(--irc-text-dim);
+}
+
+html[data-irc-mode="dark"] .sidebar .chapter a:hover {
+    color: var(--irc-blue);
+    background-color: var(--irc-bg-alt);
+}
+
+html[data-irc-mode="dark"] .sidebar .chapter li.chapter-item.expanded > a,
+html[data-irc-mode="dark"] .sidebar .chapter a.active {
+    color: #ffffff;
+    background-color: var(--irc-blue);
+}
+
+/* ── dark: headings ────────────────────────────────────── */
+html[data-irc-mode="dark"] .content h1 {
+    color: var(--irc-navy);
+    border-bottom-color: var(--irc-navy);
+}
+
+html[data-irc-mode="dark"] .content h2 {
+    color: var(--irc-green);
+    border-bottom-color: var(--border-mid);
+}
+
+html[data-irc-mode="dark"] .content h3 {
+    color: var(--irc-brown);
+}
+
+html[data-irc-mode="dark"] .content h4 {
+    color: var(--irc-purple);
+}
+
+/* ── dark: code ────────────────────────────────────────── */
+html[data-irc-mode="dark"] .content code {
+    color: var(--irc-teal);
+    background-color: var(--irc-code-bg);
+    border-color: var(--border-mid);
+}
+
+html[data-irc-mode="dark"] .content pre {
+    background-color: #0d0d0d !important;
+    border-color: var(--bevel-dark) var(--bevel-light) var(--bevel-light) var(--bevel-dark);
+}
+
+html[data-irc-mode="dark"] .content pre::before {
+    background: linear-gradient(90deg, #2a2a5a, #3a3a7a);
+}
+
+html[data-irc-mode="dark"] .content pre > code {
+    color: var(--irc-text);
+}
+
+/* ── dark: tables ──────────────────────────────────────── */
+html[data-irc-mode="dark"] .content table {
+    border-color: var(--bevel-dark) var(--bevel-light) var(--bevel-light) var(--bevel-dark);
+}
+
+html[data-irc-mode="dark"] .content table th {
+    background: linear-gradient(90deg, #2a2a5a, #3a3a7a);
+    border-color: var(--bevel-dark);
+}
+
+html[data-irc-mode="dark"] .content table td {
+    border-color: var(--border-mid);
+}
+
+html[data-irc-mode="dark"] .content table tr:nth-child(even) {
+    background-color: #1f1f1f;
+}
+
+html[data-irc-mode="dark"] .content table tr:hover {
+    background-color: #252540;
+}
+
+/* ── dark: links ───────────────────────────────────────── */
+html[data-irc-mode="dark"] .content a {
+    color: var(--link-blue);
+}
+
+html[data-irc-mode="dark"] .content a:visited {
+    color: var(--link-visited);
+}
+
+html[data-irc-mode="dark"] .content a:hover {
+    color: var(--irc-red);
+}
+
+/* ── dark: blockquotes ─────────────────────────────────── */
+html[data-irc-mode="dark"] .content blockquote {
+    background-color: var(--irc-bg-alt);
+    border-left-color: var(--irc-green);
+    color: var(--irc-text-dim);
+}
+
+/* ── dark: strong ──────────────────────────────────────── */
+html[data-irc-mode="dark"] .content strong {
+    color: var(--irc-text);
+}
+
+/* ── dark: search ──────────────────────────────────────── */
+html[data-irc-mode="dark"] #searchbar {
+    background-color: #111111 !important;
+    border-color: var(--bevel-dark) var(--bevel-light) var(--bevel-light) var(--bevel-dark) !important;
+    color: var(--irc-text) !important;
+}
+
+/* ── dark: hr ──────────────────────────────────────────── */
+html[data-irc-mode="dark"] .content hr {
+    border-top-color: var(--bevel-dark);
+    border-bottom-color: var(--bevel-light);
+}
+
+/* ── dark: help popup ──────────────────────────────────── */
+html[data-irc-mode="dark"] #mdbook-help-popup {
+    background-color: var(--irc-bg) !important;
+    border-color: var(--bevel-light) var(--bevel-dark) var(--bevel-dark) var(--bevel-light) !important;
+}
+
+html[data-irc-mode="dark"] #mdbook-help-popup h2 {
+    color: var(--irc-navy);
+}
+
+html[data-irc-mode="dark"] #mdbook-help-popup kbd {
+    background-color: var(--irc-panel-bg);
+    border-color: var(--bevel-light) var(--bevel-dark) var(--bevel-dark) var(--bevel-light);
+    color: var(--irc-text);
+}
+
+/* ── dark: warnings ────────────────────────────────────── */
+html[data-irc-mode="dark"] .content .warning {
+    background-color: #2a1515;
+}
+
+/* ── dark: selection ───────────────────────────────────── */
+html[data-irc-mode="dark"] ::selection {
+    background-color: var(--irc-blue);
+    color: #ffffff;
+}
+
+/* ── dark: scrollbar ───────────────────────────────────── */
+html[data-irc-mode="dark"] ::-webkit-scrollbar-track {
+    background: #111111;
+    border-color: var(--border-mid);
+}
+
+html[data-irc-mode="dark"] ::-webkit-scrollbar-thumb {
+    background: var(--irc-panel-bg);
+    border-color: var(--bevel-light) var(--bevel-dark) var(--bevel-dark) var(--bevel-light);
+}
+
+html[data-irc-mode="dark"] ::-webkit-scrollbar-thumb:hover {
+    background: #3a3a3a;
+}
+
+html[data-irc-mode="dark"] ::-webkit-scrollbar-button {
+    background: var(--irc-panel-bg);
+    border-color: var(--bevel-light) var(--bevel-dark) var(--bevel-dark) var(--bevel-light);
+}
+
+/* ── dark: status bar ──────────────────────────────────── */
+html[data-irc-mode="dark"] #mdbook-content.content main {
+    border-bottom-color: var(--bevel-dark);
+}
+
+/* ═══════════════════════════════════════════════════════════
  *  PRINT — strip decorative elements
  * ═══════════════════════════════════════════════════════════ */
 @media print {
     .content pre::before {
+        display: none !important;
+    }
+
+    .irc-dark-toggle {
         display: none !important;
     }
 }
