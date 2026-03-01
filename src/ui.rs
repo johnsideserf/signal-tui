@@ -11,10 +11,9 @@ use ratatui::{
 };
 
 use crate::app::{App, InputMode, VisibleImage, QUICK_REACTIONS, SETTINGS};
-use crate::signal::types::Reaction;
+use crate::signal::types::{MessageStatus, Reaction};
 use crate::image_render::ImageProtocol;
 use crate::input::COMMANDS;
-use crate::signal::types::MessageStatus;
 
 // Layout constants
 const SIDEBAR_AUTO_HIDE_WIDTH: u16 = 60;

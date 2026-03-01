@@ -192,11 +192,20 @@ impl Database {
             // Reverse so oldest first
             messages.reverse();
 
-            // Attach reactions from DB to matching messages
+            // Attach reactions from DB to matching messages.
+            // Match on timestamp AND author when possible. Since msg.sender may be
+            // a display name while target_author is a phone number, we accept:
+            // exact match, msg.sender == "you", or fall back to timestamp-only.
             if let Ok(reactions) = self.load_reactions(&id) {
-                for (target_ts, _target_author, emoji, sender) in reactions {
-                    if let Some(msg) = messages.iter_mut().find(|m| m.timestamp_ms == target_ts) {
-                        // Replace existing reaction from same sender, or push new
+                for (target_ts, target_author, emoji, sender) in reactions {
+                    // Find best match: prefer author+timestamp, fall back to timestamp-only
+                    let idx = messages.iter().position(|m| {
+                        m.timestamp_ms == target_ts
+                            && (m.sender == target_author || m.sender == "you")
+                    }).or_else(|| {
+                        messages.iter().position(|m| m.timestamp_ms == target_ts)
+                    });
+                    if let Some(msg) = idx.and_then(|i| messages.get_mut(i)) {
                         if let Some(existing) = msg.reactions.iter_mut().find(|r| r.sender == sender) {
                             existing.emoji = emoji;
                         } else {

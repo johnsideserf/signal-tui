@@ -869,7 +869,7 @@ impl App {
 
             // React to focused message
             (_, KeyCode::Char('r')) => {
-                if self.selected_message().is_some() {
+                if self.selected_message().is_some_and(|m| !m.is_system) {
                     self.show_reaction_picker = true;
                     self.reaction_picker_index = 0;
                 }
@@ -1096,10 +1096,20 @@ impl App {
         target_timestamp: i64,
         is_remove: bool,
     ) {
-        // Find the message in memory and update reactions
-        // Pre-resolve target_author display name to avoid borrow conflict
+        // Find the message in memory and update reactions.
+        // Pre-resolve names to avoid borrow conflict with self.conversations.
         let account = &self.account;
         let target_display = self.contact_names.get(target_author).cloned();
+        // Resolve sender phone number to display name for rendering
+        let is_self = sender == self.account;
+        let sender_display = if is_self {
+            "you".to_string()
+        } else {
+            self.contact_names
+                .get(sender)
+                .cloned()
+                .unwrap_or_else(|| sender.to_string())
+        };
         if let Some(conv) = self.conversations.get_mut(conv_id) {
             let found = conv.messages.iter_mut().rev().find(|m| {
                 if m.timestamp_ms != target_timestamp {
@@ -1114,15 +1124,16 @@ impl App {
             });
             if let Some(msg) = found {
                 if is_remove {
-                    msg.reactions.retain(|r| r.sender != sender);
+                    // Match by display name or "you" (for own reactions from other devices)
+                    msg.reactions.retain(|r| r.sender != sender_display);
                 } else {
                     // One reaction per user — replace or push
-                    if let Some(existing) = msg.reactions.iter_mut().find(|r| r.sender == sender) {
+                    if let Some(existing) = msg.reactions.iter_mut().find(|r| r.sender == sender_display) {
                         existing.emoji = emoji.to_string();
                     } else {
                         msg.reactions.push(Reaction {
                             emoji: emoji.to_string(),
-                            sender: sender.to_string(),
+                            sender: sender_display,
                         });
                     }
                 }
@@ -2521,5 +2532,187 @@ mod tests {
             Some(MessageStatus::Delivered)
         );
         assert!(app.pending_receipts.is_empty());
+    }
+
+    // --- Reaction tests ---
+
+    #[test]
+    fn handle_reaction_adds_to_message() {
+        let mut app = test_app();
+        let msg = SignalMessage {
+            source: "+1".to_string(),
+            source_name: Some("Alice".to_string()),
+            timestamp: chrono::Utc::now(),
+            body: Some("hello".to_string()),
+            attachments: vec![],
+            group_id: None,
+            group_name: None,
+            is_outgoing: false,
+            destination: None,
+        };
+        app.handle_signal_event(SignalEvent::MessageReceived(msg));
+        let ts_ms = app.conversations["+1"].messages[0].timestamp_ms;
+
+        // React with thumbs up
+        app.handle_signal_event(SignalEvent::ReactionReceived {
+            conv_id: "+1".to_string(),
+            emoji: "\u{1f44d}".to_string(),
+            sender: "+2".to_string(),
+            sender_name: Some("Bob".to_string()),
+            target_author: "+1".to_string(),
+            target_timestamp: ts_ms,
+            is_remove: false,
+        });
+
+        let reactions = &app.conversations["+1"].messages[0].reactions;
+        assert_eq!(reactions.len(), 1);
+        assert_eq!(reactions[0].emoji, "\u{1f44d}");
+        // Sender should be resolved to display name
+        assert_eq!(reactions[0].sender, "Bob");
+    }
+
+    #[test]
+    fn handle_reaction_replaces_existing_from_same_sender() {
+        let mut app = test_app();
+        let msg = SignalMessage {
+            source: "+1".to_string(),
+            source_name: Some("Alice".to_string()),
+            timestamp: chrono::Utc::now(),
+            body: Some("hello".to_string()),
+            attachments: vec![],
+            group_id: None,
+            group_name: None,
+            is_outgoing: false,
+            destination: None,
+        };
+        app.handle_signal_event(SignalEvent::MessageReceived(msg));
+        let ts_ms = app.conversations["+1"].messages[0].timestamp_ms;
+
+        // First reaction
+        app.handle_signal_event(SignalEvent::ReactionReceived {
+            conv_id: "+1".to_string(),
+            emoji: "\u{1f44d}".to_string(),
+            sender: "+2".to_string(),
+            sender_name: Some("Bob".to_string()),
+            target_author: "+1".to_string(),
+            target_timestamp: ts_ms,
+            is_remove: false,
+        });
+        // Replace with different emoji
+        app.handle_signal_event(SignalEvent::ReactionReceived {
+            conv_id: "+1".to_string(),
+            emoji: "\u{2764}\u{fe0f}".to_string(),
+            sender: "+2".to_string(),
+            sender_name: Some("Bob".to_string()),
+            target_author: "+1".to_string(),
+            target_timestamp: ts_ms,
+            is_remove: false,
+        });
+
+        let reactions = &app.conversations["+1"].messages[0].reactions;
+        assert_eq!(reactions.len(), 1);
+        assert_eq!(reactions[0].emoji, "\u{2764}\u{fe0f}");
+    }
+
+    #[test]
+    fn handle_reaction_remove() {
+        let mut app = test_app();
+        let msg = SignalMessage {
+            source: "+1".to_string(),
+            source_name: Some("Alice".to_string()),
+            timestamp: chrono::Utc::now(),
+            body: Some("hello".to_string()),
+            attachments: vec![],
+            group_id: None,
+            group_name: None,
+            is_outgoing: false,
+            destination: None,
+        };
+        app.handle_signal_event(SignalEvent::MessageReceived(msg));
+        let ts_ms = app.conversations["+1"].messages[0].timestamp_ms;
+
+        // Add reaction
+        app.handle_signal_event(SignalEvent::ReactionReceived {
+            conv_id: "+1".to_string(),
+            emoji: "\u{1f44d}".to_string(),
+            sender: "+2".to_string(),
+            sender_name: Some("Bob".to_string()),
+            target_author: "+1".to_string(),
+            target_timestamp: ts_ms,
+            is_remove: false,
+        });
+        assert_eq!(app.conversations["+1"].messages[0].reactions.len(), 1);
+
+        // Remove it
+        app.handle_signal_event(SignalEvent::ReactionReceived {
+            conv_id: "+1".to_string(),
+            emoji: "\u{1f44d}".to_string(),
+            sender: "+2".to_string(),
+            sender_name: Some("Bob".to_string()),
+            target_author: "+1".to_string(),
+            target_timestamp: ts_ms,
+            is_remove: true,
+        });
+        assert_eq!(app.conversations["+1"].messages[0].reactions.len(), 0);
+    }
+
+    #[test]
+    fn handle_reaction_on_own_message() {
+        let mut app = test_app();
+        // Send a message (outgoing) — simulate by creating conversation and pushing directly
+        let conv_id = "+1";
+        app.get_or_create_conversation(conv_id, "Alice", false);
+        let ts_ms = 1700000000000_i64;
+        if let Some(conv) = app.conversations.get_mut(conv_id) {
+            conv.messages.push(DisplayMessage {
+                sender: "you".to_string(),
+                timestamp: chrono::Utc::now(),
+                body: "hello".to_string(),
+                is_system: false,
+                image_lines: None,
+                image_path: None,
+                status: Some(MessageStatus::Sent),
+                timestamp_ms: ts_ms,
+                reactions: Vec::new(),
+            });
+        }
+
+        // Someone reacts to our message — target_author is our account number
+        app.handle_signal_event(SignalEvent::ReactionReceived {
+            conv_id: conv_id.to_string(),
+            emoji: "\u{1f44d}".to_string(),
+            sender: "+1".to_string(),
+            sender_name: Some("Alice".to_string()),
+            target_author: "+10000000000".to_string(), // test_app account
+            target_timestamp: ts_ms,
+            is_remove: false,
+        });
+
+        let reactions = &app.conversations[conv_id].messages[0].reactions;
+        assert_eq!(reactions.len(), 1);
+        assert_eq!(reactions[0].sender, "Alice");
+    }
+
+    #[test]
+    fn handle_reaction_unknown_message_persists_to_db() {
+        let mut app = test_app();
+        app.get_or_create_conversation("+1", "Alice", false);
+
+        // Reaction for a message not in memory (timestamp doesn't match any)
+        app.handle_signal_event(SignalEvent::ReactionReceived {
+            conv_id: "+1".to_string(),
+            emoji: "\u{1f44d}".to_string(),
+            sender: "+2".to_string(),
+            sender_name: None,
+            target_author: "+1".to_string(),
+            target_timestamp: 9999999999999,
+            is_remove: false,
+        });
+
+        // No reactions on any message (none matched)
+        assert!(app.conversations["+1"].messages.is_empty());
+        // But it was persisted to DB
+        let db_reactions = app.db.load_reactions("+1").unwrap();
+        assert_eq!(db_reactions.len(), 1);
     }
 }
