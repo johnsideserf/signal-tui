@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.3.3
+
+### Bug fixes
+
+- **Settings persistence** -- changes made in `/settings` are now saved
+  to the config file and persist between sessions (fixes #40)
+- **Input box scrolling** -- long messages no longer disappear when
+  typing past the edge of the input box; text now scrolls horizontally
+  to keep the cursor visible (fixes #39)
+- **Image preview refresh** -- toggling "Inline image previews" in
+  `/settings` now immediately re-renders or clears previews on existing
+  messages (fixes #41)
+
+### Settings
+
+- **Tab to toggle** -- Tab key now toggles settings items in the
+  `/settings` overlay, alongside Space and Enter
+
+---
+
 ## v0.3.2
 
 ### Read receipts and delivery status
