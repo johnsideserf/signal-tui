@@ -983,7 +983,7 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, sidebar_auto_hidden
     // Connection status dot
     if let Some(ref err) = app.connection_error {
         segments.push(Span::styled(" ● ", Style::default().fg(Color::Red)));
-        let display: String = err.chars().take(30).collect();
+        let display: String = err.chars().take(60).collect();
         segments.push(Span::styled(
             format!("error: {display}"),
             Style::default().fg(Color::Red),

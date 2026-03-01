@@ -953,7 +953,8 @@ impl App {
             }
             SignalEvent::ContactList(contacts) => self.handle_contact_list(contacts),
             SignalEvent::GroupList(groups) => self.handle_group_list(groups),
-            SignalEvent::Error(err) => {
+            SignalEvent::Error(ref err) => {
+                crate::debug_log::logf(format_args!("signal event error: {err}"));
                 self.status_message = format!("error: {err}");
             }
         }
