@@ -316,6 +316,79 @@ fn emit_osc8_links(
     Ok(())
 }
 
+/// Write native terminal image protocol escape sequences to overlay
+/// pre-resized images on top of the halfblock placeholders.
+fn emit_native_images(
+    backend: &mut CrosstermBackend<io::Stdout>,
+    app: &mut App,
+) -> Result<()> {
+    let protocol = app.image_protocol;
+    if app.visible_images.is_empty() || protocol == image_render::ImageProtocol::Halfblock {
+        return Ok(());
+    }
+    use std::io::Write;
+
+    // Take images out to avoid borrow conflict with native_image_cache
+    let images = std::mem::take(&mut app.visible_images);
+
+    queue!(backend, SavePosition)?;
+
+    for img in &images {
+        // Get or compute cached base64 PNG data
+        let b64 = if let Some(cached) = app.native_image_cache.get(&img.path) {
+            cached.clone()
+        } else {
+            let encoded = image_render::encode_native_png(
+                std::path::Path::new(&img.path),
+                img.width as u32,
+                img.height as u32,
+            );
+            match encoded {
+                Some(data) => {
+                    app.native_image_cache.insert(img.path.clone(), data.clone());
+                    data
+                }
+                None => continue,
+            }
+        };
+
+        queue!(backend, MoveTo(img.x, img.y))?;
+
+        match protocol {
+            image_render::ImageProtocol::Kitty => {
+                // f=100 = detect format, a=T = transmit+display
+                // c/r = display size in cells, C=1 = don't move cursor
+                let chunks: Vec<&[u8]> = b64.as_bytes().chunks(4096).collect();
+                for (i, chunk) in chunks.iter().enumerate() {
+                    let m = if i == chunks.len() - 1 { 0 } else { 1 };
+                    let chunk_str = std::str::from_utf8(chunk).unwrap_or("");
+                    if i == 0 {
+                        write!(
+                            backend,
+                            "\x1b_Gf=100,a=T,c={},r={},C=1,m={m};{chunk_str}\x1b\\",
+                            img.width, img.height
+                        )?;
+                    } else {
+                        write!(backend, "\x1b_Gm={m};{chunk_str}\x1b\\")?;
+                    }
+                }
+            }
+            image_render::ImageProtocol::Iterm2 => {
+                write!(
+                    backend,
+                    "\x1b]1337;File=inline=1;width={};height={};preserveAspectRatio=0:{b64}\x07",
+                    img.width, img.height
+                )?;
+            }
+            image_render::ImageProtocol::Halfblock => {}
+        }
+    }
+
+    queue!(backend, RestorePosition)?;
+    backend.flush()?;
+    Ok(())
+}
+
 async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     signal_client: &mut SignalClient,
@@ -337,9 +410,16 @@ async fn run_app(
     let _ = signal_client.list_groups().await;
 
     loop {
+        // Force full redraw when active conversation changes (clears native image artifacts)
+        if app.active_conversation != app.prev_active_conversation {
+            app.prev_active_conversation = app.active_conversation.clone();
+            terminal.clear()?;
+        }
+
         // Render
         terminal.draw(|frame| ui::draw(frame, &mut app))?;
         emit_osc8_links(terminal.backend_mut(), &app.link_regions)?;
+        emit_native_images(terminal.backend_mut(), &mut app)?;
 
         // Poll for events with a short timeout so we stay responsive to signal events
         let has_terminal_event = event::poll(Duration::from_millis(50))?;
@@ -632,8 +712,15 @@ async fn run_demo_app(
     populate_demo_data(&mut app);
 
     loop {
+        // Force full redraw when active conversation changes (clears native image artifacts)
+        if app.active_conversation != app.prev_active_conversation {
+            app.prev_active_conversation = app.active_conversation.clone();
+            terminal.clear()?;
+        }
+
         terminal.draw(|frame| ui::draw(frame, &mut app))?;
         emit_osc8_links(terminal.backend_mut(), &app.link_regions)?;
+        emit_native_images(terminal.backend_mut(), &mut app)?;
 
         let has_terminal_event = event::poll(Duration::from_millis(50))?;
 
@@ -866,6 +953,7 @@ fn populate_demo_data(app: &mut App) {
             body: body.to_string(),
             is_system: false,
             image_lines: None,
+            image_path: None,
         }
     };
 

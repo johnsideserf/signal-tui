@@ -147,6 +147,7 @@ impl Database {
                         body,
                         is_system,
                         image_lines: None,
+                        image_path: None,
                     })
                 })
                 .collect();
