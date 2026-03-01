@@ -531,12 +531,14 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                 &conv.messages
             } else {
                 app.focused_message_time = None;
+                app.focused_msg_index = None;
                 return;
             }
         }
         None => {
             draw_welcome(frame, app, inner);
             app.focused_message_time = None;
+            app.focused_msg_index = None;
             return;
         }
     };
@@ -709,11 +711,14 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     app.scroll_offset = app.scroll_offset.min(base_scroll);
     let scroll_y = base_scroll - app.scroll_offset;
 
-    // Determine the focused message for full-timestamp display in Normal mode.
-    app.focused_message_time = if app.mode == InputMode::Normal && app.scroll_offset > 0 {
-        find_focused_message_time(&lines, &line_msg_idx, messages, inner_width, scroll_y, available_height)
+    // Determine the focused message for highlight and full-timestamp display in Normal mode.
+    if app.mode == InputMode::Normal && app.scroll_offset > 0 {
+        let idx = find_focused_msg_index(&lines, &line_msg_idx, inner_width, scroll_y, available_height);
+        app.focused_msg_index = idx;
+        app.focused_message_time = idx.and_then(|i| messages.get(i)).map(|m| m.timestamp);
     } else {
-        None
+        app.focused_msg_index = None;
+        app.focused_message_time = None;
     };
 
     // Compute screen positions for native protocol image overlay (before lines is consumed)
@@ -762,6 +767,19 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     height: vis_end - vis_start,
                     path: path.clone(),
                 });
+            }
+        }
+    }
+
+    // Highlight all lines belonging to the focused message
+    if let Some(focused_idx) = app.focused_msg_index {
+        for (i, line) in lines.iter_mut().enumerate() {
+            if line_msg_idx.get(i) == Some(&Some(focused_idx)) {
+                let patched: Vec<Span> = line.spans.drain(..).map(|mut s| {
+                    s.style = s.style.bg(Color::Indexed(236));
+                    s
+                }).collect();
+                *line = Line::from(patched);
             }
         }
     }
@@ -914,13 +932,12 @@ fn draw_welcome(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// Find the timestamp of the message at the bottom of the visible viewport.
-/// Used for the full-timestamp status bar display when scrolled in Normal mode.
-fn find_focused_message_time(
+/// Find the message index at the bottom of the visible viewport.
+/// Returns the index into the conversation's messages Vec.
+fn find_focused_msg_index(
     lines: &[Line], line_msg_idx: &[Option<usize>],
-    messages: &[crate::app::DisplayMessage],
     inner_width: usize, scroll_y: usize, available_height: usize,
-) -> Option<chrono::DateTime<chrono::Utc>> {
+) -> Option<usize> {
     let target_wrapped = scroll_y + available_height.saturating_sub(1);
     let mut cumul = 0usize;
     let mut focused_line_idx = None;
@@ -936,7 +953,7 @@ fn find_focused_message_time(
     let mut li = focused_line_idx?;
     loop {
         if let Some(Some(mi)) = line_msg_idx.get(li) {
-            return Some(messages[*mi].timestamp);
+            return Some(*mi);
         }
         if li == 0 {
             return None;
@@ -1260,6 +1277,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         ("Esc", "Normal mode"),
         ("i / a / I / A / o", "Insert mode"),
         ("j / k", "Scroll up / down"),
+        ("J / K", "Prev / next message"),
         ("g / G", "Top / bottom of messages"),
         ("Ctrl+D / U", "Half-page scroll"),
         ("h / l", "Cursor left / right"),
