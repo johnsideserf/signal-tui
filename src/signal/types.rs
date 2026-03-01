@@ -1,15 +1,60 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// Delivery/read status for outgoing messages.
+/// Ordered so that PartialOrd gives natural upgrade semantics (only increase, never downgrade).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MessageStatus {
+    Failed,    // send failed
+    Sending,   // in transit to server
+    Sent,      // server confirmed
+    Delivered, // on recipient's device
+    Read,      // read by recipient
+    Viewed,    // viewed (voice/media)
+}
+
+impl MessageStatus {
+    /// Convert to integer for DB storage.
+    pub fn to_i32(self) -> i32 {
+        match self {
+            MessageStatus::Failed => 1,
+            MessageStatus::Sending => 2,
+            MessageStatus::Sent => 3,
+            MessageStatus::Delivered => 4,
+            MessageStatus::Read => 5,
+            MessageStatus::Viewed => 6,
+        }
+    }
+
+    /// Convert from DB integer. Returns None for 0 (incoming/no status).
+    pub fn from_i32(v: i32) -> Option<Self> {
+        match v {
+            1 => Some(MessageStatus::Failed),
+            2 => Some(MessageStatus::Sending),
+            3 => Some(MessageStatus::Sent),
+            4 => Some(MessageStatus::Delivered),
+            5 => Some(MessageStatus::Read),
+            6 => Some(MessageStatus::Viewed),
+            _ => None,
+        }
+    }
+}
+
 /// Events received from signal-cli
 #[derive(Debug, Clone)]
 pub enum SignalEvent {
     MessageReceived(SignalMessage),
     ReceiptReceived {
-        #[allow(dead_code)]
         sender: String,
-        #[allow(dead_code)]
-        timestamp: i64,
+        receipt_type: String,
+        timestamps: Vec<i64>,
+    },
+    SendTimestamp {
+        rpc_id: String,
+        server_ts: i64,
+    },
+    SendFailed {
+        rpc_id: String,
     },
     TypingIndicator {
         sender: String,

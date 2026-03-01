@@ -31,6 +31,18 @@ pub struct Config {
     /// Experimental: use native terminal image protocols (Kitty/iTerm2) over halfblock
     #[serde(default)]
     pub native_images: bool,
+
+    /// Show delivery/read receipt status symbols on outgoing messages
+    #[serde(default = "default_true")]
+    pub show_receipts: bool,
+
+    /// Use colored status symbols (vs monochrome DarkGray)
+    #[serde(default = "default_true")]
+    pub color_receipts: bool,
+
+    /// Use Nerd Font glyphs for status symbols
+    #[serde(default)]
+    pub nerd_fonts: bool,
 }
 
 fn default_true() -> bool {
@@ -57,6 +69,9 @@ impl Default for Config {
             notify_group: true,
             inline_images: true,
             native_images: false,
+            show_receipts: true,
+            color_receipts: true,
+            nerd_fonts: false,
         }
     }
 }

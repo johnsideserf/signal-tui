@@ -4,6 +4,7 @@ use anyhow::Result;
 use rusqlite::{params, Connection};
 
 use crate::app::{Conversation, DisplayMessage};
+use crate::signal::types::MessageStatus;
 
 pub struct Database {
     conn: Connection,
@@ -86,6 +87,18 @@ impl Database {
             )?;
         }
 
+        if version < 3 {
+            self.conn.execute_batch(
+                "
+                BEGIN;
+                ALTER TABLE messages ADD COLUMN status INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE messages ADD COLUMN timestamp_ms INTEGER NOT NULL DEFAULT 0;
+                UPDATE schema_version SET version = 3;
+                COMMIT;
+                ",
+            )?;
+        }
+
         Ok(())
     }
 
@@ -123,7 +136,7 @@ impl Database {
         for (id, name, is_group) in convs {
             // Load last N messages
             let mut msg_stmt = self.conn.prepare(
-                "SELECT sender, timestamp, body, is_system FROM messages
+                "SELECT sender, timestamp, body, is_system, status, timestamp_ms FROM messages
                  WHERE conversation_id = ?1
                  ORDER BY rowid DESC LIMIT ?2",
             )?;
@@ -134,10 +147,12 @@ impl Database {
                     let ts_str: String = row.get(1)?;
                     let body: String = row.get(2)?;
                     let is_system: bool = row.get::<_, i32>(3)? != 0;
-                    Ok((sender, ts_str, body, is_system))
+                    let status_i32: i32 = row.get(4)?;
+                    let timestamp_ms: i64 = row.get(5)?;
+                    Ok((sender, ts_str, body, is_system, status_i32, timestamp_ms))
                 })?
                 .filter_map(|r| r.ok())
-                .filter_map(|(sender, ts_str, body, is_system)| {
+                .filter_map(|(sender, ts_str, body, is_system, status_i32, timestamp_ms)| {
                     let timestamp = chrono::DateTime::parse_from_rfc3339(&ts_str)
                         .ok()?
                         .with_timezone(&chrono::Utc);
@@ -148,6 +163,8 @@ impl Database {
                         is_system,
                         image_lines: None,
                         image_path: None,
+                        status: MessageStatus::from_i32(status_i32),
+                        timestamp_ms,
                     })
                 })
                 .collect();
@@ -190,6 +207,7 @@ impl Database {
 
     // --- Messages ---
 
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_message(
         &self,
         conv_id: &str,
@@ -197,13 +215,26 @@ impl Database {
         timestamp: &str,
         body: &str,
         is_system: bool,
+        status: Option<MessageStatus>,
+        timestamp_ms: i64,
     ) -> Result<i64> {
+        let status_i32 = status.map(|s| s.to_i32()).unwrap_or(0);
         self.conn.execute(
-            "INSERT INTO messages (conversation_id, sender, timestamp, body, is_system)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![conv_id, sender, timestamp, body, is_system as i32],
+            "INSERT INTO messages (conversation_id, sender, timestamp, body, is_system, status, timestamp_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![conv_id, sender, timestamp, body, is_system as i32, status_i32, timestamp_ms],
         )?;
         Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Update delivery status for an outgoing message by its ms epoch timestamp.
+    pub fn update_message_status(&self, conv_id: &str, timestamp_ms: i64, status: i32) -> Result<()> {
+        self.conn.execute(
+            "UPDATE messages SET status = ?3
+             WHERE conversation_id = ?1 AND timestamp_ms = ?2 AND sender = 'you' AND status < ?3",
+            params![conv_id, timestamp_ms, status],
+        )?;
+        Ok(())
     }
 
     // --- Read markers ---
@@ -313,8 +344,8 @@ mod tests {
     fn insert_and_load_messages() {
         let db = test_db();
         db.upsert_conversation("+1", "Alice", false).unwrap();
-        db.insert_message("+1", "Alice", "2025-01-01T00:00:00Z", "hello", false).unwrap();
-        db.insert_message("+1", "you", "2025-01-01T00:01:00Z", "hi!", false).unwrap();
+        db.insert_message("+1", "Alice", "2025-01-01T00:00:00Z", "hello", false, None, 0).unwrap();
+        db.insert_message("+1", "you", "2025-01-01T00:01:00Z", "hi!", false, None, 0).unwrap();
 
         let convs = db.load_conversations(100).unwrap();
         assert_eq!(convs[0].0.messages.len(), 2);
@@ -326,9 +357,9 @@ mod tests {
     fn unread_count_with_read_markers() {
         let db = test_db();
         db.upsert_conversation("+1", "Alice", false).unwrap();
-        let r1 = db.insert_message("+1", "Alice", "2025-01-01T00:00:00Z", "msg1", false).unwrap();
-        db.insert_message("+1", "Alice", "2025-01-01T00:01:00Z", "msg2", false).unwrap();
-        db.insert_message("+1", "Alice", "2025-01-01T00:02:00Z", "msg3", false).unwrap();
+        let r1 = db.insert_message("+1", "Alice", "2025-01-01T00:00:00Z", "msg1", false, None, 0).unwrap();
+        db.insert_message("+1", "Alice", "2025-01-01T00:01:00Z", "msg2", false, None, 0).unwrap();
+        db.insert_message("+1", "Alice", "2025-01-01T00:02:00Z", "msg3", false, None, 0).unwrap();
 
         // Mark first message as read
         db.save_read_marker("+1", r1).unwrap();
@@ -339,8 +370,8 @@ mod tests {
     fn system_messages_excluded_from_unread() {
         let db = test_db();
         db.upsert_conversation("+1", "Alice", false).unwrap();
-        db.insert_message("+1", "", "2025-01-01T00:00:00Z", "system msg", true).unwrap();
-        db.insert_message("+1", "Alice", "2025-01-01T00:01:00Z", "real msg", false).unwrap();
+        db.insert_message("+1", "", "2025-01-01T00:00:00Z", "system msg", true, None, 0).unwrap();
+        db.insert_message("+1", "Alice", "2025-01-01T00:01:00Z", "real msg", false, None, 0).unwrap();
 
         // No read marker → only non-system messages count as unread
         assert_eq!(db.unread_count("+1").unwrap(), 1);
@@ -352,8 +383,8 @@ mod tests {
         db.upsert_conversation("+1", "Alice", false).unwrap();
         db.upsert_conversation("+2", "Bob", false).unwrap();
         // Alice gets an older message, Bob gets a newer one
-        db.insert_message("+1", "Alice", "2025-01-01T00:00:00Z", "old", false).unwrap();
-        db.insert_message("+2", "Bob", "2025-01-02T00:00:00Z", "new", false).unwrap();
+        db.insert_message("+1", "Alice", "2025-01-01T00:00:00Z", "old", false, None, 0).unwrap();
+        db.insert_message("+2", "Bob", "2025-01-02T00:00:00Z", "new", false, None, 0).unwrap();
 
         let order = db.load_conversation_order().unwrap();
         // Most recent message first
@@ -384,8 +415,8 @@ mod tests {
 
         assert_eq!(db.last_message_rowid("+1").unwrap(), None);
 
-        db.insert_message("+1", "Alice", "2025-01-01T00:00:00Z", "msg1", false).unwrap();
-        let r2 = db.insert_message("+1", "Alice", "2025-01-01T00:01:00Z", "msg2", false).unwrap();
+        db.insert_message("+1", "Alice", "2025-01-01T00:00:00Z", "msg1", false, None, 0).unwrap();
+        let r2 = db.insert_message("+1", "Alice", "2025-01-01T00:01:00Z", "msg2", false, None, 0).unwrap();
 
         assert_eq!(db.last_message_rowid("+1").unwrap(), Some(r2));
     }

@@ -60,14 +60,24 @@ impl SignalClient {
                 match serde_json::from_str::<JsonRpcResponse>(&line) {
                     Ok(resp) => {
                         // Check if this is a response to a pending request
-                        let pending_method = resp.id.as_ref().and_then(|id| {
+                        let rpc_id = resp.id.clone();
+                        let pending_method = rpc_id.as_ref().and_then(|id| {
                             pending_clone.lock().ok().and_then(|mut map| map.remove(id))
                         });
 
                         let event = if let Some(method) = pending_method {
-                            resp.result
-                                .as_ref()
-                                .and_then(|result| parse_rpc_result(&method, result))
+                            if resp.error.is_some() {
+                                // RPC error — emit SendFailed for send requests
+                                if method == "send" {
+                                    rpc_id.map(|id| SignalEvent::SendFailed { rpc_id: id })
+                                } else {
+                                    None
+                                }
+                            } else {
+                                resp.result
+                                    .as_ref()
+                                    .and_then(|result| parse_rpc_result(&method, result, rpc_id.as_deref()))
+                            }
                         } else {
                             parse_signal_event(&resp, &download_dir)
                         };
@@ -117,8 +127,13 @@ impl SignalClient {
         recipient: &str,
         body: &str,
         is_group: bool,
-    ) -> Result<()> {
+    ) -> Result<String> {
         let id = Uuid::new_v4().to_string();
+
+        // Track the RPC so we can correlate the response with a SendTimestamp/SendFailed event
+        if let Ok(mut map) = self.pending_requests.lock() {
+            map.insert(id.clone(), "send".to_string());
+        }
 
         let params = if is_group {
             serde_json::json!({
@@ -137,7 +152,7 @@ impl SignalClient {
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             method: "send".to_string(),
-            id,
+            id: id.clone(),
             params: Some(params),
         };
 
@@ -146,7 +161,7 @@ impl SignalClient {
             .send(json)
             .await
             .context("Failed to send to signal-cli stdin")?;
-        Ok(())
+        Ok(id)
     }
 
     pub async fn list_groups(&self) -> Result<()> {
@@ -200,8 +215,15 @@ impl SignalClient {
     }
 }
 
-fn parse_rpc_result(method: &str, result: &serde_json::Value) -> Option<SignalEvent> {
+fn parse_rpc_result(method: &str, result: &serde_json::Value, rpc_id: Option<&str>) -> Option<SignalEvent> {
     match method {
+        "send" => {
+            // signal-cli send response includes result.timestamp (server-assigned ms epoch)
+            let server_ts = result.get("timestamp").and_then(|v| v.as_i64())
+                .or_else(|| result.as_i64())?;
+            let id = rpc_id?.to_string();
+            Some(SignalEvent::SendTimestamp { rpc_id: id, server_ts })
+        }
         "listContacts" => {
             let arr = result.as_array()?;
             let contacts: Vec<Contact> = arr
@@ -307,17 +329,23 @@ fn parse_receive_event(
     }
 
     // Receipt
-    if let Some(_receipt) = envelope.get("receiptMessage") {
+    if let Some(receipt) = envelope.get("receiptMessage") {
         let sender = envelope
             .get("sourceNumber")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_string();
-        let timestamp = envelope
-            .get("timestamp")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
-        return Some(SignalEvent::ReceiptReceived { sender, timestamp });
+        let receipt_type = receipt
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let timestamps: Vec<i64> = receipt
+            .get("timestamps")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
+            .unwrap_or_default();
+        return Some(SignalEvent::ReceiptReceived { sender, receipt_type, timestamps });
     }
 
     // Sync message (sent from another device, e.g. phone)
@@ -616,7 +644,7 @@ mod tests {
             {"number": "+15551234567", "profileName": "Alice"},
             {"number": "+15559876543", "contactName": "Bob"}
         ]);
-        let event = parse_rpc_result("listContacts", &result).unwrap();
+        let event = parse_rpc_result("listContacts", &result, None).unwrap();
         match event {
             SignalEvent::ContactList(contacts) => {
                 assert_eq!(contacts.len(), 2);
@@ -639,7 +667,7 @@ mod tests {
             {"number": "+3", "name": "Name"},
             {"number": "+4"}
         ]);
-        let event = parse_rpc_result("listContacts", &result).unwrap();
+        let event = parse_rpc_result("listContacts", &result, None).unwrap();
         match event {
             SignalEvent::ContactList(contacts) => {
                 assert_eq!(contacts.len(), 4);
@@ -658,7 +686,7 @@ mod tests {
             {"profileName": "Ghost"},
             {"number": "+1", "profileName": "Valid"}
         ]);
-        let event = parse_rpc_result("listContacts", &result).unwrap();
+        let event = parse_rpc_result("listContacts", &result, None).unwrap();
         match event {
             SignalEvent::ContactList(contacts) => {
                 assert_eq!(contacts.len(), 1);
@@ -673,7 +701,7 @@ mod tests {
         let result = json!([
             {"number": "+1", "profileName": ""}
         ]);
-        let event = parse_rpc_result("listContacts", &result).unwrap();
+        let event = parse_rpc_result("listContacts", &result, None).unwrap();
         match event {
             SignalEvent::ContactList(contacts) => {
                 assert_eq!(contacts[0].name, None);
@@ -690,7 +718,7 @@ mod tests {
             {"id": "group1", "name": "Family", "members": ["+1", "+2"]},
             {"id": "group2", "name": "Work"}
         ]);
-        let event = parse_rpc_result("listGroups", &result).unwrap();
+        let event = parse_rpc_result("listGroups", &result, None).unwrap();
         match event {
             SignalEvent::GroupList(groups) => {
                 assert_eq!(groups.len(), 2);
@@ -711,7 +739,7 @@ mod tests {
             {"name": "No ID group"},
             {"id": "valid", "name": "Has ID"}
         ]);
-        let event = parse_rpc_result("listGroups", &result).unwrap();
+        let event = parse_rpc_result("listGroups", &result, None).unwrap();
         match event {
             SignalEvent::GroupList(groups) => {
                 assert_eq!(groups.len(), 1);
@@ -724,20 +752,20 @@ mod tests {
     #[test]
     fn parse_rpc_result_unknown_method_returns_none() {
         let result = json!([]);
-        assert!(parse_rpc_result("unknownMethod", &result).is_none());
+        assert!(parse_rpc_result("unknownMethod", &result, None).is_none());
     }
 
     #[test]
     fn parse_rpc_result_non_array_returns_none() {
         let result = json!({"not": "an array"});
-        assert!(parse_rpc_result("listContacts", &result).is_none());
-        assert!(parse_rpc_result("listGroups", &result).is_none());
+        assert!(parse_rpc_result("listContacts", &result, None).is_none());
+        assert!(parse_rpc_result("listGroups", &result, None).is_none());
     }
 
     #[test]
     fn parse_list_contacts_empty_array() {
         let result = json!([]);
-        let event = parse_rpc_result("listContacts", &result).unwrap();
+        let event = parse_rpc_result("listContacts", &result, None).unwrap();
         match event {
             SignalEvent::ContactList(contacts) => assert!(contacts.is_empty()),
             _ => panic!("Expected ContactList"),
@@ -747,10 +775,59 @@ mod tests {
     #[test]
     fn parse_list_groups_empty_array() {
         let result = json!([]);
-        let event = parse_rpc_result("listGroups", &result).unwrap();
+        let event = parse_rpc_result("listGroups", &result, None).unwrap();
         match event {
             SignalEvent::GroupList(groups) => assert!(groups.is_empty()),
             _ => panic!("Expected GroupList"),
+        }
+    }
+
+    #[test]
+    fn parse_send_result_extracts_timestamp() {
+        let result = json!({"timestamp": 1700000000123_i64});
+        let event = parse_rpc_result("send", &result, Some("rpc-42")).unwrap();
+        match event {
+            SignalEvent::SendTimestamp { rpc_id, server_ts } => {
+                assert_eq!(rpc_id, "rpc-42");
+                assert_eq!(server_ts, 1700000000123);
+            }
+            _ => panic!("Expected SendTimestamp"),
+        }
+    }
+
+    #[test]
+    fn parse_send_result_without_id_returns_none() {
+        let result = json!({"timestamp": 1700000000123_i64});
+        assert!(parse_rpc_result("send", &result, None).is_none());
+    }
+
+    #[test]
+    fn parse_receipt_event_extracts_type_and_timestamps() {
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            result: None,
+            error: None,
+            method: Some("receive".to_string()),
+            params: Some(json!({
+                "envelope": {
+                    "sourceNumber": "+15551234567",
+                    "timestamp": 1700000000000_i64,
+                    "receiptMessage": {
+                        "type": "DELIVERY",
+                        "timestamps": [1700000000001_i64, 1700000000002_i64]
+                    }
+                }
+            })),
+        };
+        let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
+        match event {
+            SignalEvent::ReceiptReceived { sender, receipt_type, timestamps } => {
+                assert_eq!(sender, "+15551234567");
+                assert_eq!(receipt_type, "DELIVERY");
+                assert_eq!(timestamps, vec![1700000000001, 1700000000002]);
+            }
+            _ => panic!("Expected ReceiptReceived, got {:?}", event),
         }
     }
 }

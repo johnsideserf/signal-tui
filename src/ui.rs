@@ -13,6 +13,22 @@ use ratatui::{
 use crate::app::{App, InputMode, VisibleImage, SETTINGS_ITEMS};
 use crate::image_render::ImageProtocol;
 use crate::input::COMMANDS;
+use crate::signal::types::MessageStatus;
+
+/// Map a MessageStatus to its display symbol and color.
+fn status_symbol(status: MessageStatus, nerd_fonts: bool, color: bool) -> (&'static str, Color) {
+    let (unicode_sym, nerd_sym, colored) = match status {
+        MessageStatus::Failed   => ("\u{2717}", "\u{f055c}", Color::Red),       // ✗ / 󰅜
+        MessageStatus::Sending  => ("\u{25cc}", "\u{f0996}", Color::DarkGray),  // ◌ / 󰦖
+        MessageStatus::Sent     => ("\u{25cb}", "\u{f0954}", Color::DarkGray),  // ○ / 󰥔
+        MessageStatus::Delivered=> ("\u{2713}", "\u{f012c}", Color::White),     // ✓ / 󰄬
+        MessageStatus::Read     => ("\u{25cf}", "\u{f012d}", Color::Green),     // ● / 󰄭
+        MessageStatus::Viewed   => ("\u{25c9}", "\u{f0208}", Color::Cyan),     // ◉ / 󰈈
+    };
+    let sym = if nerd_fonts { nerd_sym } else { unicode_sym };
+    let fg = if color { colored } else { Color::DarkGray };
+    (sym, fg)
+}
 
 /// Hash a sender name to one of ~8 distinct colors. "you" always gets Green.
 fn sender_color(name: &str) -> Color {
@@ -583,18 +599,29 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             )));
         } else {
             let time = msg.format_time();
-            let mut spans = vec![
-                Span::styled(
-                    format!("[{}] ", time),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(
-                    format!("<{}>", msg.sender),
-                    Style::default()
-                        .fg(sender_color(&msg.sender))
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ];
+            let mut spans = Vec::new();
+
+            // Status symbol for outgoing messages (before timestamp)
+            if app.show_receipts {
+                if let Some(status) = msg.status {
+                    let (sym, color) = status_symbol(status, app.nerd_fonts, app.color_receipts);
+                    spans.push(Span::styled(
+                        format!("{sym} "),
+                        Style::default().fg(color),
+                    ));
+                }
+            }
+
+            spans.push(Span::styled(
+                format!("[{}] ", time),
+                Style::default().fg(Color::DarkGray),
+            ));
+            spans.push(Span::styled(
+                format!("<{}>", msg.sender),
+                Style::default()
+                    .fg(sender_color(&msg.sender))
+                    .add_modifier(Modifier::BOLD),
+            ));
 
             // Style URIs (https://, http://, file:///) as underlined links
             let (body_spans, hidden_url) = styled_uri_spans(&msg.body);
@@ -946,7 +973,7 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect) {
 
 fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
     let popup_width: u16 = 42.min(area.width.saturating_sub(4));
-    let popup_height: u16 = 11.min(area.height.saturating_sub(2));
+    let popup_height: u16 = 14.min(area.height.saturating_sub(2));
 
     let x = (area.width.saturating_sub(popup_width)) / 2;
     let y = (area.height.saturating_sub(popup_height)) / 2;
