@@ -1,0 +1,21 @@
+[book]
+title = "signal-tui"
+description = "Terminal-based Signal messenger client"
+authors = ["johnsideserf"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "coal"
+preferred-dark-theme = "coal"
+additional-css = ["theme/css/irc-theme.css"]
+site-url = "/signal-tui/"
+git-repository-url = "https://github.com/johnsideserf/signal-tui"
+edit-url-template = "https://github.com/johnsideserf/signal-tui/edit/master/docs/{path}"
+
+[output.html.fold]
+enable = true
+level = 1
