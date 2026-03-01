@@ -181,6 +181,8 @@ pub struct App {
     pub pending_receipts: Vec<(String, String, Vec<i64>)>,
     /// Timestamp of the message at the scroll cursor (set during draw, cleared at scroll_offset=0)
     pub focused_message_time: Option<DateTime<Utc>>,
+    /// Index of the focused message in the active conversation (set during draw)
+    pub focused_msg_index: Option<usize>,
     /// Reaction picker overlay visible
     pub show_reaction_picker: bool,
     /// Selected index in the reaction picker
@@ -441,8 +443,9 @@ impl App {
         let conv = self.conversations.get(&conv_id)?;
         let is_group = conv.is_group;
 
-        let total = conv.messages.len();
-        let index = total.saturating_sub(1).saturating_sub(self.scroll_offset);
+        let index = self.focused_msg_index.unwrap_or_else(|| {
+            conv.messages.len().saturating_sub(1)
+        });
         let msg = conv.messages.get(index)?;
 
         let target_timestamp = msg.timestamp_ms;
@@ -630,6 +633,7 @@ impl App {
             pending_sends: HashMap::new(),
             pending_receipts: Vec::new(),
             focused_message_time: None,
+            focused_msg_index: None,
             show_reaction_picker: false,
             reaction_picker_index: 0,
             reaction_verbose: false,
@@ -801,6 +805,13 @@ impl App {
             (_, KeyCode::Char('k')) => {
                 self.scroll_offset = self.scroll_offset.saturating_add(1);
             }
+            // Message-level navigation (skip separators and system messages)
+            (_, KeyCode::Char('J')) => {
+                self.jump_to_adjacent_message(false);
+            }
+            (_, KeyCode::Char('K')) => {
+                self.jump_to_adjacent_message(true);
+            }
             (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(10);
             }
@@ -816,6 +827,7 @@ impl App {
             }
             (_, KeyCode::Char('G')) => {
                 self.scroll_offset = 0;
+                self.focused_msg_index = None;
             }
 
             // Switch to Insert mode
@@ -1606,6 +1618,7 @@ impl App {
                         local_ts_ms,
                     ), "insert_message");
                     self.scroll_offset = 0;
+                    self.focused_msg_index = None;
                     return Some(SendRequest::Message {
                         recipient: conv_id,
                         body: wire_body,
@@ -1624,6 +1637,7 @@ impl App {
             InputAction::Part => {
                 self.active_conversation = None;
                 self.scroll_offset = 0;
+                self.focused_msg_index = None;
                 self.update_status();
             }
             InputAction::Quit => {
@@ -1944,6 +1958,7 @@ impl App {
                 conv.unread = 0;
             }
             self.scroll_offset = 0;
+            self.focused_msg_index = None;
             self.update_status();
             return;
         }
@@ -1959,6 +1974,7 @@ impl App {
         if let Some(id) = found_id {
             self.active_conversation = Some(id.clone());
             self.scroll_offset = 0;
+            self.focused_msg_index = None;
             if let Some(conv) = self.conversations.get_mut(&id) {
                 conv.unread = 0;
             }
@@ -1971,6 +1987,7 @@ impl App {
             self.get_or_create_conversation(target, target, false);
             self.active_conversation = Some(target.to_string());
             self.scroll_offset = 0;
+            self.focused_msg_index = None;
             self.update_status();
         } else {
             self.status_message = format!("Conversation not found: {target}");
@@ -1994,6 +2011,7 @@ impl App {
             conv.unread = 0;
         }
         self.scroll_offset = 0;
+        self.focused_msg_index = None;
         self.update_status();
     }
 
@@ -2015,6 +2033,7 @@ impl App {
             conv.unread = 0;
         }
         self.scroll_offset = 0;
+        self.focused_msg_index = None;
         self.update_status();
     }
 
@@ -2046,12 +2065,45 @@ impl App {
     fn selected_message(&self) -> Option<&DisplayMessage> {
         let conv_id = self.active_conversation.as_ref()?;
         let conv = self.conversations.get(conv_id)?;
+        let index = self.focused_msg_index.unwrap_or_else(|| {
+            conv.messages.len().saturating_sub(1)
+        });
+        conv.messages.get(index)
+    }
+
+    /// Jump to the next or previous non-system message.
+    /// `older` = true means go toward older messages (K), false means newer (J).
+    fn jump_to_adjacent_message(&mut self, older: bool) {
+        let conv_id = match self.active_conversation.as_ref() {
+            Some(id) => id.clone(),
+            None => return,
+        };
+        let conv = match self.conversations.get(&conv_id) {
+            Some(c) => c,
+            None => return,
+        };
         let total = conv.messages.len();
         if total == 0 {
-            return None;
+            return;
         }
-        let index = total.saturating_sub(1).saturating_sub(self.scroll_offset);
-        conv.messages.get(index)
+
+        let current = self.focused_msg_index.unwrap_or(total.saturating_sub(1));
+
+        if older {
+            // Search backward for a non-system message before current
+            let target = (0..current).rev().find(|&i| !conv.messages[i].is_system);
+            if let Some(t) = target {
+                let diff = current - t;
+                self.scroll_offset = self.scroll_offset.saturating_add(diff);
+            }
+        } else {
+            // Search forward for a non-system message after current
+            let target = ((current + 1)..total).find(|&i| !conv.messages[i].is_system);
+            if let Some(t) = target {
+                let diff = t - current;
+                self.scroll_offset = self.scroll_offset.saturating_sub(diff);
+            }
+        }
     }
 
     /// Copy the selected message text to the system clipboard.
