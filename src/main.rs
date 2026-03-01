@@ -34,6 +34,9 @@ use config::Config;
 use setup::SetupResult;
 use signal::client::SignalClient;
 
+/// Keyboard polling interval for the main event loop.
+const POLL_TIMEOUT: Duration = Duration::from_millis(50);
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Disable the default Windows Ctrl+C handler — crossterm captures it as a
@@ -471,7 +474,7 @@ async fn run_app(
         }
 
         // Poll for events with a short timeout so we stay responsive to signal events
-        let has_terminal_event = event::poll(Duration::from_millis(50))?;
+        let has_terminal_event = event::poll(POLL_TIMEOUT)?;
 
         if has_terminal_event {
             if let Event::Key(key) = event::read()? {
@@ -566,7 +569,7 @@ async fn run_demo_app(
             emit_native_images(terminal.backend_mut(), &mut app)?;
         }
 
-        let has_terminal_event = event::poll(Duration::from_millis(50))?;
+        let has_terminal_event = event::poll(POLL_TIMEOUT)?;
 
         if has_terminal_event {
             if let Event::Key(key) = event::read()? {

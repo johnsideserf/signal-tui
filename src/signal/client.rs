@@ -315,71 +315,80 @@ fn parse_receive_event(
     // signal-cli reports exceptions for messages it can't parse (e.g. 1:1 sent sync)
     if let Some(exc) = params.get("exception") {
         let msg = exc.get("message").and_then(|v| v.as_str()).unwrap_or("unknown error");
-        // Known signal-cli bug — silently ignore rather than spamming status bar
         if msg.contains("SyncMessage missing destination") {
-            return None;
+            return None; // Known signal-cli bug — silently ignore
         }
         return Some(SignalEvent::Error(format!("signal-cli: {msg}")));
     }
 
     let envelope = params.get("envelope")?;
 
-    // Typing indicator
-    if let Some(typing) = envelope.get("typingMessage") {
-        let sender = envelope
-            .get("sourceNumber")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-        let sender_name = envelope
-            .get("sourceName")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
-        let is_typing = typing
-            .get("action")
-            .and_then(|v| v.as_str())
-            .map(|a| a == "STARTED")
-            .unwrap_or(false);
-        return Some(SignalEvent::TypingIndicator { sender, sender_name, is_typing });
+    if envelope.get("typingMessage").is_some() {
+        return parse_typing_indicator(envelope);
     }
-
-    // Receipt
-    if let Some(receipt) = envelope.get("receiptMessage") {
-        let sender = envelope
-            .get("sourceNumber")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-        // signal-cli uses boolean fields: isDelivery, isRead, isViewed
-        let receipt_type = if receipt.get("isRead").and_then(|v| v.as_bool()).unwrap_or(false) {
-            "READ"
-        } else if receipt.get("isViewed").and_then(|v| v.as_bool()).unwrap_or(false) {
-            "VIEWED"
-        } else if receipt.get("isDelivery").and_then(|v| v.as_bool()).unwrap_or(false) {
-            "DELIVERY"
-        } else {
-            // Fallback: try "type" string field (older signal-cli versions)
-            receipt.get("type").and_then(|v| v.as_str()).unwrap_or("")
-        }.to_string();
-        let timestamps: Vec<i64> = receipt
-            .get("timestamps")
-            .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
-            .unwrap_or_default();
-        return Some(SignalEvent::ReceiptReceived { sender, receipt_type, timestamps });
+    if envelope.get("receiptMessage").is_some() {
+        return parse_receipt_message(envelope);
     }
-
-    // Sync message (sent from another device, e.g. phone)
     if let Some(sync) = envelope.get("syncMessage") {
         if let Some(sent) = sync.get("sentMessage") {
             return parse_sent_sync(envelope, sent, download_dir);
         }
-        // Other sync types (read receipts, etc.) — ignore for now
         return None;
     }
 
-    // Data message (actual text/attachments)
+    parse_data_message(envelope, download_dir)
+}
+
+fn parse_typing_indicator(envelope: &serde_json::Value) -> Option<SignalEvent> {
+    let typing = envelope.get("typingMessage")?;
+    let sender = envelope
+        .get("sourceNumber")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let sender_name = envelope
+        .get("sourceName")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let is_typing = typing
+        .get("action")
+        .and_then(|v| v.as_str())
+        .map(|a| a == "STARTED")
+        .unwrap_or(false);
+    Some(SignalEvent::TypingIndicator { sender, sender_name, is_typing })
+}
+
+fn parse_receipt_message(envelope: &serde_json::Value) -> Option<SignalEvent> {
+    let receipt = envelope.get("receiptMessage")?;
+    let sender = envelope
+        .get("sourceNumber")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    // signal-cli uses boolean fields: isDelivery, isRead, isViewed
+    let receipt_type = if receipt.get("isRead").and_then(|v| v.as_bool()).unwrap_or(false) {
+        "READ"
+    } else if receipt.get("isViewed").and_then(|v| v.as_bool()).unwrap_or(false) {
+        "VIEWED"
+    } else if receipt.get("isDelivery").and_then(|v| v.as_bool()).unwrap_or(false) {
+        "DELIVERY"
+    } else {
+        // Fallback: try "type" string field (older signal-cli versions)
+        receipt.get("type").and_then(|v| v.as_str()).unwrap_or("UNKNOWN")
+    }.to_string();
+    let timestamps: Vec<i64> = receipt
+        .get("timestamps")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
+        .unwrap_or_default();
+    Some(SignalEvent::ReceiptReceived { sender, receipt_type, timestamps })
+}
+
+fn parse_data_message(
+    envelope: &serde_json::Value,
+    download_dir: &std::path::Path,
+) -> Option<SignalEvent> {
     let data = match envelope.get("dataMessage") {
         Some(d) => d,
         None => {
@@ -388,7 +397,6 @@ fn parse_receive_event(
                 .as_object()
                 .map(|obj| obj.keys().map(|k| k.as_str()).collect())
                 .unwrap_or_default();
-            // Only report if there are interesting keys beyond metadata
             let interesting: Vec<&&str> = keys.iter()
                 .filter(|k| !matches!(**k,
                     "source" | "sourceNumber" | "sourceName" | "sourceUuid"

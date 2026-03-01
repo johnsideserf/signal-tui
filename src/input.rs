@@ -93,58 +93,44 @@ mod tests {
 
     #[test]
     fn plain_text() {
-        match parse_input("hello world") {
-            InputAction::SendText(s) => assert_eq!(s, "hello world"),
-            other => panic!("expected SendText, got {other:?}"),
-        }
+        let InputAction::SendText(s) = parse_input("hello world") else { panic!("expected SendText") };
+        assert_eq!(s, "hello world");
     }
 
     #[test]
     fn empty_input() {
-        match parse_input("") {
-            InputAction::SendText(s) => assert!(s.is_empty()),
-            other => panic!("expected empty SendText, got {other:?}"),
-        }
+        let InputAction::SendText(s) = parse_input("") else { panic!("expected SendText") };
+        assert!(s.is_empty());
     }
 
     #[test]
     fn whitespace_only() {
-        match parse_input("   ") {
-            InputAction::SendText(s) => assert!(s.is_empty()),
-            other => panic!("expected empty SendText, got {other:?}"),
-        }
+        let InputAction::SendText(s) = parse_input("   ") else { panic!("expected SendText") };
+        assert!(s.is_empty());
     }
 
     #[test]
     fn trimmed_text() {
-        match parse_input("  hello  ") {
-            InputAction::SendText(s) => assert_eq!(s, "hello"),
-            other => panic!("expected SendText, got {other:?}"),
-        }
+        let InputAction::SendText(s) = parse_input("  hello  ") else { panic!("expected SendText") };
+        assert_eq!(s, "hello");
     }
 
     #[test]
     fn join_with_arg() {
-        match parse_input("/join Alice") {
-            InputAction::Join(s) => assert_eq!(s, "Alice"),
-            other => panic!("expected Join, got {other:?}"),
-        }
+        let InputAction::Join(s) = parse_input("/join Alice") else { panic!("expected Join") };
+        assert_eq!(s, "Alice");
     }
 
     #[test]
     fn join_alias() {
-        match parse_input("/j +1234567890") {
-            InputAction::Join(s) => assert_eq!(s, "+1234567890"),
-            other => panic!("expected Join, got {other:?}"),
-        }
+        let InputAction::Join(s) = parse_input("/j +1234567890") else { panic!("expected Join") };
+        assert_eq!(s, "+1234567890");
     }
 
     #[test]
     fn join_without_arg() {
-        match parse_input("/join") {
-            InputAction::Unknown(s) => assert!(s.contains("requires")),
-            other => panic!("expected Unknown, got {other:?}"),
-        }
+        let InputAction::Unknown(s) = parse_input("/join") else { panic!("expected Unknown") };
+        assert!(s.contains("requires"));
     }
 
     #[test]
@@ -179,26 +165,19 @@ mod tests {
 
     #[test]
     fn bell_no_arg() {
-        match parse_input("/bell") {
-            InputAction::ToggleBell(None) => {}
-            other => panic!("expected ToggleBell(None), got {other:?}"),
-        }
+        let InputAction::ToggleBell(None) = parse_input("/bell") else { panic!("expected ToggleBell(None)") };
     }
 
     #[test]
     fn bell_with_arg() {
-        match parse_input("/bell direct") {
-            InputAction::ToggleBell(Some(s)) => assert_eq!(s, "direct"),
-            other => panic!("expected ToggleBell(Some), got {other:?}"),
-        }
+        let InputAction::ToggleBell(Some(s)) = parse_input("/bell direct") else { panic!("expected ToggleBell(Some)") };
+        assert_eq!(s, "direct");
     }
 
     #[test]
     fn notify_alias() {
-        match parse_input("/notify group") {
-            InputAction::ToggleBell(Some(s)) => assert_eq!(s, "group"),
-            other => panic!("expected ToggleBell(Some), got {other:?}"),
-        }
+        let InputAction::ToggleBell(Some(s)) = parse_input("/notify group") else { panic!("expected ToggleBell(Some)") };
+        assert_eq!(s, "group");
     }
 
     #[test]
@@ -233,9 +212,7 @@ mod tests {
 
     #[test]
     fn unknown_command() {
-        match parse_input("/foo") {
-            InputAction::Unknown(s) => assert!(s.contains("/foo")),
-            other => panic!("expected Unknown, got {other:?}"),
-        }
+        let InputAction::Unknown(s) = parse_input("/foo") else { panic!("expected Unknown") };
+        assert!(s.contains("/foo"));
     }
 }
