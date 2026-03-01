@@ -673,12 +673,8 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let base_scroll = content_height.saturating_sub(available_height);
     app.scroll_offset = app.scroll_offset.min(base_scroll);
     let scroll_y = base_scroll - app.scroll_offset;
-    let paragraph = Paragraph::new(lines.clone())
-        .wrap(Wrap { trim: false })
-        .scroll((scroll_y as u16, 0));
-    frame.render_widget(paragraph, inner);
 
-    // Compute screen positions for native protocol image overlay
+    // Compute screen positions for native protocol image overlay (before lines is consumed)
     if !image_records.is_empty() {
         // Build cumulative wrapped-line positions
         let mut wrapped_positions: Vec<usize> = Vec::with_capacity(lines.len() + 1);
@@ -700,9 +696,14 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             let screen_start = img_start as i64 - scroll_y as i64;
             let screen_end = img_end as i64 - scroll_y as i64;
 
+            // Skip if entirely outside visible area
+            if screen_end <= 0 || screen_start >= available_height as i64 {
+                continue;
+            }
+
             // Clip to visible area
             let vis_start = screen_start.max(0) as u16;
-            let vis_end = (screen_end as u16).min(inner.height);
+            let vis_end = (screen_end.min(available_height as i64)) as u16;
 
             if vis_start < vis_end {
                 // Image width = first image line width minus 2-char indent
@@ -722,6 +723,11 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             }
         }
     }
+
+    let paragraph = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .scroll((scroll_y as u16, 0));
+    frame.render_widget(paragraph, inner);
 
     // Scrollbar on right border, inset to preserve rounded corners
     if content_height > available_height {

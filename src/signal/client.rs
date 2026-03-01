@@ -548,51 +548,25 @@ fn parse_attachment(
 
 /// Look for an attachment file in signal-cli's data directory by attachment ID.
 /// signal-cli stores attachments as `{data_dir}/attachments/{id}.{ext}`.
-///
-/// signal-cli (Java) defaults to `~/.local/share/signal-cli/` on all platforms,
-/// which differs from the OS-native data dir on Windows (`AppData\Roaming`).
-/// We check both locations to handle either case.
 fn find_signal_cli_attachment(id: &str, content_type: &str) -> Option<std::path::PathBuf> {
-    // Build a list of candidate attachment directories.
-    // signal-cli uses ~/.local/share/signal-cli by default (Java convention),
-    // but we also check the OS-native data dir in case it was configured differently.
-    let mut candidate_dirs: Vec<std::path::PathBuf> = Vec::new();
+    let data_dir = dirs::data_dir()
+        .or_else(|| dirs::home_dir().map(|h| h.join(".local").join("share")))?;
+    let attachments_dir = data_dir.join("signal-cli").join("attachments");
 
-    // Primary: ~/.local/share/signal-cli/attachments (signal-cli's default on all platforms)
-    if let Some(home) = dirs::home_dir() {
-        candidate_dirs.push(
-            home.join(".local")
-                .join("share")
-                .join("signal-cli")
-                .join("attachments"),
-        );
-    }
-
-    // Secondary: OS-native data dir (e.g. AppData\Roaming on Windows, XDG on Linux)
-    if let Some(data) = dirs::data_dir() {
-        let native = data.join("signal-cli").join("attachments");
-        if !candidate_dirs.contains(&native) {
-            candidate_dirs.push(native);
-        }
-    }
-
+    // Try with MIME-derived extension first, then scan for any file starting with the ID
     let ext = mime_to_ext(content_type);
+    let with_ext = attachments_dir.join(format!("{id}.{ext}"));
+    if with_ext.exists() {
+        return Some(with_ext);
+    }
 
-    for attachments_dir in &candidate_dirs {
-        // Try with MIME-derived extension first
-        let with_ext = attachments_dir.join(format!("{id}.{ext}"));
-        if with_ext.exists() {
-            return Some(with_ext);
-        }
-
-        // Scan directory for files matching the attachment ID
-        if let Ok(entries) = std::fs::read_dir(attachments_dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let name = name.to_string_lossy();
-                if name.starts_with(id) {
-                    return Some(entry.path());
-                }
+    // Scan directory for files matching the attachment ID
+    if let Ok(entries) = std::fs::read_dir(&attachments_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with(id) {
+                return Some(entry.path());
             }
         }
     }

@@ -9,7 +9,7 @@ use ratatui::{
 /// Terminal image display protocol.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ImageProtocol {
-    /// Kitty Graphics Protocol (Kitty, Ghostty, WezTerm)
+    /// Kitty Graphics Protocol (Kitty, Ghostty)
     Kitty,
     /// iTerm2 Inline Images Protocol (iTerm2, WezTerm)
     Iterm2,
