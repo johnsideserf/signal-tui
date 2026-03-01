@@ -1122,6 +1122,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         ("w / b", "Word forward / back"),
         ("0 / $", "Start / end of line"),
         ("x / D", "Delete char / to end"),
+        ("y / Y", "Copy message / full line"),
         ("/", "Start command input"),
     ];
 

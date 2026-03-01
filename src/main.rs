@@ -636,6 +636,14 @@ async fn run_app(
                                 app.input_buffer.truncate(app.input_cursor);
                             }
 
+                            // Copy message to clipboard
+                            (_, KeyCode::Char('y')) => {
+                                app.copy_selected_message(false);
+                            }
+                            (_, KeyCode::Char('Y')) => {
+                                app.copy_selected_message(true);
+                            }
+
                             // Quick actions
                             (_, KeyCode::Char('/')) => {
                                 app.input_buffer = "/".to_string();
@@ -912,6 +920,12 @@ async fn run_demo_app(
                                 }
                                 (_, KeyCode::Char('D')) => {
                                     app.input_buffer.truncate(app.input_cursor);
+                                }
+                                (_, KeyCode::Char('y')) => {
+                                    app.copy_selected_message(false);
+                                }
+                                (_, KeyCode::Char('Y')) => {
+                                    app.copy_selected_message(true);
                                 }
                                 (_, KeyCode::Char('/')) => {
                                     app.input_buffer = "/".to_string();
