@@ -1,120 +1,246 @@
-/* signal-tui docs — IRC theme
- * Dark terminal aesthetic with modern polish.
- * Overrides the mdBook "coal" theme.
- */
+/* ═══════════════════════════════════════════════════════════════
+ *  signal-tui docs — IRC theme
+ *  "mIRC meets Blade Runner"
+ *  90s IRC aesthetic with modern CSS flourishes.
+ *  Overrides the mdBook "coal" theme.
+ * ═══════════════════════════════════════════════════════════════ */
 
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,600;0,700;1,400&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Share+Tech+Mono&display=swap');
 
-/* ── colour palette ────────────────────────────────────── */
+/* ── palette ───────────────────────────────────────────── */
 :root {
-    --bg-deep:       #0c0c1d;
-    --bg-main:       #1a1a2e;
-    --bg-sidebar:    #12122a;
-    --bg-code:       #0f0f23;
-    --text-primary:  #c0c0c0;
-    --text-heading:  #00ff88;
-    --accent-cyan:   #00e5ff;
-    --accent-green:  #39ff14;
-    --accent-amber:  #ffb000;
-    --border-dim:    #2a2a4a;
-    --border-bright: #3a3a5a;
+    --bg-void:       #05050e;
+    --bg-deep:       #0a0a1a;
+    --bg-main:       #0e0e20;
+    --bg-sidebar:    #08081a;
+    --bg-code:       #060614;
+    --bg-elevated:   #121230;
+
+    --text-primary:  #b0b0c8;
+    --text-dim:      #606080;
+    --text-bright:   #e0e0f0;
+
+    --green-crt:     #00ff88;
+    --green-dim:     #00cc66;
+    --green-glow:    rgba(0, 255, 136, 0.15);
+
+    --cyan-bright:   #00e5ff;
+    --cyan-dim:      #0099aa;
+    --cyan-glow:     rgba(0, 229, 255, 0.12);
+
+    --amber:         #ffb000;
+    --amber-dim:     #aa7500;
+    --amber-glow:    rgba(255, 176, 0, 0.1);
+
+    --magenta:       #ff44cc;
+    --red-alert:     #ff3344;
+
+    --border-dim:    #1a1a3a;
+    --border-mid:    #252550;
+    --border-bright: #3a3a6a;
+
+    /* noise overlay for CRT grain */
+    --noise: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
 }
 
-/* ── global typography ─────────────────────────────────── */
+/* ── mdBook coal overrides ─────────────────────────────── */
 .coal {
-    --bg:             var(--bg-main);
-    --fg:             var(--text-primary);
-    --sidebar-bg:     var(--bg-sidebar);
-    --sidebar-fg:     #8888aa;
-    --sidebar-active: var(--accent-cyan);
-    --links:          var(--accent-cyan);
-    --inline-code-color: var(--accent-green);
+    --bg:                var(--bg-main);
+    --fg:                var(--text-primary);
+    --sidebar-bg:        var(--bg-sidebar);
+    --sidebar-fg:        var(--text-dim);
+    --sidebar-active:    var(--cyan-bright);
+    --links:             var(--cyan-bright);
+    --inline-code-color: var(--green-crt);
     --theme-popup-bg:    var(--bg-deep);
-    --theme-popup-border: var(--border-dim);
-    --search-mark-bg: rgba(0, 229, 255, 0.2);
+    --theme-popup-border: var(--border-mid);
+    --search-mark-bg:    rgba(0, 229, 255, 0.18);
 }
 
+/* ── global ────────────────────────────────────────────── */
 body,
 .content,
 .sidebar,
 code,
 pre,
+pre > code,
 input,
 textarea {
-    font-family: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Source Code Pro', 'Consolas', monospace !important;
+    font-family: 'IBM Plex Mono', 'Cascadia Code', 'Consolas', monospace !important;
 }
 
 html {
-    background-color: var(--bg-deep) !important;
+    background-color: var(--bg-void) !important;
 }
 
 body {
     color: var(--text-primary);
     font-size: 14px;
-    line-height: 1.7;
+    line-height: 1.75;
+}
+
+/* ── CRT noise overlay ─────────────────────────────────── */
+html::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: var(--noise);
+    background-repeat: repeat;
+    pointer-events: none;
+    z-index: 99999;
+    opacity: 0.35;
+    mix-blend-mode: overlay;
+}
+
+/* ── scanlines (desktop) ───────────────────────────────── */
+@media (min-width: 768px) {
+    html::after {
+        content: '';
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 99998;
+        background: repeating-linear-gradient(
+            0deg,
+            transparent 0px,
+            transparent 2px,
+            rgba(0, 0, 0, 0.08) 2px,
+            rgba(0, 0, 0, 0.08) 4px
+        );
+    }
 }
 
 /* ── headings ──────────────────────────────────────────── */
 .content h1 {
-    color: var(--text-heading);
-    border-bottom: 2px solid var(--border-dim);
-    padding-bottom: 0.4em;
-    font-size: 1.6em;
+    color: var(--green-crt);
+    font-family: 'Share Tech Mono', 'IBM Plex Mono', monospace !important;
+    font-size: 1.55em;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.08em;
+    border-bottom: none;
+    padding-bottom: 0.5em;
+    margin-bottom: 0.8em;
+    position: relative;
+    text-shadow:
+        0 0 8px var(--green-glow),
+        0 0 20px rgba(0, 255, 136, 0.08);
+}
+
+/* ASCII-style double-line border under h1 */
+.content h1::after {
+    content: '════════════════════════════════════════════════════════════';
+    display: block;
+    color: var(--border-bright);
+    font-size: 0.55em;
+    letter-spacing: -0.05em;
+    margin-top: 0.5em;
+    overflow: hidden;
+    white-space: nowrap;
+    text-shadow: none;
 }
 
 .content h2 {
-    color: var(--accent-amber);
-    border-bottom: 1px dotted var(--border-dim);
-    padding-bottom: 0.3em;
-    font-size: 1.25em;
+    color: var(--amber);
+    font-family: 'Share Tech Mono', 'IBM Plex Mono', monospace !important;
+    font-size: 1.2em;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    border-bottom: none;
+    padding: 0.4em 0 0.4em 0;
+    margin-top: 1.8em;
+    position: relative;
+    text-shadow: 0 0 10px var(--amber-glow);
+}
+
+/* dashed leader after h2 */
+.content h2::after {
+    content: ' ────────────────────────────────────────';
+    color: var(--border-dim);
+    font-size: 0.8em;
+    letter-spacing: -0.02em;
+}
+
+.content h3 {
+    color: var(--cyan-bright);
+    font-size: 1.05em;
+    letter-spacing: 0.02em;
+    text-shadow: 0 0 8px var(--cyan-glow);
+}
+
+.content h4 {
+    color: var(--magenta);
+    font-size: 0.95em;
     text-transform: uppercase;
     letter-spacing: 0.04em;
 }
 
-.content h3 {
-    color: var(--accent-cyan);
-    font-size: 1.05em;
-}
-
-.content h4,
 .content h5,
 .content h6 {
-    color: var(--text-primary);
+    color: var(--text-bright);
 }
 
 /* ── links ─────────────────────────────────────────────── */
 .content a {
-    color: var(--accent-cyan);
+    color: var(--cyan-bright);
     text-decoration: none;
-    border-bottom: 1px dotted var(--accent-cyan);
-    transition: border-bottom-style 0.15s ease;
+    border-bottom: 1px dotted var(--cyan-dim);
+    transition: all 0.2s ease;
 }
 
 .content a:hover {
-    border-bottom-style: solid;
-    text-shadow: 0 0 6px rgba(0, 229, 255, 0.3);
+    color: #fff;
+    border-bottom: 1px solid var(--cyan-bright);
+    text-shadow: 0 0 8px var(--cyan-glow), 0 0 16px rgba(0, 229, 255, 0.1);
+    background-color: rgba(0, 229, 255, 0.05);
 }
 
 /* ── inline code ───────────────────────────────────────── */
 .content code {
-    color: var(--accent-green);
-    background-color: rgba(15, 15, 35, 0.6);
-    border: 1px solid var(--border-dim);
-    border-radius: 3px;
-    padding: 0.1em 0.35em;
-    font-size: 0.9em;
+    color: var(--green-crt);
+    background-color: rgba(0, 255, 136, 0.04);
+    border: 1px solid rgba(0, 255, 136, 0.12);
+    border-radius: 2px;
+    padding: 0.1em 0.4em;
+    font-size: 0.88em;
+    text-shadow: 0 0 6px rgba(0, 255, 136, 0.1);
 }
 
 /* ── code blocks ───────────────────────────────────────── */
 .content pre {
     background-color: var(--bg-code) !important;
-    border: 1px solid var(--border-dim);
-    border-radius: 4px;
-    padding: 1em 1.2em;
+    border: 1px solid var(--border-mid);
+    border-top: none;
+    border-radius: 0 0 3px 3px;
+    padding: 1em 1.2em 1em 1.2em;
     position: relative;
     overflow-x: auto;
+    margin-top: 0;
+}
+
+/* terminal title bar */
+.content pre::before {
+    content: '  TERMINAL ─── signal-tui ';
+    display: block;
+    background: linear-gradient(90deg, var(--border-mid), var(--bg-deep));
+    color: var(--text-dim);
+    font-size: 0.72em;
+    letter-spacing: 0.08em;
+    padding: 0.35em 0.8em;
+    margin: -1em -1.2em 0.8em -1.2em;
+    border-bottom: 1px solid var(--border-mid);
+    text-transform: uppercase;
+    position: relative;
+}
+
+/* traffic-light dots on terminal bar */
+.content pre::after {
+    content: '● ● ●';
+    position: absolute;
+    top: 0.28em;
+    right: 0.8em;
+    font-size: 0.6em;
+    letter-spacing: 0.3em;
+    color: var(--border-bright);
 }
 
 .content pre > code {
@@ -122,196 +248,374 @@ body {
     background: none;
     border: none;
     padding: 0;
-}
-
-/* terminal title bar for code blocks */
-.content pre::before {
-    content: '>';
-    display: block;
-    color: var(--accent-green);
-    font-size: 0.8em;
-    margin-bottom: 0.5em;
-    opacity: 0.5;
+    text-shadow: none;
+    font-size: 0.92em;
 }
 
 /* ── blockquotes ───────────────────────────────────────── */
 .content blockquote {
-    border-left: 3px solid var(--accent-amber);
-    background-color: rgba(255, 176, 0, 0.05);
-    color: #aaa;
-    padding: 0.5em 1em;
-    margin: 1em 0;
+    border-left: 3px solid var(--amber);
+    border-right: 1px solid var(--border-dim);
+    background:
+        linear-gradient(90deg, rgba(255, 176, 0, 0.04), transparent 40%);
+    color: var(--text-dim);
+    padding: 0.8em 1.2em;
+    margin: 1.2em 0;
+    position: relative;
+}
+
+.content blockquote::before {
+    content: '>';
+    position: absolute;
+    left: -1.5em;
+    top: 0.7em;
+    color: var(--amber-dim);
+    font-size: 0.85em;
+    opacity: 0;
 }
 
 /* ── tables ────────────────────────────────────────────── */
 .content table {
     border-collapse: collapse;
     width: 100%;
-    margin: 1em 0;
+    margin: 1.2em 0;
+    border: 1px solid var(--border-mid);
 }
 
 .content table th {
-    color: var(--accent-amber);
-    background-color: rgba(255, 176, 0, 0.08);
-    border: 1px solid var(--border-dim);
-    padding: 0.5em 0.8em;
+    color: var(--amber);
+    background: linear-gradient(180deg, var(--bg-elevated), var(--bg-deep));
+    border: 1px solid var(--border-mid);
+    border-bottom: 2px solid var(--amber-dim);
+    padding: 0.55em 0.9em;
     text-align: left;
     text-transform: uppercase;
-    font-size: 0.85em;
-    letter-spacing: 0.06em;
+    font-size: 0.8em;
+    font-weight: 600;
+    letter-spacing: 0.08em;
 }
 
 .content table td {
     border: 1px solid var(--border-dim);
-    padding: 0.45em 0.8em;
+    padding: 0.45em 0.9em;
+    font-size: 0.93em;
+}
+
+.content table tr:hover {
+    background-color: rgba(0, 229, 255, 0.03);
 }
 
 .content table tr:nth-child(even) {
-    background-color: rgba(18, 18, 42, 0.4);
+    background-color: rgba(8, 8, 26, 0.5);
 }
 
-/* ── sidebar (IRC channel list) ────────────────────────── */
+.content table tr:nth-child(even):hover {
+    background-color: rgba(0, 229, 255, 0.05);
+}
+
+/* ── lists ─────────────────────────────────────────────── */
+.content li {
+    margin-bottom: 0.2em;
+}
+
+/* checkbox-style list items */
+.content li > input[type="checkbox"] {
+    accent-color: var(--green-crt);
+}
+
+/* ── horizontal rules ──────────────────────────────────── */
+.content hr {
+    border: none;
+    height: 1px;
+    background: linear-gradient(
+        90deg,
+        transparent,
+        var(--border-bright) 20%,
+        var(--border-bright) 80%,
+        transparent
+    );
+    margin: 2em 0;
+}
+
+/* ── strong / emphasis ─────────────────────────────────── */
+.content strong {
+    color: var(--text-bright);
+    font-weight: 600;
+}
+
+.content em {
+    color: var(--text-primary);
+    font-style: italic;
+}
+
+/* ═══════════════════════════════════════════════════════════
+ *  SIDEBAR — styled as IRC channel list
+ * ═══════════════════════════════════════════════════════════ */
 .sidebar {
     background-color: var(--bg-sidebar) !important;
-    border-right: 1px solid var(--border-dim);
+    border-right: 1px solid var(--border-mid);
+    position: relative;
 }
 
 .sidebar .sidebar-scrollbox {
     background-color: var(--bg-sidebar) !important;
 }
 
-/* section headers look like IRC network names */
-.sidebar .chapter li.part-title {
-    color: var(--accent-amber);
+/* ── sidebar top: looks like an IRC client title bar ───── */
+.sidebar .sidebar-scrollbox::before {
+    content: '╔══ channels ═══════════╗';
+    display: block;
+    color: var(--border-bright);
+    font-family: 'Share Tech Mono', monospace !important;
+    font-size: 0.7em;
+    letter-spacing: 0.05em;
+    padding: 0.8em 0 0.5em 0.8em;
     text-transform: uppercase;
-    font-size: 0.75em;
-    letter-spacing: 0.12em;
-    padding: 0.8em 0 0.3em 1em;
-    border-bottom: 1px solid var(--border-dim);
-    margin-bottom: 0.2em;
 }
 
-/* chapter links look like IRC channel names */
+/* section headers = IRC network names */
+.sidebar .chapter li.part-title {
+    color: var(--amber);
+    font-family: 'Share Tech Mono', monospace !important;
+    text-transform: uppercase;
+    font-size: 0.72em;
+    letter-spacing: 0.14em;
+    padding: 1em 0 0.35em 0.8em;
+    border-top: 1px solid var(--border-dim);
+    border-bottom: 1px solid var(--border-dim);
+    margin-top: 0.3em;
+    background: linear-gradient(90deg, rgba(255, 176, 0, 0.04), transparent 60%);
+    text-shadow: 0 0 12px var(--amber-glow);
+}
+
+/* chapter links = IRC channel names */
 .sidebar .chapter a {
-    color: #8888aa;
+    color: var(--text-dim);
     border-left: 3px solid transparent;
-    padding: 0.25em 0 0.25em 0.8em;
+    padding: 0.3em 0.8em 0.3em 0.8em;
     display: block;
-    transition: all 0.12s ease;
+    transition: all 0.15s ease;
+    font-size: 0.9em;
+    position: relative;
 }
 
 .sidebar .chapter a:hover {
-    color: var(--accent-cyan);
-    border-left-color: var(--accent-cyan);
-    background-color: rgba(0, 229, 255, 0.05);
+    color: var(--cyan-bright);
+    border-left-color: var(--cyan-bright);
+    background: linear-gradient(90deg, rgba(0, 229, 255, 0.06), transparent 80%);
+    text-shadow: 0 0 6px var(--cyan-glow);
 }
 
 .sidebar .chapter li.chapter-item.expanded > a,
 .sidebar .chapter a.active {
-    color: var(--accent-cyan);
-    border-left-color: var(--accent-cyan);
-    background-color: rgba(0, 229, 255, 0.08);
+    color: var(--cyan-bright);
+    border-left-color: var(--cyan-bright);
+    background: linear-gradient(90deg, rgba(0, 229, 255, 0.08), transparent 70%);
     font-weight: 600;
+    text-shadow: 0 0 8px var(--cyan-glow);
 }
 
-/* ── top menu bar ──────────────────────────────────────── */
+/* blinking cursor on active channel */
+.sidebar .chapter a.active::after {
+    content: '█';
+    color: var(--cyan-bright);
+    font-size: 0.75em;
+    margin-left: 0.3em;
+    animation: blink-cursor 1s step-end infinite;
+    opacity: 0.6;
+}
+
+@keyframes blink-cursor {
+    0%, 100% { opacity: 0.6; }
+    50%      { opacity: 0; }
+}
+
+/* ── sidebar resize handle ─────────────────────────────── */
+.sidebar-resize-handle {
+    border-right-color: var(--border-mid) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════
+ *  MENU BAR — IRC status line feel
+ * ═══════════════════════════════════════════════════════════ */
 .menu-bar,
 .menu-bar.bordered {
-    background-color: var(--bg-deep) !important;
-    border-bottom: 1px solid var(--border-dim) !important;
+    background-color: var(--bg-void) !important;
+    border-bottom: 1px solid var(--border-mid) !important;
 }
 
 .menu-bar .icon-button {
-    color: #6666aa;
+    color: var(--text-dim);
+    transition: color 0.15s ease, text-shadow 0.15s ease;
 }
 
 .menu-bar .icon-button:hover {
-    color: var(--accent-cyan);
+    color: var(--cyan-bright);
+    filter: drop-shadow(0 0 4px var(--cyan-glow));
 }
 
-/* ── CRT scanline overlay (desktop only) ───────────────── */
-@media (min-width: 768px) {
-    .content main::after {
-        content: '';
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        pointer-events: none;
-        z-index: 9999;
-        background: repeating-linear-gradient(
-            0deg,
-            rgba(0, 0, 0, 0.03) 0px,
-            rgba(0, 0, 0, 0.03) 1px,
-            transparent 1px,
-            transparent 3px
-        );
-    }
+/* book title in menu bar */
+.menu-bar h1.menu-title {
+    color: var(--green-crt) !important;
+    font-family: 'Share Tech Mono', monospace !important;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-size: 0.85em;
+    text-shadow: 0 0 10px var(--green-glow);
 }
 
-/* ── selection ─────────────────────────────────────────── */
-::selection {
-    background-color: rgba(0, 229, 255, 0.25);
-    color: #fff;
-}
-
-/* ── scrollbar ─────────────────────────────────────────── */
-::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-}
-
-::-webkit-scrollbar-track {
-    background: var(--bg-deep);
-}
-
-::-webkit-scrollbar-thumb {
-    background: var(--border-bright);
-    border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-    background: #4a4a6a;
-}
-
-/* ── search box ────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════
+ *  SEARCH
+ * ═══════════════════════════════════════════════════════════ */
 #searchbar {
     background-color: var(--bg-code) !important;
-    border: 1px solid var(--border-dim) !important;
+    border: 1px solid var(--border-mid) !important;
     color: var(--text-primary) !important;
+    font-family: 'IBM Plex Mono', monospace !important;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 #searchbar:focus {
-    border-color: var(--accent-cyan) !important;
-    box-shadow: 0 0 4px rgba(0, 229, 255, 0.2);
+    border-color: var(--cyan-bright) !important;
+    box-shadow:
+        0 0 6px rgba(0, 229, 255, 0.15),
+        inset 0 0 8px rgba(0, 229, 255, 0.05);
 }
 
 #searchresults a {
-    color: var(--accent-cyan);
+    color: var(--cyan-bright);
 }
 
 #searchresults .teaser {
-    color: #888;
+    color: var(--text-dim);
 }
 
-/* ── navigation buttons ────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════
+ *  NAVIGATION
+ * ═══════════════════════════════════════════════════════════ */
 .nav-chapters {
-    color: #6666aa;
+    color: var(--text-dim);
     transition: color 0.15s ease;
+    opacity: 0.7;
 }
 
 .nav-chapters:hover {
-    color: var(--accent-cyan);
+    color: var(--cyan-bright);
+    opacity: 1;
 }
 
-/* ── page footer ───────────────────────────────────────── */
+/* ── theme popup ───────────────────────────────────────── */
+.theme-popup {
+    background-color: var(--bg-deep) !important;
+    border: 1px solid var(--border-mid) !important;
+}
+
+.theme-popup .theme:hover {
+    background-color: var(--bg-elevated) !important;
+    color: var(--cyan-bright) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════
+ *  CONTENT AREA — main page styling
+ * ═══════════════════════════════════════════════════════════ */
+
+/* subtle vignette on content area */
+#mdbook-content.content {
+    background:
+        radial-gradient(
+            ellipse at 50% 0%,
+            transparent 60%,
+            rgba(5, 5, 14, 0.3) 100%
+        );
+}
+
+/* "MOTD" style for the first paragraph on intro page */
+.content main > h1:first-child + p {
+    color: var(--text-bright);
+    border-left: 3px solid var(--green-crt);
+    padding-left: 1em;
+    background: linear-gradient(90deg, rgba(0, 255, 136, 0.03), transparent 50%);
+}
+
+/* ── warnings / admonitions ────────────────────────────── */
 .content .warning {
-    border-left-color: var(--accent-amber);
-    background-color: rgba(255, 176, 0, 0.06);
+    border-left: 3px solid var(--red-alert);
+    background: linear-gradient(90deg, rgba(255, 51, 68, 0.05), transparent 40%);
+    color: var(--text-primary);
 }
 
-/* ── responsive adjustments ────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════
+ *  SELECTION
+ * ═══════════════════════════════════════════════════════════ */
+::selection {
+    background-color: rgba(0, 229, 255, 0.2);
+    color: #fff;
+    text-shadow: none;
+}
+
+/* ═══════════════════════════════════════════════════════════
+ *  SCROLLBAR
+ * ═══════════════════════════════════════════════════════════ */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--bg-void);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border-mid);
+    border-radius: 0;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--border-bright);
+}
+
+/* ═══════════════════════════════════════════════════════════
+ *  HELP POPUP
+ * ═══════════════════════════════════════════════════════════ */
+#mdbook-help-popup {
+    background-color: var(--bg-deep) !important;
+    border: 1px solid var(--border-mid) !important;
+}
+
+#mdbook-help-popup h2 {
+    color: var(--green-crt);
+}
+
+#mdbook-help-popup kbd {
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--border-bright);
+    color: var(--amber);
+    font-family: 'IBM Plex Mono', monospace;
+    border-radius: 2px;
+}
+
+/* ═══════════════════════════════════════════════════════════
+ *  AMBIENT GLOW — subtle colored light at page edges
+ * ═══════════════════════════════════════════════════════════ */
+@media (min-width: 768px) {
+    .page-wrapper {
+        background:
+            radial-gradient(
+                ellipse at 0% 30%,
+                rgba(0, 229, 255, 0.015),
+                transparent 50%
+            ),
+            radial-gradient(
+                ellipse at 100% 70%,
+                rgba(0, 255, 136, 0.01),
+                transparent 50%
+            );
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════
+ *  RESPONSIVE
+ * ═══════════════════════════════════════════════════════════ */
 @media (max-width: 768px) {
     body {
         font-size: 13px;
@@ -321,7 +625,45 @@ body {
         font-size: 1.3em;
     }
 
+    .content h1::after {
+        content: '════════════════════════════════';
+    }
+
     .content h2 {
-        font-size: 1.1em;
+        font-size: 1.05em;
+    }
+
+    .content h2::after {
+        content: ' ────────────────────';
+    }
+
+    /* simpler code blocks on mobile */
+    .content pre::before {
+        content: '> ';
+        background: none;
+        padding: 0;
+        margin: -1em -1.2em 0.6em -1.2em;
+        padding-left: 1.2em;
+        border-bottom: 1px solid var(--border-dim);
+        padding-bottom: 0.3em;
+    }
+
+    .content pre::after {
+        display: none;
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════
+ *  PRINT — strip decorative elements
+ * ═══════════════════════════════════════════════════════════ */
+@media print {
+    html::before,
+    html::after,
+    .content pre::before,
+    .content pre::after,
+    .content h1::after,
+    .content h2::after,
+    .sidebar .chapter a.active::after {
+        display: none !important;
     }
 }
