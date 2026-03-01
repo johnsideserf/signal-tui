@@ -154,6 +154,8 @@ pub struct App {
     pub pending_sends: HashMap<String, (String, i64)>,
     /// Receipts that arrived before their matching SendTimestamp — replayed after each SendTimestamp
     pub pending_receipts: Vec<(String, String, Vec<i64>)>,
+    /// Timestamp of the message at the scroll cursor (set during draw, cleared at scroll_offset=0)
+    pub focused_message_time: Option<DateTime<Utc>>,
 }
 
 pub const SETTINGS_ITEMS: &[&str] = &[
@@ -344,6 +346,7 @@ impl App {
             nerd_fonts: false,
             pending_sends: HashMap::new(),
             pending_receipts: Vec::new(),
+            focused_message_time: None,
         }
     }
 
