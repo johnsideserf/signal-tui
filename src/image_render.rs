@@ -1,3 +1,4 @@
+use std::io::Cursor;
 use std::path::Path;
 
 use image::GenericImageView;
@@ -5,6 +6,69 @@ use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
 };
+
+/// Terminal image display protocol.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ImageProtocol {
+    /// Kitty Graphics Protocol (Kitty, Ghostty)
+    Kitty,
+    /// iTerm2 Inline Images Protocol (iTerm2, WezTerm)
+    Iterm2,
+    /// Unicode halfblock fallback (universal)
+    Halfblock,
+}
+
+/// Detect the best available image protocol by checking environment variables.
+pub fn detect_protocol() -> ImageProtocol {
+    // Kitty sets KITTY_WINDOW_ID
+    if std::env::var("KITTY_WINDOW_ID").is_ok() {
+        return ImageProtocol::Kitty;
+    }
+    if let Ok(term) = std::env::var("TERM_PROGRAM") {
+        match term.as_str() {
+            "ghostty" => return ImageProtocol::Kitty,
+            "iTerm.app" => return ImageProtocol::Iterm2,
+            "WezTerm" => return ImageProtocol::Iterm2,
+            _ => {}
+        }
+    }
+    ImageProtocol::Halfblock
+}
+
+/// Pre-resize an image and encode as PNG for native terminal protocol rendering.
+///
+/// Returns the base64-encoded PNG data, sized to look good at the given cell
+/// dimensions. Assumes ~8px per cell width and ~16px per cell height.
+pub fn encode_native_png(path: &Path, cell_width: u32, cell_height: u32) -> Option<String> {
+    let img = image::open(path).ok()?;
+    let (orig_w, orig_h) = img.dimensions();
+    if orig_w == 0 || orig_h == 0 {
+        return None;
+    }
+
+    // Target pixel dimensions based on typical cell size
+    let target_w = cell_width * 8;
+    let target_h = cell_height * 16;
+
+    let scale = f64::min(
+        target_w as f64 / orig_w as f64,
+        target_h as f64 / orig_h as f64,
+    )
+    .min(1.0);
+
+    let new_w = ((orig_w as f64 * scale).round() as u32).max(1);
+    let new_h = ((orig_h as f64 * scale).round() as u32).max(1);
+
+    let resized = img.resize_exact(new_w, new_h, image::imageops::FilterType::Triangle);
+
+    let mut buf = Cursor::new(Vec::new());
+    resized
+        .write_to(&mut buf, image::ImageFormat::Png)
+        .ok()?;
+
+    use base64::Engine;
+    Some(base64::engine::general_purpose::STANDARD.encode(buf.into_inner()))
+}
 
 /// Render an image file as halfblock-character lines for display in a terminal.
 ///
@@ -15,8 +79,8 @@ use ratatui::{
 pub fn render_image(path: &Path, max_width: u32) -> Option<Vec<Line<'static>>> {
     let img = image::open(path).ok()?;
 
-    let cap_width = max_width.min(40);
-    let cap_height: u32 = 40; // 20 cell-rows × 2 pixels per row
+    let cap_width = max_width;
+    let cap_height: u32 = 60; // 30 cell-rows × 2 pixels per row
 
     let (orig_w, orig_h) = img.dimensions();
     if orig_w == 0 || orig_h == 0 {

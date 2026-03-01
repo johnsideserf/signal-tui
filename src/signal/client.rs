@@ -497,12 +497,21 @@ fn parse_attachment(
         .map(|s| s.to_string());
 
     // Generate a filename if signal-cli didn't provide one
-    let effective_name = filename.clone().unwrap_or_else(|| {
+    let mut effective_name = filename.clone().unwrap_or_else(|| {
         let ext = mime_to_ext(&content_type);
         // Use last 8 chars of attachment ID for uniqueness
         let short_id = if id.len() > 8 { &id[id.len() - 8..] } else { &id };
         format!("{short_id}.{ext}")
     });
+
+    // Strip doubled extension (e.g. "photo.jpg.jpg" → "photo.jpg")
+    if let Some(dot_pos) = effective_name.rfind('.') {
+        let ext = &effective_name[dot_pos..]; // e.g. ".jpg"
+        let base = &effective_name[..dot_pos];
+        if base.ends_with(ext) {
+            effective_name = base.to_string();
+        }
+    }
 
     let dest = download_dir.join(&effective_name);
 
