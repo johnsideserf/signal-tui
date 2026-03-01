@@ -27,9 +27,10 @@
   - Per-conversation `/mute` with DB persistence
   - Setup wizard preferences step
 
-- [ ] **Delivery/read receipt display**
-  - Receipts are already parsed but silently discarded
-  - Show checkmark indicators (sent/delivered/read) next to messages
+- [x] **Delivery/read receipt display**
+  - Status symbols on outgoing messages (Sending → Sent → Delivered → Read → Viewed)
+  - Configurable via /settings (receipts, colors, Nerd Font icons)
+  - Optional `--debug` flag for protocol diagnostics
 
 - [ ] **Send attachments**
   - Only receiving works today
