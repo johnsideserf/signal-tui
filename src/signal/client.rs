@@ -548,25 +548,36 @@ fn parse_attachment(
 
 /// Look for an attachment file in signal-cli's data directory by attachment ID.
 /// signal-cli stores attachments as `{data_dir}/attachments/{id}.{ext}`.
+///
+/// Checks multiple locations since signal-cli may use platform-native data dirs
+/// or POSIX-style ~/.local/share depending on how it was installed.
 fn find_signal_cli_attachment(id: &str, content_type: &str) -> Option<std::path::PathBuf> {
-    let data_dir = dirs::data_dir()
-        .or_else(|| dirs::home_dir().map(|h| h.join(".local").join("share")))?;
-    let attachments_dir = data_dir.join("signal-cli").join("attachments");
-
-    // Try with MIME-derived extension first, then scan for any file starting with the ID
-    let ext = mime_to_ext(content_type);
-    let with_ext = attachments_dir.join(format!("{id}.{ext}"));
-    if with_ext.exists() {
-        return Some(with_ext);
+    let mut candidates = Vec::new();
+    if let Some(data_dir) = dirs::data_dir() {
+        candidates.push(data_dir.join("signal-cli").join("attachments"));
+    }
+    // Also check ~/.local/share (POSIX-style, common on MSYS/WSL)
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join(".local").join("share").join("signal-cli").join("attachments"));
     }
 
-    // Scan directory for files matching the attachment ID
-    if let Ok(entries) = std::fs::read_dir(&attachments_dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if name.starts_with(id) {
-                return Some(entry.path());
+    let ext = mime_to_ext(content_type);
+
+    for attachments_dir in &candidates {
+        // Try with MIME-derived extension first
+        let with_ext = attachments_dir.join(format!("{id}.{ext}"));
+        if with_ext.exists() {
+            return Some(with_ext);
+        }
+
+        // Scan directory for files matching the attachment ID
+        if let Ok(entries) = std::fs::read_dir(attachments_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if name.starts_with(id) {
+                    return Some(entry.path());
+                }
             }
         }
     }
