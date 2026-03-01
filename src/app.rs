@@ -173,7 +173,10 @@ impl App {
             0 => self.notify_direct = !self.notify_direct,
             1 => self.notify_group = !self.notify_group,
             2 => self.sidebar_visible = !self.sidebar_visible,
-            3 => self.inline_images = !self.inline_images,
+            3 => {
+                self.inline_images = !self.inline_images;
+                self.refresh_image_previews();
+            }
             4 => self.native_images = !self.native_images,
             5 => self.show_receipts = !self.show_receipts,
             6 => self.color_receipts = !self.color_receipts,
@@ -196,6 +199,41 @@ impl App {
         }
     }
 
+    /// Persist current settings to the config file.
+    fn save_settings(&self) {
+        // Load existing config to preserve non-settings fields (signal_cli_path, download_dir)
+        let mut config = crate::config::Config::load(None).unwrap_or_default();
+        config.account = self.account.clone();
+        config.notify_direct = self.notify_direct;
+        config.notify_group = self.notify_group;
+        config.inline_images = self.inline_images;
+        config.native_images = self.native_images;
+        config.show_receipts = self.show_receipts;
+        config.color_receipts = self.color_receipts;
+        config.nerd_fonts = self.nerd_fonts;
+        if let Err(e) = config.save() {
+            crate::debug_log::logf(format_args!("settings save error: {e}"));
+        }
+    }
+
+    /// Re-render or clear image previews on all messages (after toggling inline_images).
+    fn refresh_image_previews(&mut self) {
+        for conv in self.conversations.values_mut() {
+            for msg in &mut conv.messages {
+                if msg.body.starts_with("[image:") {
+                    if self.inline_images {
+                        // Re-render from stored path
+                        if let Some(ref p) = msg.image_path {
+                            msg.image_lines = image_render::render_image(Path::new(p), 40);
+                        }
+                    } else {
+                        msg.image_lines = None;
+                    }
+                }
+            }
+        }
+    }
+
     /// Handle a key press while the settings overlay is open.
     pub fn handle_settings_key(&mut self, code: KeyCode) {
         match code {
@@ -207,11 +245,12 @@ impl App {
             KeyCode::Char('k') | KeyCode::Up => {
                 self.settings_index = self.settings_index.saturating_sub(1);
             }
-            KeyCode::Char(' ') | KeyCode::Enter => {
+            KeyCode::Char(' ') | KeyCode::Enter | KeyCode::Tab => {
                 self.toggle_setting(self.settings_index);
             }
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.show_settings = false;
+                self.save_settings();
             }
             _ => {}
         }
