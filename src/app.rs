@@ -1,5 +1,5 @@
 use chrono::{DateTime, Local, Utc};
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::text::Line;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -10,6 +10,13 @@ use crate::image_render;
 use crate::image_render::ImageProtocol;
 use crate::input::{self, InputAction, COMMANDS};
 use crate::signal::types::{Contact, Group, MessageStatus, SignalEvent, SignalMessage};
+
+/// Log a database error via debug_log (no-op when --debug is off).
+fn db_warn<T>(result: Result<T, impl std::fmt::Display>, context: &str) {
+    if let Err(e) = result {
+        crate::debug_log::logf(format_args!("db {context}: {e}"));
+    }
+}
 
 /// An image visible on screen, for native protocol overlay rendering.
 pub struct VisibleImage {
@@ -500,7 +507,7 @@ impl App {
             // Persist read marker
             let conv_id = conv_id.clone();
             if let Ok(Some(rowid)) = self.db.last_message_rowid(&conv_id) {
-                let _ = self.db.save_read_marker(&conv_id, rowid);
+                db_warn(self.db.save_read_marker(&conv_id, rowid), "save_read_marker");
             }
         }
     }
@@ -512,21 +519,241 @@ impl App {
             .retain(|_, ts| now.duration_since(*ts).as_secs() < 5);
     }
 
+    /// Handle global keys that work in both Normal and Insert mode.
+    /// Returns true if the key was consumed.
+    pub fn handle_global_key(&mut self, modifiers: KeyModifiers, code: KeyCode) -> bool {
+        match (modifiers, code) {
+            (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
+                self.should_quit = true;
+                true
+            }
+            (KeyModifiers::NONE, KeyCode::Tab) => {
+                self.next_conversation();
+                true
+            }
+            (KeyModifiers::SHIFT, KeyCode::BackTab) => {
+                self.prev_conversation();
+                true
+            }
+            (KeyModifiers::CONTROL, KeyCode::Left) => {
+                self.resize_sidebar(-2);
+                true
+            }
+            (KeyModifiers::CONTROL, KeyCode::Right) => {
+                self.resize_sidebar(2);
+                true
+            }
+            (_, KeyCode::PageUp) => {
+                self.scroll_offset = self.scroll_offset.saturating_add(5);
+                true
+            }
+            (_, KeyCode::PageDown) => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(5);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Handle overlay keys (help, contacts, settings, autocomplete).
+    /// Returns `Some((recipient, body, is_group, local_ts_ms))` if an autocomplete
+    /// command triggers a message send. Returns `None` otherwise.
+    /// Returns `Ok(true)` if the key was consumed by an overlay.
+    pub fn handle_overlay_key(&mut self, code: KeyCode) -> (bool, Option<(String, String, bool, i64)>) {
+        if self.show_help {
+            self.show_help = false;
+            return (true, None);
+        }
+        if self.show_contacts {
+            self.handle_contacts_key(code);
+            return (true, None);
+        }
+        if self.show_settings {
+            self.handle_settings_key(code);
+            return (true, None);
+        }
+        if self.autocomplete_visible {
+            let send = self.handle_autocomplete_key(code);
+            return (true, send);
+        }
+        (false, None)
+    }
+
+    /// Handle Normal mode key. Returns true if consumed.
+    pub fn handle_normal_key(&mut self, modifiers: KeyModifiers, code: KeyCode) {
+        match (modifiers, code) {
+            // Scrolling
+            (_, KeyCode::Char('j')) => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(1);
+            }
+            (_, KeyCode::Char('k')) => {
+                self.scroll_offset = self.scroll_offset.saturating_add(1);
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(10);
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('u')) => {
+                self.scroll_offset = self.scroll_offset.saturating_add(10);
+            }
+            (_, KeyCode::Char('g')) => {
+                if let Some(ref id) = self.active_conversation {
+                    if let Some(conv) = self.conversations.get(id) {
+                        self.scroll_offset = conv.messages.len();
+                    }
+                }
+            }
+            (_, KeyCode::Char('G')) => {
+                self.scroll_offset = 0;
+            }
+
+            // Switch to Insert mode
+            (_, KeyCode::Char('i')) => {
+                self.mode = InputMode::Insert;
+            }
+            (_, KeyCode::Char('a')) => {
+                if self.input_cursor < self.input_buffer.len() {
+                    self.input_cursor += 1;
+                }
+                self.mode = InputMode::Insert;
+            }
+            (_, KeyCode::Char('I')) => {
+                self.input_cursor = 0;
+                self.mode = InputMode::Insert;
+            }
+            (_, KeyCode::Char('A')) => {
+                self.input_cursor = self.input_buffer.len();
+                self.mode = InputMode::Insert;
+            }
+            (_, KeyCode::Char('o')) => {
+                self.input_buffer.clear();
+                self.input_cursor = 0;
+                self.mode = InputMode::Insert;
+            }
+
+            // Cursor movement
+            (_, KeyCode::Char('h')) => {
+                self.input_cursor = self.input_cursor.saturating_sub(1);
+            }
+            (_, KeyCode::Char('l')) => {
+                if self.input_cursor < self.input_buffer.len() {
+                    self.input_cursor += 1;
+                }
+            }
+            (_, KeyCode::Char('0')) => {
+                self.input_cursor = 0;
+            }
+            (_, KeyCode::Char('$')) => {
+                self.input_cursor = self.input_buffer.len();
+            }
+            (_, KeyCode::Char('w')) => {
+                let buf = &self.input_buffer;
+                let mut pos = self.input_cursor;
+                while pos < buf.len() {
+                    let c = buf[pos..].chars().next().unwrap();
+                    if c.is_whitespace() { break; }
+                    pos += c.len_utf8();
+                }
+                while pos < buf.len() {
+                    let c = buf[pos..].chars().next().unwrap();
+                    if !c.is_whitespace() { break; }
+                    pos += c.len_utf8();
+                }
+                self.input_cursor = pos;
+            }
+            (_, KeyCode::Char('b')) => {
+                let buf = &self.input_buffer;
+                let mut pos = self.input_cursor;
+                while pos > 0 {
+                    let prev = buf[..pos].chars().next_back().unwrap();
+                    if !prev.is_whitespace() { break; }
+                    pos -= prev.len_utf8();
+                }
+                while pos > 0 {
+                    let prev = buf[..pos].chars().next_back().unwrap();
+                    if prev.is_whitespace() { break; }
+                    pos -= prev.len_utf8();
+                }
+                self.input_cursor = pos;
+            }
+
+            // Buffer editing
+            (_, KeyCode::Char('x')) => {
+                if self.input_cursor < self.input_buffer.len() {
+                    self.input_buffer.remove(self.input_cursor);
+                    if self.input_cursor > 0
+                        && self.input_cursor >= self.input_buffer.len()
+                    {
+                        self.input_cursor = self.input_buffer.len().saturating_sub(1);
+                    }
+                }
+            }
+            (_, KeyCode::Char('D')) => {
+                self.input_buffer.truncate(self.input_cursor);
+            }
+
+            // Copy message to clipboard
+            (_, KeyCode::Char('y')) => {
+                self.copy_selected_message(false);
+            }
+            (_, KeyCode::Char('Y')) => {
+                self.copy_selected_message(true);
+            }
+
+            // Quick actions
+            (_, KeyCode::Char('/')) => {
+                self.input_buffer = "/".to_string();
+                self.input_cursor = 1;
+                self.mode = InputMode::Insert;
+                self.update_autocomplete();
+            }
+            (_, KeyCode::Esc) => {
+                if !self.input_buffer.is_empty() {
+                    self.input_buffer.clear();
+                    self.input_cursor = 0;
+                }
+            }
+
+            _ => {}
+        }
+    }
+
+    /// Handle Insert mode key.
+    /// Returns `Some((recipient, body, is_group, local_ts_ms))` if Enter triggers
+    /// a message send (via handle_input). Returns `None` otherwise.
+    pub fn handle_insert_key(&mut self, modifiers: KeyModifiers, code: KeyCode) -> Option<(String, String, bool, i64)> {
+        match (modifiers, code) {
+            (_, KeyCode::Esc) => {
+                self.mode = InputMode::Normal;
+                self.autocomplete_visible = false;
+                None
+            }
+            (_, KeyCode::Enter) => self.handle_input(),
+            _ => {
+                let needs_ac_update = matches!(
+                    code,
+                    KeyCode::Backspace | KeyCode::Delete | KeyCode::Char(_)
+                );
+                self.apply_input_edit(code);
+                if needs_ac_update {
+                    self.update_autocomplete();
+                }
+                None
+            }
+        }
+    }
+
     /// Handle an event from signal-cli
     pub fn handle_signal_event(&mut self, event: SignalEvent) {
         match event {
             SignalEvent::MessageReceived(msg) => self.handle_message(msg),
-            SignalEvent::ReceiptReceived { ref sender, ref receipt_type, ref timestamps } => {
-                let (sender, receipt_type, timestamps) = (sender.clone(), receipt_type.clone(), timestamps.clone());
+            SignalEvent::ReceiptReceived { sender, receipt_type, timestamps } => {
                 self.handle_receipt(&sender, &receipt_type, &timestamps);
             }
-            SignalEvent::SendTimestamp { ref rpc_id, server_ts } => {
-                let rpc_id = rpc_id.clone();
+            SignalEvent::SendTimestamp { rpc_id, server_ts } => {
                 self.handle_send_timestamp(&rpc_id, server_ts);
             }
-            SignalEvent::SendFailed { ref rpc_id } => {
+            SignalEvent::SendFailed { rpc_id } => {
                 self.status_message = "send failed".to_string();
-                let rpc_id = rpc_id.clone();
                 self.handle_send_failed(&rpc_id);
             }
             SignalEvent::TypingIndicator { sender, sender_name, is_typing } => {
@@ -598,106 +825,64 @@ impl App {
         // Outgoing synced messages already have a server timestamp; incoming messages have no status
         let msg_status = if msg.is_outgoing { Some(MessageStatus::Sent) } else { None };
 
-        // Add text body
-        if let Some(ref body) = msg.body {
+        // Helper: push a DisplayMessage and persist to DB
+        let mut push_msg = |body: String,
+                            image_lines: Option<Vec<Line<'static>>>,
+                            image_path: Option<String>| {
             if let Some(conv) = self.conversations.get_mut(&conv_id) {
                 conv.messages.push(DisplayMessage {
                     sender: sender_display.clone(),
                     timestamp: msg.timestamp,
                     body: body.clone(),
                     is_system: false,
-                    image_lines: None,
-                    image_path: None,
+                    image_lines,
+                    image_path,
                     status: msg_status,
                     timestamp_ms: msg_ts_ms,
                 });
             }
-            let _ = self.db.insert_message(
-                &conv_id,
-                &sender_display,
-                &ts_rfc3339,
-                body,
-                false,
-                msg_status,
-                msg_ts_ms,
+            db_warn(
+                self.db.insert_message(
+                    &conv_id, &sender_display, &ts_rfc3339, &body, false, msg_status, msg_ts_ms,
+                ),
+                "insert_message",
             );
+        };
+
+        // Add text body
+        if let Some(ref body) = msg.body {
+            push_msg(body.clone(), None, None);
         }
 
         // Add attachment notices
         for att in &msg.attachments {
-            let label = att
-                .filename
-                .as_deref()
-                .unwrap_or(&att.content_type);
-
+            let label = att.filename.as_deref().unwrap_or(&att.content_type);
             let is_image = matches!(
                 att.content_type.as_str(),
                 "image/jpeg" | "image/png" | "image/gif" | "image/webp"
             );
 
+            let path_info = att
+                .local_path
+                .as_deref()
+                .map(|p| format!("({})", path_to_file_uri(p)))
+                .unwrap_or_default();
+
             if is_image {
-                // Try to render inline image preview (only when enabled)
                 let rendered = if self.inline_images {
-                    att.local_path.as_deref().and_then(|p| {
-                        image_render::render_image(Path::new(p), 40)
-                    })
+                    att.local_path
+                        .as_deref()
+                        .and_then(|p| image_render::render_image(Path::new(p), 40))
                 } else {
                     None
                 };
-
-                let path_info = att.local_path.as_deref()
-                    .map(|p| format!("({})", path_to_file_uri(p)))
-                    .unwrap_or_default();
-
-                let att_body = format!("[image: {label}]{path_info}");
-
-                if let Some(conv) = self.conversations.get_mut(&conv_id) {
-                    conv.messages.push(DisplayMessage {
-                        sender: sender_display.clone(),
-                        timestamp: msg.timestamp,
-                        body: att_body.clone(),
-                        is_system: false,
-                        image_lines: rendered,
-                        image_path: att.local_path.clone(),
-                        status: msg_status,
-                        timestamp_ms: msg_ts_ms,
-                    });
-                }
-                let _ = self.db.insert_message(
-                    &conv_id,
-                    &sender_display,
-                    &ts_rfc3339,
-                    &att_body,
-                    false,
-                    msg_status,
-                    msg_ts_ms,
+                push_msg(
+                    format!("[image: {label}]{path_info}"),
+                    rendered,
+                    att.local_path.clone(),
                 );
             } else {
-                let path_info = att.local_path.as_deref()
-                    .map(|p| format!("({})", path_to_file_uri(p)))
-                    .unwrap_or_default();
-                let att_body = format!("[attachment: {label}]{path_info}");
-                if let Some(conv) = self.conversations.get_mut(&conv_id) {
-                    conv.messages.push(DisplayMessage {
-                        sender: sender_display.clone(),
-                        timestamp: msg.timestamp,
-                        body: att_body.clone(),
-                        is_system: false,
-                        image_lines: None,
-                        image_path: None,
-                        status: msg_status,
-                        timestamp_ms: msg_ts_ms,
-                    });
-                }
-                let _ = self.db.insert_message(
-                    &conv_id,
-                    &sender_display,
-                    &ts_rfc3339,
-                    &att_body,
-                    false,
-                    msg_status,
-                    msg_ts_ms,
-                );
+                push_msg(format!("[attachment: {label}]{path_info}"), None, None);
             }
         }
 
@@ -731,7 +916,7 @@ impl App {
                 if let Some(ref contact_name) = contact.name {
                     if !contact_name.is_empty() && conv.name != *contact_name {
                         conv.name = contact_name.clone();
-                        let _ = self.db.upsert_conversation(&contact.number, contact_name, false);
+                        db_warn(self.db.upsert_conversation(&contact.number, contact_name, false), "upsert_conversation");
                     }
                 }
             }
@@ -748,7 +933,7 @@ impl App {
             let conv = self.get_or_create_conversation(&group.id, &group.name, true);
             if !group.name.is_empty() && conv.name != group.name {
                 conv.name = group.name.clone();
-                let _ = self.db.upsert_conversation(&group.id, &group.name, true);
+                db_warn(self.db.upsert_conversation(&group.id, &group.name, true), "upsert_conversation");
             }
         }
     }
@@ -764,12 +949,12 @@ impl App {
                     if msg.sender == "you" && msg.timestamp_ms == local_ts {
                         let effective_ts = if server_ts != 0 { server_ts } else { local_ts };
                         // Update the DB row's timestamp_ms from local → server
-                        let _ = self.db.update_message_timestamp_ms(
+                        db_warn(self.db.update_message_timestamp_ms(
                             &conv_id,
                             local_ts,
                             effective_ts,
                             MessageStatus::Sent.to_i32(),
-                        );
+                        ), "update_message_timestamp_ms");
                         msg.timestamp_ms = effective_ts;
                         msg.status = Some(MessageStatus::Sent);
                         break;
@@ -793,16 +978,42 @@ impl App {
                 for msg in conv.messages.iter_mut().rev() {
                     if msg.sender == "you" && msg.timestamp_ms == local_ts {
                         msg.status = Some(MessageStatus::Failed);
-                        let _ = self.db.update_message_status(
+                        db_warn(self.db.update_message_status(
                             &conv_id,
                             local_ts,
                             MessageStatus::Failed.to_i32(),
-                        );
+                        ), "update_message_status");
                         break;
                     }
                 }
             }
         }
+    }
+
+    /// Try to upgrade an outgoing message's status in a single conversation.
+    /// Returns true if a match was found for `ts`.
+    fn try_upgrade_receipt(
+        db: &Database,
+        conv_id: &str,
+        conv: &mut Conversation,
+        ts: i64,
+        new_status: MessageStatus,
+    ) -> bool {
+        for msg in conv.messages.iter_mut().rev() {
+            if msg.sender == "you" && msg.timestamp_ms == ts {
+                if let Some(current) = msg.status {
+                    if new_status > current {
+                        msg.status = Some(new_status);
+                        db_warn(
+                            db.update_message_status(conv_id, ts, new_status.to_i32()),
+                            "update_message_status",
+                        );
+                    }
+                }
+                return true;
+            }
+        }
+        false
     }
 
     fn handle_receipt(&mut self, sender: &str, receipt_type: &str, timestamps: &[i64]) {
@@ -820,21 +1031,8 @@ impl App {
         let conv_id = sender.to_string();
         if let Some(conv) = self.conversations.get_mut(&conv_id) {
             for ts in timestamps {
-                for msg in conv.messages.iter_mut().rev() {
-                    if msg.sender == "you" && msg.timestamp_ms == *ts {
-                        if let Some(current) = msg.status {
-                            if new_status > current {
-                                msg.status = Some(new_status);
-                                let _ = self.db.update_message_status(
-                                    &conv_id,
-                                    *ts,
-                                    new_status.to_i32(),
-                                );
-                            }
-                        }
-                        matched_any = true;
-                        break;
-                    }
+                if Self::try_upgrade_receipt(&self.db, &conv_id, conv, *ts, new_status) {
+                    matched_any = true;
                 }
             }
         }
@@ -843,25 +1041,8 @@ impl App {
         // where sender is a member but conv is keyed by group ID)
         if !matched_any {
             for ts in timestamps {
-                let mut found = false;
                 for (cid, conv) in &mut self.conversations {
-                    for msg in conv.messages.iter_mut().rev() {
-                        if msg.sender == "you" && msg.timestamp_ms == *ts {
-                            if let Some(current) = msg.status {
-                                if new_status > current {
-                                    msg.status = Some(new_status);
-                                    let _ = self.db.update_message_status(
-                                        cid,
-                                        *ts,
-                                        new_status.to_i32(),
-                                    );
-                                }
-                            }
-                            found = true;
-                            break;
-                        }
-                    }
-                    if found {
+                    if Self::try_upgrade_receipt(&self.db, cid, conv, *ts, new_status) {
                         matched_any = true;
                         break;
                     }
@@ -893,7 +1074,7 @@ impl App {
         name: &str,
         is_group: bool,
     ) -> &mut Conversation {
-        let _ = self.db.upsert_conversation(id, name, is_group);
+        db_warn(self.db.upsert_conversation(id, name, is_group), "upsert_conversation");
         if !self.conversations.contains_key(id) {
             self.conversations.insert(
                 id.to_string(),
@@ -950,7 +1131,7 @@ impl App {
                             timestamp_ms: local_ts_ms,
                         });
                     }
-                    let _ = self.db.insert_message(
+                    db_warn(self.db.insert_message(
                         &conv_id,
                         "you",
                         &now.to_rfc3339(),
@@ -958,7 +1139,7 @@ impl App {
                         false,
                         Some(MessageStatus::Sending),
                         local_ts_ms,
-                    );
+                    ), "insert_message");
                     self.scroll_offset = 0;
                     return Some((conv_id, text, is_group, local_ts_ms));
                 } else {
@@ -1012,13 +1193,13 @@ impl App {
                         let name = self.conversations.get(&conv_id)
                             .map(|c| c.name.as_str()).unwrap_or(&conv_id);
                         self.status_message = format!("unmuted {name}");
-                        let _ = self.db.set_muted(&conv_id, false);
+                        db_warn(self.db.set_muted(&conv_id, false), "set_muted");
                     } else {
                         let name = self.conversations.get(&conv_id)
                             .map(|c| c.name.as_str()).unwrap_or(&conv_id);
                         self.status_message = format!("muted {name}");
                         self.muted_conversations.insert(conv_id.clone());
-                        let _ = self.db.set_muted(&conv_id, true);
+                        db_warn(self.db.set_muted(&conv_id, true), "set_muted");
                     }
                 } else {
                     self.status_message = "no active conversation to mute".to_string();
