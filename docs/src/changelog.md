@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.3.2
+
+### Read receipts and delivery status
+
+- **Message status indicators** -- outgoing messages now show delivery
+  lifecycle symbols: `◌` Sending → `○` Sent → `✓` Delivered → `●` Read
+  → `◉` Viewed
+- **Real-time updates** -- status symbols update live as recipients
+  receive and read your messages
+- **Group receipt support** -- delivery and read receipts work correctly
+  in group conversations
+- **Race condition handling** -- receipts that arrive before the server
+  confirms the send are buffered and replayed automatically
+- **Persistent status** -- message status is stored in the database and
+  restored on reload (stale "Sending" messages are promoted to "Sent")
+- **Nerd Font icons** -- optional Nerd Font glyphs available via
+  `/settings` > "Nerd Font icons"
+- **Configurable** -- three new settings toggles: "Read receipts" (on/off),
+  "Receipt colors" (colored/monochrome), "Nerd Font icons" (unicode/nerd)
+
+### Debug logging
+
+- **`--debug` flag** -- opt-in protocol logging to `signal-tui-debug.log`
+  for diagnosing signal-cli communication issues
+
+### Database
+
+- **Migration v3** -- adds `status` and `timestamp_ms` columns to the
+  messages table (automatic on first run)
+
+---
+
 ## v0.3.1
 
 ### Image attachments
