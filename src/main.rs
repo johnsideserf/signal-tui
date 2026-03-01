@@ -424,8 +424,9 @@ async fn send_msg(
     body: &str,
     is_group: bool,
     local_ts_ms: i64,
+    mentions: &[(usize, String)],
 ) {
-    match signal_client.send_message(recipient, body, is_group).await {
+    match signal_client.send_message(recipient, body, is_group, mentions).await {
         Ok(rpc_id) => {
             debug_log::logf(format_args!("send: to={recipient} ts={local_ts_ms}"));
             app.pending_sends
@@ -444,8 +445,8 @@ async fn dispatch_send(
     req: SendRequest,
 ) {
     match req {
-        SendRequest::Message { recipient, body, is_group, local_ts_ms } => {
-            send_msg(signal_client, app, &recipient, &body, is_group, local_ts_ms).await;
+        SendRequest::Message { recipient, body, is_group, local_ts_ms, mentions } => {
+            send_msg(signal_client, app, &recipient, &body, is_group, local_ts_ms, &mentions).await;
         }
         SendRequest::Reaction {
             conv_id, emoji, is_group, target_author, target_timestamp, remove,
@@ -591,6 +592,7 @@ async fn run_demo_app(
     db: db::Database,
 ) -> Result<()> {
     let mut app = App::new("+15551234567".to_string(), db);
+    app.is_demo = true;
     app.connected = true;
     app.status_message = "connected | demo mode".to_string();
 
@@ -673,6 +675,7 @@ fn populate_demo_data(app: &mut App) {
             status: if is_outgoing { Some(crate::signal::types::MessageStatus::Sent) } else { None },
             timestamp_ms: time.timestamp_millis(),
             reactions: Vec::new(),
+            mention_ranges: Vec::new(),
         }
     };
 
@@ -733,8 +736,11 @@ fn populate_demo_data(app: &mut App) {
         is_group: false,
     };
 
-    // --- #Rust Devs: group technical discussion ---
+    // --- #Rust Devs: group technical discussion with @mentions ---
     let rust_id = "group_rustdevs".to_string();
+    let mut alice_mention = dm("Alice", ts(10, 42), "Can you share the link? @Bob might want it too");
+    // "@Bob" starts at byte 24, ends at byte 28
+    alice_mention.mention_ranges = vec![(24, 28)];
     let rust_group = Conversation {
         name: "#Rust Devs".to_string(),
         id: rust_id.clone(),
@@ -743,7 +749,7 @@ fn populate_demo_data(app: &mut App) {
             dm("Bob", ts(10, 32), "Yeah, it's so much cleaner than the pin-based approach"),
             dm("Dave", ts(10, 35), "I'm still wrapping my head around it"),
             dm("you", ts(10, 40), "The desugaring docs helped me a lot"),
-            dm("Alice", ts(10, 42), "Can you share the link?"),
+            alice_mention,
             dm("you", ts(10, 43), "Sure, one sec"),
         ],
         unread: 0,
@@ -790,6 +796,44 @@ fn populate_demo_data(app: &mut App) {
     app.conversation_order = order;
     app.active_conversation = Some(alice_id.clone());
     app.status_message = "connected | demo mode".to_string();
+
+    // Populate contact names and UUID maps for @mention autocomplete
+    let mom_id = "+15550005555".to_string();
+    let dad_id = "+15550006666".to_string();
+    let demo_contacts: Vec<(&str, &str, &str)> = vec![
+        (&alice_id, "Alice", "aaaa-alice-uuid"),
+        (&bob_id, "Bob", "bbbb-bob-uuid"),
+        (&carol_id, "Carol", "cccc-carol-uuid"),
+        (&dave_id, "Dave", "dddd-dave-uuid"),
+        (&mom_id, "Mom", "eeee-mom-uuid"),
+        (&dad_id, "Dad", "ffff-dad-uuid"),
+    ];
+    for (phone, name, uuid) in &demo_contacts {
+        app.contact_names.insert(phone.to_string(), name.to_string());
+        app.uuid_to_name.insert(uuid.to_string(), name.to_string());
+        app.number_to_uuid.insert(phone.to_string(), uuid.to_string());
+    }
+
+    // Populate groups with correct members
+    use crate::signal::types::Group;
+    app.groups.insert(
+        rust_id.clone(),
+        Group {
+            id: rust_id,
+            name: "#Rust Devs".to_string(),
+            members: vec![alice_id.clone(), bob_id.clone(), dave_id.clone()],
+            member_uuids: vec![],
+        },
+    );
+    app.groups.insert(
+        family_id.clone(),
+        Group {
+            id: family_id,
+            name: "#Family".to_string(),
+            members: vec![mom_id, dad_id],
+            member_uuids: vec![],
+        },
+    );
 
     // Add sample reactions to some messages
     use crate::signal::types::Reaction;

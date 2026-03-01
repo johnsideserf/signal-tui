@@ -162,6 +162,7 @@ impl SignalClient {
         recipient: &str,
         body: &str,
         is_group: bool,
+        mentions: &[(usize, String)],
     ) -> Result<String> {
         let id = Uuid::new_v4().to_string();
 
@@ -170,7 +171,7 @@ impl SignalClient {
             map.insert(id.clone(), ("send".to_string(), Instant::now()));
         }
 
-        let params = if is_group {
+        let mut params = if is_group {
             serde_json::json!({
                 "groupId": recipient,
                 "message": body,
@@ -183,6 +184,20 @@ impl SignalClient {
                 "account": self.account,
             })
         };
+
+        if !mentions.is_empty() {
+            // signal-cli expects mentions as colon-separated strings: "start:length:uuid"
+            let mention_arr: Vec<serde_json::Value> = mentions
+                .iter()
+                .map(|(start, uuid)| {
+                    serde_json::Value::String(format!("{start}:1:{uuid}"))
+                })
+                .collect();
+            params.as_object_mut().unwrap().insert(
+                "mention".to_string(),
+                serde_json::Value::Array(mention_arr),
+            );
+        }
 
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -338,9 +353,11 @@ fn parse_rpc_result(method: &str, result: &serde_json::Value, rpc_id: Option<&st
                         .or_else(|| obj.get("name").and_then(|v| v.as_str()))
                         .filter(|s| !s.is_empty())
                         .map(|s| s.to_string());
+                    let uuid = obj.get("uuid").and_then(|v| v.as_str()).map(|s| s.to_string());
                     Some(Contact {
                         number: number.to_string(),
                         name,
+                        uuid,
                     })
                 })
                 .collect();
@@ -357,19 +374,28 @@ fn parse_rpc_result(method: &str, result: &serde_json::Value, rpc_id: Option<&st
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
-                    let members = obj
-                        .get("members")
-                        .and_then(|v| v.as_array())
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(|m| m.as_str().map(|s| s.to_string()))
-                                .collect()
-                        })
-                        .unwrap_or_default();
+                    let mut members = Vec::new();
+                    let mut member_uuids = Vec::new();
+                    if let Some(arr) = obj.get("members").and_then(|v| v.as_array()) {
+                        for m in arr {
+                            // signal-cli returns members as objects: {"number": "+1...", "uuid": "..."}
+                            // Fall back to plain string for compatibility
+                            let phone = m.get("number")
+                                .and_then(|v| v.as_str())
+                                .or_else(|| m.as_str());
+                            if let Some(phone) = phone {
+                                members.push(phone.to_string());
+                                if let Some(uuid) = m.get("uuid").and_then(|v| v.as_str()) {
+                                    member_uuids.push((phone.to_string(), uuid.to_string()));
+                                }
+                            }
+                        }
+                    }
                     Some(Group {
                         id: id.to_string(),
                         name,
                         members,
+                        member_uuids,
                     })
                 })
                 .collect();
@@ -557,6 +583,21 @@ fn parse_data_message(
         })
         .unwrap_or_default();
 
+    let mentions = data
+        .get("bodyRanges")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|r| {
+                    let start = r.get("start").and_then(|v| v.as_u64())? as usize;
+                    let length = r.get("length").and_then(|v| v.as_u64())? as usize;
+                    let uuid = r.get("mentionUuid").and_then(|v| v.as_str())?.to_string();
+                    Some(Mention { start, length, uuid })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     Some(SignalEvent::MessageReceived(SignalMessage {
         source,
         source_name,
@@ -567,6 +608,7 @@ fn parse_data_message(
         group_name,
         is_outgoing: false,
         destination: None,
+        mentions,
     }))
 }
 
@@ -626,6 +668,21 @@ fn parse_sent_sync(
         })
         .unwrap_or_default();
 
+    let mentions = sent
+        .get("bodyRanges")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|r| {
+                    let start = r.get("start").and_then(|v| v.as_u64())? as usize;
+                    let length = r.get("length").and_then(|v| v.as_u64())? as usize;
+                    let uuid = r.get("mentionUuid").and_then(|v| v.as_str())?.to_string();
+                    Some(Mention { start, length, uuid })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     Some(SignalEvent::MessageReceived(SignalMessage {
         source,
         source_name: None,
@@ -636,6 +693,7 @@ fn parse_sent_sync(
         group_name,
         is_outgoing: true,
         destination,
+        mentions,
     }))
 }
 
@@ -922,8 +980,12 @@ mod tests {
 
     #[test]
     fn parse_list_groups_basic() {
+        // signal-cli returns members as objects with number/uuid fields
         let result = json!([
-            {"id": "group1", "name": "Family", "members": ["+1", "+2"]},
+            {"id": "group1", "name": "Family", "members": [
+                {"number": "+1", "uuid": "uuid-1"},
+                {"number": "+2", "uuid": "uuid-2"}
+            ]},
             {"id": "group2", "name": "Work"}
         ]);
         let event = parse_rpc_result("listGroups", &result, None).unwrap();
@@ -933,9 +995,14 @@ mod tests {
                 assert_eq!(groups[0].id, "group1");
                 assert_eq!(groups[0].name, "Family");
                 assert_eq!(groups[0].members, vec!["+1", "+2"]);
+                assert_eq!(groups[0].member_uuids, vec![
+                    ("+1".to_string(), "uuid-1".to_string()),
+                    ("+2".to_string(), "uuid-2".to_string()),
+                ]);
                 assert_eq!(groups[1].id, "group2");
                 assert_eq!(groups[1].name, "Work");
                 assert!(groups[1].members.is_empty());
+                assert!(groups[1].member_uuids.is_empty());
             }
             _ => panic!("Expected GroupList"),
         }
@@ -1225,6 +1292,124 @@ mod tests {
                 assert_eq!(target_author, "+15559876543");
             }
             _ => panic!("Expected ReactionReceived, got {:?}", event),
+        }
+    }
+
+    #[test]
+    fn parse_data_message_with_mentions() {
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            result: None,
+            error: None,
+            method: Some("receive".to_string()),
+            params: Some(json!({
+                "envelope": {
+                    "sourceNumber": "+15551234567",
+                    "sourceName": "Alice",
+                    "timestamp": 1700000000000_i64,
+                    "dataMessage": {
+                        "timestamp": 1700000000000_i64,
+                        "message": "\u{FFFC} check this out",
+                        "bodyRanges": [
+                            {"start": 0, "length": 1, "mentionUuid": "abc-def-123"}
+                        ]
+                    }
+                }
+            })),
+        };
+        let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
+        match event {
+            SignalEvent::MessageReceived(msg) => {
+                assert_eq!(msg.mentions.len(), 1);
+                assert_eq!(msg.mentions[0].start, 0);
+                assert_eq!(msg.mentions[0].length, 1);
+                assert_eq!(msg.mentions[0].uuid, "abc-def-123");
+                assert!(msg.body.unwrap().contains('\u{FFFC}'));
+            }
+            _ => panic!("Expected MessageReceived, got {:?}", event),
+        }
+    }
+
+    #[test]
+    fn parse_sent_sync_with_mentions() {
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            result: None,
+            error: None,
+            method: Some("receive".to_string()),
+            params: Some(json!({
+                "envelope": {
+                    "sourceNumber": "+15551234567",
+                    "timestamp": 1700000000000_i64,
+                    "syncMessage": {
+                        "sentMessage": {
+                            "timestamp": 1700000000000_i64,
+                            "destinationNumber": "+15559876543",
+                            "message": "Hey \u{FFFC}!",
+                            "bodyRanges": [
+                                {"start": 4, "length": 1, "mentionUuid": "xyz-456"}
+                            ]
+                        }
+                    }
+                }
+            })),
+        };
+        let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
+        match event {
+            SignalEvent::MessageReceived(msg) => {
+                assert!(msg.is_outgoing);
+                assert_eq!(msg.mentions.len(), 1);
+                assert_eq!(msg.mentions[0].start, 4);
+                assert_eq!(msg.mentions[0].uuid, "xyz-456");
+            }
+            _ => panic!("Expected MessageReceived, got {:?}", event),
+        }
+    }
+
+    #[test]
+    fn parse_no_mentions_backward_compat() {
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            result: None,
+            error: None,
+            method: Some("receive".to_string()),
+            params: Some(json!({
+                "envelope": {
+                    "sourceNumber": "+15551234567",
+                    "timestamp": 1700000000000_i64,
+                    "dataMessage": {
+                        "timestamp": 1700000000000_i64,
+                        "message": "Hello world"
+                    }
+                }
+            })),
+        };
+        let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
+        match event {
+            SignalEvent::MessageReceived(msg) => {
+                assert!(msg.mentions.is_empty());
+                assert_eq!(msg.body.unwrap(), "Hello world");
+            }
+            _ => panic!("Expected MessageReceived, got {:?}", event),
+        }
+    }
+
+    #[test]
+    fn parse_list_contacts_with_uuid() {
+        let result = json!([
+            {"number": "+15551234567", "profileName": "Alice", "uuid": "abc-def-123"},
+            {"number": "+15559876543", "contactName": "Bob"}
+        ]);
+        let event = parse_rpc_result("listContacts", &result, None).unwrap();
+        match event {
+            SignalEvent::ContactList(contacts) => {
+                assert_eq!(contacts[0].uuid.as_deref(), Some("abc-def-123"));
+                assert_eq!(contacts[1].uuid, None);
+            }
+            _ => panic!("Expected ContactList"),
         }
     }
 }

@@ -95,6 +95,8 @@ pub struct SignalMessage {
     pub is_outgoing: bool,
     /// For outgoing 1:1 messages (sync), the recipient number
     pub destination: Option<String>,
+    /// Body range mentions from signal-cli (for resolving U+FFFC placeholders)
+    pub mentions: Vec<Mention>,
 }
 
 /// An attachment on a message
@@ -136,11 +138,20 @@ pub struct JsonRpcError {
     pub message: String,
 }
 
+/// A body range mention from signal-cli's bodyRanges array.
+#[derive(Debug, Clone)]
+pub struct Mention {
+    pub start: usize,  // UTF-16 offset in body
+    pub length: usize,  // Always 1 (U+FFFC)
+    pub uuid: String,   // ACI UUID of mentioned user
+}
+
 /// Contact info from signal-cli
 #[derive(Debug, Clone)]
 pub struct Contact {
     pub number: String,
     pub name: Option<String>,
+    pub uuid: Option<String>,
 }
 
 /// Group info from signal-cli
@@ -148,6 +159,8 @@ pub struct Contact {
 pub struct Group {
     pub id: String,
     pub name: String,
-    #[allow(dead_code)] // used in tests; will be used for @mentions
+    /// Phone numbers of group members
     pub members: Vec<String>,
+    /// (phone, uuid) pairs for members where UUID is known
+    pub member_uuids: Vec<(String, String)>,
 }
