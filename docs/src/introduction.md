@@ -17,14 +17,21 @@ full-featured messaging interface that runs entirely in your terminal. Built wit
 
 ## Quick start
 
+**Linux / macOS:**
+
 ```sh
-# Install (Linux/macOS)
 curl -fsSL https://raw.githubusercontent.com/johnsideserf/signal-tui/master/install.sh | bash
+```
 
-# Install (Windows PowerShell)
+**Windows (PowerShell):**
+
+```powershell
 irm https://raw.githubusercontent.com/johnsideserf/signal-tui/master/install.ps1 | iex
+```
 
-# Launch
+**Then launch:**
+
+```sh
 signal-tui
 ```
 
