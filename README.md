@@ -58,6 +58,7 @@ signal-tui -a +15551234567        # Specify account
 signal-tui -c /path/to/config.toml  # Custom config path
 signal-tui --setup                # Re-run first-time setup wizard
 signal-tui --demo                 # Launch with dummy data (no signal-cli needed)
+signal-tui --incognito            # No local message storage (in-memory only)
 ```
 
 On first launch, the setup wizard guides you through locating signal-cli, entering your phone number, and linking your device via QR code.
@@ -95,6 +96,7 @@ All fields are optional. `signal_cli_path` defaults to `"signal-cli"` (found via
 - **Command autocomplete** -- Tab-completion popup for slash commands
 - **Settings overlay** -- Toggle notifications, sidebar, inline images from within the app
 - **Responsive layout** -- Resizable sidebar that auto-hides on narrow terminals (<60 columns)
+- **Incognito mode** -- `--incognito` uses in-memory storage; nothing persists after exit
 - **Demo mode** -- Try the UI without signal-cli (`--demo`)
 
 ## Commands
@@ -154,6 +156,7 @@ Press `Esc` to enter Normal mode.
 | `Esc` | Switch to Normal mode |
 | `Enter` | Send message / execute command |
 | `Backspace` / `Delete` | Delete characters |
+| `Up` / `Down` | Recall input history |
 | `Left` / `Right` | Move cursor |
 | `Home` / `End` | Jump to start / end of line |
 
