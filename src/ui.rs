@@ -25,6 +25,8 @@ const SETTINGS_POPUP_WIDTH: u16 = 42;
 const SETTINGS_POPUP_HEIGHT: u16 = 15;
 const CONTACTS_POPUP_WIDTH: u16 = 50;
 const CONTACTS_MAX_VISIBLE: usize = 20;
+const FILE_BROWSER_POPUP_WIDTH: u16 = 60;
+const FILE_BROWSER_MAX_VISIBLE: usize = 20;
 
 /// Map a MessageStatus to its display symbol and color.
 fn status_symbol(status: MessageStatus, nerd_fonts: bool, color: bool) -> (&'static str, Color) {
@@ -376,6 +378,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Contacts overlay (overlays everything)
     if app.show_contacts {
         draw_contacts(frame, app, size);
+    }
+
+    // File browser overlay
+    if app.show_file_browser {
+        draw_file_browser(frame, app, size);
     }
 
     // Reaction picker overlay
@@ -973,13 +980,33 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border_color));
 
+    // Build attachment badge if present
+    let badge = app.pending_attachment.as_ref().map(|path| {
+        let fname = path.file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_else(|| "file".to_string());
+        // Detect type hint from extension
+        let ext = path.extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        let type_hint = match ext.as_str() {
+            "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "svg" => "image",
+            "mp4" | "mov" | "avi" | "mkv" | "webm" => "video",
+            "mp3" | "ogg" | "flac" | "wav" | "m4a" | "aac" => "audio",
+            "pdf" | "doc" | "docx" | "txt" | "md" => "doc",
+            _ => "file",
+        };
+        format!("[{type_hint}: {fname}] ")
+    });
+    let badge_len = badge.as_ref().map(|b| b.len()).unwrap_or(0);
+
     // Available width inside the border (minus border cells on each side)
     let inner_width = area.width.saturating_sub(2) as usize;
     let prefix = "> ";
-    let prefix_len = prefix.len(); // 2
+    let prefix_len = prefix.len() + badge_len;
     let text_width = inner_width.saturating_sub(prefix_len); // usable chars for buffer text
 
-    if app.input_buffer.is_empty() {
+    if app.input_buffer.is_empty() && badge.is_none() {
         let placeholder = match app.mode {
             InputMode::Normal => "  Press i to type, / for commands",
             InputMode::Insert => "  Type a message...",
@@ -995,10 +1022,18 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
         let scroll_offset = app.input_cursor.saturating_sub(text_width);
         let visible_end = (scroll_offset + text_width).min(app.input_buffer.len());
         let visible = &app.input_buffer[scroll_offset..visible_end];
-        let input_text = format!("{prefix}{visible}");
-        let input = Paragraph::new(input_text)
-            .style(Style::default().fg(Color::White))
-            .block(block);
+
+        let mut spans: Vec<Span> = Vec::new();
+        if let Some(ref badge_text) = badge {
+            spans.push(Span::styled(
+                badge_text.clone(),
+                Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            ));
+        }
+        spans.push(Span::styled(prefix, Style::default().fg(Color::White)));
+        spans.push(Span::styled(visible.to_string(), Style::default().fg(Color::White)));
+
+        let input = Paragraph::new(Line::from(spans)).block(block);
         frame.render_widget(input, area);
     }
 
@@ -1253,6 +1288,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
     let commands: &[(&str, &str)] = &[
         ("/join <name>", "Switch to a conversation"),
         ("/part", "Leave current conversation"),
+        ("/attach", "Attach a file"),
         ("/sidebar", "Toggle sidebar visibility"),
         ("/bell [type]", "Toggle notifications"),
         ("/mute", "Mute/unmute conversation"),
@@ -1439,6 +1475,137 @@ fn draw_contacts(frame: &mut Frame, app: &App, area: Rect) {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "  j/k navigate  |  Enter select  |  Esc close",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let popup = Paragraph::new(lines).block(block);
+    frame.render_widget(popup, popup_area);
+}
+
+/// Format a file size in human-readable form (B, K, M, G).
+fn format_file_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes}B")
+    } else if bytes < 1024 * 1024 {
+        format!("{}K", bytes / 1024)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1}M", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.1}G", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
+}
+
+fn draw_file_browser(frame: &mut Frame, app: &App, area: Rect) {
+    let visible_count = FILE_BROWSER_MAX_VISIBLE.min(
+        if app.file_browser_filtered.is_empty() { 1 } else { app.file_browser_filtered.len() }
+    );
+    let pref_height = visible_count as u16 + 5; // border + header + footer
+
+    let title = if app.file_browser_filter.is_empty() {
+        " Attach File ".to_string()
+    } else {
+        format!(" Attach File [{}] ", app.file_browser_filter)
+    };
+
+    let (popup_area, block) = centered_popup(
+        frame, area, FILE_BROWSER_POPUP_WIDTH, pref_height, &title,
+    );
+
+    let inner_height = popup_area.height.saturating_sub(2) as usize;
+    let header_lines = 1; // path header
+    let footer_lines = 2; // empty + key hints
+    let visible_rows = inner_height.saturating_sub(header_lines + footer_lines);
+    let inner_w = popup_area.width.saturating_sub(2) as usize;
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Current path header
+    let dir_display = app.file_browser_dir.to_string_lossy();
+    let dir_truncated = truncate(&dir_display, inner_w.saturating_sub(2));
+    lines.push(Line::from(Span::styled(
+        format!("  {dir_truncated}"),
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+    )));
+
+    if let Some(ref err) = app.file_browser_error {
+        lines.push(Line::from(Span::styled(
+            format!("  {}", truncate(err, inner_w.saturating_sub(2))),
+            Style::default().fg(Color::Red),
+        )));
+    } else if app.file_browser_filtered.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  Empty directory",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        // Scroll the list so the selected item is always visible
+        let scroll_offset = if app.file_browser_index >= visible_rows {
+            app.file_browser_index - visible_rows + 1
+        } else {
+            0
+        };
+
+        let end = (scroll_offset + visible_rows).min(app.file_browser_filtered.len());
+
+        for (i, &entry_idx) in app.file_browser_filtered[scroll_offset..end].iter().enumerate() {
+            let actual_index = scroll_offset + i;
+            let is_selected = actual_index == app.file_browser_index;
+            let (ref name, is_dir, size) = app.file_browser_entries[entry_idx];
+
+            let size_str = if is_dir {
+                String::new()
+            } else {
+                format_file_size(size)
+            };
+
+            let display_name = if is_dir {
+                format!("{name}/")
+            } else {
+                name.clone()
+            };
+
+            // Leave room for size column
+            let size_col_width = 8;
+            let name_max = inner_w.saturating_sub(size_col_width + 4);
+            let display_name = truncate(&display_name, name_max);
+
+            let name_style = if is_selected {
+                if is_dir {
+                    Style::default().bg(Color::DarkGray).fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD)
+                }
+            } else if is_dir {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            let size_style = if is_selected {
+                Style::default().bg(Color::DarkGray).fg(Color::DarkGray)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+
+            // Pad name to align size column
+            let name_padded = format!("  {display_name:width$}", width = name_max);
+            let size_padded = format!("{size_str:>width$}  ", width = size_col_width);
+
+            lines.push(Line::from(vec![
+                Span::styled(name_padded, name_style),
+                Span::styled(size_padded, size_style),
+            ]));
+        }
+    }
+
+    // Pad to fill visible rows
+    while lines.len() < header_lines + visible_rows {
+        lines.push(Line::from(""));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  j/k nav  Enter open/select  Backspace/- up  Esc cancel",
         Style::default().fg(Color::DarkGray),
     )));
 

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::DateTime;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -163,6 +164,7 @@ impl SignalClient {
         body: &str,
         is_group: bool,
         mentions: &[(usize, String)],
+        attachments: &[&Path],
     ) -> Result<String> {
         let id = Uuid::new_v4().to_string();
 
@@ -196,6 +198,17 @@ impl SignalClient {
             params.as_object_mut().unwrap().insert(
                 "mention".to_string(),
                 serde_json::Value::Array(mention_arr),
+            );
+        }
+
+        if !attachments.is_empty() {
+            let att_arr: Vec<serde_json::Value> = attachments
+                .iter()
+                .map(|p| serde_json::Value::String(p.to_string_lossy().to_string()))
+                .collect();
+            params.as_object_mut().unwrap().insert(
+                "attachment".to_string(),
+                serde_json::Value::Array(att_arr),
             );
         }
 

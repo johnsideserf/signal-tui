@@ -417,6 +417,7 @@ fn emit_native_images(
 }
 
 /// Send a message via signal-cli, tracking the pending send for receipt correlation.
+#[allow(clippy::too_many_arguments)]
 async fn send_msg(
     signal_client: &mut SignalClient,
     app: &mut App,
@@ -425,8 +426,10 @@ async fn send_msg(
     is_group: bool,
     local_ts_ms: i64,
     mentions: &[(usize, String)],
+    attachments: &[std::path::PathBuf],
 ) {
-    match signal_client.send_message(recipient, body, is_group, mentions).await {
+    let att_refs: Vec<&std::path::Path> = attachments.iter().map(|p| p.as_path()).collect();
+    match signal_client.send_message(recipient, body, is_group, mentions, &att_refs).await {
         Ok(rpc_id) => {
             debug_log::logf(format_args!("send: to={recipient} ts={local_ts_ms}"));
             app.pending_sends
@@ -445,8 +448,9 @@ async fn dispatch_send(
     req: SendRequest,
 ) {
     match req {
-        SendRequest::Message { recipient, body, is_group, local_ts_ms, mentions } => {
-            send_msg(signal_client, app, &recipient, &body, is_group, local_ts_ms, &mentions).await;
+        SendRequest::Message { recipient, body, is_group, local_ts_ms, mentions, attachment } => {
+            let attachments: Vec<std::path::PathBuf> = attachment.into_iter().collect();
+            send_msg(signal_client, app, &recipient, &body, is_group, local_ts_ms, &mentions, &attachments).await;
         }
         SendRequest::Reaction {
             conv_id, emoji, is_group, target_author, target_timestamp, remove,

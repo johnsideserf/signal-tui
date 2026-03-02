@@ -12,6 +12,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { name: "/sidebar",  alias: "/sb", args: "",        description: "Toggle sidebar" },
     CommandInfo { name: "/bell",     alias: "",    args: "[type]",  description: "Toggle notifications (direct/group)" },
     CommandInfo { name: "/mute",     alias: "",    args: "",        description: "Mute/unmute current chat" },
+    CommandInfo { name: "/attach",   alias: "/a",  args: "",        description: "Attach a file" },
     CommandInfo { name: "/contacts", alias: "/c",  args: "",        description: "Browse contacts" },
     CommandInfo { name: "/settings", alias: "",    args: "",        description: "Open settings" },
     CommandInfo { name: "/help",     alias: "/h",  args: "",        description: "Show help" },
@@ -41,6 +42,8 @@ pub enum InputAction {
     Settings,
     /// Open contacts overlay
     Contacts,
+    /// Open file browser to attach a file
+    Attach,
     /// Unknown command
     Unknown(String),
 }
@@ -79,6 +82,7 @@ pub fn parse_input(input: &str) -> InputAction {
             }
         }
         "/mute" => InputAction::ToggleMute,
+        "/attach" | "/a" => InputAction::Attach,
         "/contacts" | "/c" => InputAction::Contacts,
         "/settings" => InputAction::Settings,
         "/help" | "/h" => InputAction::Help,
@@ -188,6 +192,16 @@ mod tests {
     #[test]
     fn settings_command() {
         assert!(matches!(parse_input("/settings"), InputAction::Settings));
+    }
+
+    #[test]
+    fn attach_command() {
+        assert!(matches!(parse_input("/attach"), InputAction::Attach));
+    }
+
+    #[test]
+    fn attach_alias() {
+        assert!(matches!(parse_input("/a"), InputAction::Attach));
     }
 
     #[test]
