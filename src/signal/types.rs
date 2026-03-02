@@ -96,6 +96,12 @@ pub enum SignalEvent {
         sender: String,
         target_timestamp: i64,
     },
+    SystemMessage {
+        conv_id: String,
+        body: String,
+        timestamp: DateTime<Utc>,
+        timestamp_ms: i64,
+    },
     ContactList(Vec<Contact>),
     GroupList(Vec<Group>),
     Error(String),
