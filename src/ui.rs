@@ -368,6 +368,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let has_items = match app.autocomplete_mode {
             AutocompleteMode::Command => !app.autocomplete_candidates.is_empty(),
             AutocompleteMode::Mention => !app.mention_candidates.is_empty(),
+            AutocompleteMode::Join => !app.join_candidates.is_empty(),
         };
         if has_items {
             draw_autocomplete(frame, app, input_area);
@@ -1343,6 +1344,26 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect) {
                 lines.push(Line::from(vec![
                     Span::styled(left, style),
                     Span::styled(right, phone_style),
+                ]));
+            }
+        }
+        AutocompleteMode::Join => {
+            for (i, (display, _value)) in app.join_candidates.iter().enumerate() {
+                let left = format!("  {display}");
+                let total_len = left.len() + 2;
+                if total_len > max_content_width {
+                    max_content_width = total_len;
+                }
+
+                let is_selected = i == app.autocomplete_index;
+                let style = if is_selected {
+                    Style::default().bg(Color::DarkGray).fg(Color::Green).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Green)
+                };
+
+                lines.push(Line::from(vec![
+                    Span::styled(left, style),
                 ]));
             }
         }
