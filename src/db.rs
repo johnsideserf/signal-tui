@@ -6,6 +6,9 @@ use rusqlite::{params, Connection};
 use crate::app::{Conversation, DisplayMessage};
 use crate::signal::types::{MessageStatus, Reaction};
 
+/// (sender, body, timestamp_ms, conversation_id, conversation_name)
+pub type SearchRow = (String, String, i64, String, String);
+
 pub struct Database {
     conn: Connection,
 }
@@ -473,6 +476,76 @@ impl Database {
         Ok(())
     }
 
+    // --- Search ---
+
+    /// Search messages in a specific conversation using case-insensitive LIKE.
+    /// Returns (sender, body, timestamp_ms, conversation_id, conversation_name) tuples,
+    /// most recent first, limited to `limit` results.
+    pub fn search_messages(
+        &self,
+        conv_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchRow>> {
+        let pattern = format!("%{query}%");
+        let mut stmt = self.conn.prepare(
+            "SELECT m.sender, m.body, m.timestamp_ms, c.id, c.name
+             FROM messages m
+             JOIN conversations c ON c.id = m.conversation_id
+             WHERE m.conversation_id = ?1
+               AND m.body LIKE ?2 COLLATE NOCASE
+               AND m.is_system = 0
+               AND m.is_deleted = 0
+             ORDER BY m.timestamp_ms DESC
+             LIMIT ?3",
+        )?;
+        let rows = stmt
+            .query_map(params![conv_id, pattern, limit as i64], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Search messages across all conversations using case-insensitive LIKE.
+    /// Returns (sender, body, timestamp_ms, conversation_id, conversation_name) tuples,
+    /// most recent first, limited to `limit` results.
+    pub fn search_all_messages(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchRow>> {
+        let pattern = format!("%{query}%");
+        let mut stmt = self.conn.prepare(
+            "SELECT m.sender, m.body, m.timestamp_ms, c.id, c.name
+             FROM messages m
+             JOIN conversations c ON c.id = m.conversation_id
+             WHERE m.body LIKE ?1 COLLATE NOCASE
+               AND m.is_system = 0
+               AND m.is_deleted = 0
+             ORDER BY m.timestamp_ms DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![pattern, limit as i64], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     // --- Muted conversations ---
 
     pub fn set_muted(&self, conv_id: &str, muted: bool) -> Result<()> {
@@ -670,5 +743,48 @@ mod tests {
         assert_eq!(convs[0].messages[0].reactions[0].emoji, "👍");
         assert_eq!(convs[0].messages[1].reactions.len(), 1);
         assert_eq!(convs[0].messages[1].reactions[0].emoji, "❤️");
+    }
+
+    #[test]
+    fn search_messages_in_conversation() {
+        let db = test_db();
+        db.upsert_conversation("+1", "Alice", false).unwrap();
+        db.insert_message("+1", "Alice", "2025-01-01T00:00:00Z", "hello world", false, None, 1000).unwrap();
+        db.insert_message("+1", "you", "2025-01-01T00:01:00Z", "hi there", false, None, 2000).unwrap();
+        db.insert_message("+1", "Alice", "2025-01-01T00:02:00Z", "Hello again", false, None, 3000).unwrap();
+
+        // Case-insensitive search for "hello"
+        let results = db.search_messages("+1", "hello", 50).unwrap();
+        assert_eq!(results.len(), 2);
+        // Most recent first
+        assert_eq!(results[0].1, "Hello again");
+        assert_eq!(results[1].1, "hello world");
+    }
+
+    #[test]
+    fn search_messages_excludes_system_and_deleted() {
+        let db = test_db();
+        db.upsert_conversation("+1", "Alice", false).unwrap();
+        db.insert_message("+1", "", "2025-01-01T00:00:00Z", "system hello", true, None, 1000).unwrap();
+        db.insert_message("+1", "Alice", "2025-01-01T00:01:00Z", "real hello", false, None, 2000).unwrap();
+
+        let results = db.search_messages("+1", "hello", 50).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1, "real hello");
+    }
+
+    #[test]
+    fn search_all_messages_across_conversations() {
+        let db = test_db();
+        db.upsert_conversation("+1", "Alice", false).unwrap();
+        db.upsert_conversation("+2", "Bob", false).unwrap();
+        db.insert_message("+1", "Alice", "2025-01-01T00:00:00Z", "hello from alice", false, None, 1000).unwrap();
+        db.insert_message("+2", "Bob", "2025-01-01T00:01:00Z", "hello from bob", false, None, 2000).unwrap();
+
+        let results = db.search_all_messages("hello", 50).unwrap();
+        assert_eq!(results.len(), 2);
+        // Most recent first
+        assert_eq!(results[0].3, "+2"); // Bob's conversation
+        assert_eq!(results[1].3, "+1"); // Alice's conversation
     }
 }

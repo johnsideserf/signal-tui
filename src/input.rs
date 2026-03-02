@@ -13,6 +13,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { name: "/bell",     alias: "",    args: "[type]",  description: "Toggle notifications (direct/group)" },
     CommandInfo { name: "/mute",     alias: "",    args: "",        description: "Mute/unmute current chat" },
     CommandInfo { name: "/attach",   alias: "/a",  args: "",        description: "Attach a file" },
+    CommandInfo { name: "/search",   alias: "/s",  args: "<query>", description: "Search messages" },
     CommandInfo { name: "/contacts", alias: "/c",  args: "",        description: "Browse contacts" },
     CommandInfo { name: "/settings", alias: "",    args: "",        description: "Open settings" },
     CommandInfo { name: "/help",     alias: "/h",  args: "",        description: "Show help" },
@@ -44,6 +45,8 @@ pub enum InputAction {
     Contacts,
     /// Open file browser to attach a file
     Attach,
+    /// Search messages in current (or all) conversations
+    Search(String),
     /// Unknown command
     Unknown(String),
 }
@@ -83,6 +86,13 @@ pub fn parse_input(input: &str) -> InputAction {
         }
         "/mute" => InputAction::ToggleMute,
         "/attach" | "/a" => InputAction::Attach,
+        "/search" | "/s" => {
+            if arg.is_empty() {
+                InputAction::Unknown("/search requires a query".to_string())
+            } else {
+                InputAction::Search(arg)
+            }
+        }
         "/contacts" | "/c" => InputAction::Contacts,
         "/settings" => InputAction::Settings,
         "/help" | "/h" => InputAction::Help,
@@ -222,6 +232,24 @@ mod tests {
     #[test]
     fn help_alias() {
         assert!(matches!(parse_input("/h"), InputAction::Help));
+    }
+
+    #[test]
+    fn search_with_query() {
+        let InputAction::Search(s) = parse_input("/search hello") else { panic!("expected Search") };
+        assert_eq!(s, "hello");
+    }
+
+    #[test]
+    fn search_alias() {
+        let InputAction::Search(s) = parse_input("/s world") else { panic!("expected Search") };
+        assert_eq!(s, "world");
+    }
+
+    #[test]
+    fn search_without_query() {
+        let InputAction::Unknown(s) = parse_input("/search") else { panic!("expected Unknown") };
+        assert!(s.contains("requires"));
     }
 
     #[test]

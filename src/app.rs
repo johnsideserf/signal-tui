@@ -244,6 +244,24 @@ pub struct App {
     pub show_delete_confirm: bool,
     /// Message being edited: (timestamp_ms, conv_id)
     pub editing_message: Option<(i64, String)>,
+    /// Search overlay visible
+    pub show_search: bool,
+    /// Current search query
+    pub search_query: String,
+    /// Search results: (sender, body, timestamp_ms, conv_id, conv_name)
+    pub search_results: Vec<SearchResult>,
+    /// Cursor position in search results
+    pub search_index: usize,
+}
+
+/// A search result entry.
+#[derive(Debug, Clone)]
+pub struct SearchResult {
+    pub sender: String,
+    pub body: String,
+    pub timestamp_ms: i64,
+    pub conv_id: String,
+    pub conv_name: String,
 }
 
 pub const QUICK_REACTIONS: &[&str] = &["\u{1f44d}", "\u{1f44e}", "\u{2764}\u{fe0f}", "\u{1f602}", "\u{1f62e}", "\u{1f622}", "\u{1f64f}", "\u{1f525}"];
@@ -588,6 +606,166 @@ impl App {
         }
     }
 
+    /// Handle a key press while the search overlay is open.
+    pub fn handle_search_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                if !self.search_results.is_empty()
+                    && self.search_index < self.search_results.len() - 1
+                {
+                    self.search_index += 1;
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.search_index = self.search_index.saturating_sub(1);
+            }
+            KeyCode::Enter => {
+                if let Some(result) = self.search_results.get(self.search_index) {
+                    let conv_id = result.conv_id.clone();
+                    let target_ts = result.timestamp_ms;
+                    self.show_search = false;
+                    self.search_query.clear();
+                    // Jump to the conversation and scroll to the matching message
+                    self.join_conversation(&conv_id);
+                    self.jump_to_message_timestamp(target_ts);
+                }
+            }
+            KeyCode::Esc => {
+                self.show_search = false;
+                self.search_query.clear();
+            }
+            KeyCode::Backspace => {
+                if !self.search_query.is_empty() {
+                    self.search_query.pop();
+                    self.run_search();
+                }
+            }
+            KeyCode::Char(c) => {
+                self.search_query.push(c);
+                self.run_search();
+            }
+            _ => {}
+        }
+    }
+
+    /// Execute the current search query against the database.
+    fn run_search(&mut self) {
+        if self.search_query.is_empty() {
+            self.search_results.clear();
+            self.search_index = 0;
+            return;
+        }
+        let results = if let Some(ref conv_id) = self.active_conversation {
+            self.db.search_messages(conv_id, &self.search_query, 50)
+        } else {
+            self.db.search_all_messages(&self.search_query, 50)
+        };
+        match results {
+            Ok(rows) => {
+                self.search_results = rows
+                    .into_iter()
+                    .map(|(sender, body, timestamp_ms, conv_id, conv_name)| SearchResult {
+                        sender,
+                        body,
+                        timestamp_ms,
+                        conv_id,
+                        conv_name,
+                    })
+                    .collect();
+            }
+            Err(e) => {
+                crate::debug_log::logf(format_args!("search error: {e}"));
+                self.search_results.clear();
+            }
+        }
+        // Clamp index
+        if self.search_results.is_empty() {
+            self.search_index = 0;
+        } else if self.search_index >= self.search_results.len() {
+            self.search_index = self.search_results.len() - 1;
+        }
+    }
+
+    /// Jump to a message by its timestamp_ms in the active conversation.
+    /// Sets scroll_offset so the message is visible, and focused_msg_index.
+    fn jump_to_message_timestamp(&mut self, target_ts: i64) {
+        let conv_id = match self.active_conversation.as_ref() {
+            Some(id) => id.clone(),
+            None => return,
+        };
+        let conv = match self.conversations.get(&conv_id) {
+            Some(c) => c,
+            None => return,
+        };
+        let total = conv.messages.len();
+        if total == 0 {
+            return;
+        }
+
+        // Find the message index matching this timestamp
+        let idx = conv.messages.iter().position(|m| m.timestamp_ms == target_ts);
+        if let Some(i) = idx {
+            // Set scroll_offset so the message is visible (roughly centered)
+            let from_bottom = total.saturating_sub(i + 1);
+            self.scroll_offset = from_bottom;
+            self.focused_msg_index = Some(i);
+            self.mode = InputMode::Normal;
+        }
+    }
+
+    /// Jump to the next/previous search result in the active conversation.
+    /// `forward` = true means next (older), false means previous (newer).
+    fn jump_to_search_result(&mut self, forward: bool) {
+        let conv_id = match self.active_conversation.as_ref() {
+            Some(id) => id,
+            None => return,
+        };
+        // Filter results to current conversation only
+        let conv_results: Vec<usize> = self
+            .search_results
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.conv_id == *conv_id)
+            .map(|(i, _)| i)
+            .collect();
+        if conv_results.is_empty() {
+            self.status_message = "no matches in this conversation".to_string();
+            return;
+        }
+
+        // Find the current position relative to conv_results
+        let current_pos = conv_results.iter().position(|&i| i == self.search_index);
+        let next_idx = match current_pos {
+            Some(pos) => {
+                if forward {
+                    if pos + 1 < conv_results.len() {
+                        conv_results[pos + 1]
+                    } else {
+                        conv_results[0] // wrap around
+                    }
+                } else if pos > 0 {
+                    conv_results[pos - 1]
+                } else {
+                    conv_results[conv_results.len() - 1] // wrap around
+                }
+            }
+            None => conv_results[0],
+        };
+
+        self.search_index = next_idx;
+        if let Some(result) = self.search_results.get(next_idx) {
+            let ts = result.timestamp_ms;
+            self.jump_to_message_timestamp(ts);
+            let pos = conv_results.iter().position(|&i| i == next_idx).unwrap_or(0) + 1;
+            self.status_message = format!(
+                "match {}/{} for \"{}\"",
+                pos,
+                conv_results.len(),
+                self.search_query
+            );
+        }
+    }
+
     /// Open the file browser overlay (validates active conversation first).
     pub fn open_file_browser(&mut self) {
         if self.active_conversation.is_none() {
@@ -839,6 +1017,10 @@ impl App {
             reply_target: None,
             show_delete_confirm: false,
             editing_message: None,
+            show_search: false,
+            search_query: String::new(),
+            search_results: Vec::new(),
+            search_index: 0,
         }
     }
 
@@ -984,6 +1166,10 @@ impl App {
         }
         if self.show_contacts {
             self.handle_contacts_key(code);
+            return (true, None);
+        }
+        if self.show_search {
+            self.handle_search_key(code);
             return (true, None);
         }
         if self.show_settings {
@@ -1179,6 +1365,18 @@ impl App {
                     if !msg.is_system && !msg.is_deleted {
                         self.show_delete_confirm = true;
                     }
+                }
+            }
+
+            // Search navigation: n = next result (older), N = previous (newer)
+            (_, KeyCode::Char('n')) => {
+                if !self.search_results.is_empty() {
+                    self.jump_to_search_result(true);
+                }
+            }
+            (_, KeyCode::Char('N')) => {
+                if !self.search_results.is_empty() {
+                    self.jump_to_search_result(false);
                 }
             }
 
@@ -2158,6 +2356,12 @@ impl App {
             }
             InputAction::Attach => {
                 self.open_file_browser();
+            }
+            InputAction::Search(query) => {
+                self.search_query = query;
+                self.search_index = 0;
+                self.run_search();
+                self.show_search = true;
             }
             InputAction::Contacts => {
                 self.show_contacts = true;
@@ -3871,5 +4075,66 @@ mod tests {
 
         app.handle_input();
         assert!(app.pending_attachment.is_none());
+    }
+
+    #[test]
+    fn search_opens_overlay() {
+        let mut app = test_app();
+        app.get_or_create_conversation("+1", "Alice", false);
+        app.active_conversation = Some("+1".to_string());
+
+        // Insert a message into the DB so search has something to find
+        app.db.insert_message("+1", "Alice", "2025-01-01T00:00:00Z", "hello world", false, None, 1000).unwrap();
+
+        app.input_buffer = "/search hello".to_string();
+        app.input_cursor = 13;
+        app.handle_input();
+
+        assert!(app.show_search);
+        assert_eq!(app.search_query, "hello");
+        assert!(!app.search_results.is_empty());
+        assert_eq!(app.search_results[0].body, "hello world");
+    }
+
+    #[test]
+    fn search_without_query_shows_error() {
+        let mut app = test_app();
+        app.input_buffer = "/search".to_string();
+        app.input_cursor = 7;
+        app.handle_input();
+
+        assert!(!app.show_search);
+        assert!(app.status_message.contains("requires"));
+    }
+
+    #[test]
+    fn search_overlay_esc_closes() {
+        let mut app = test_app();
+        app.show_search = true;
+        app.search_query = "test".to_string();
+
+        app.handle_search_key(KeyCode::Esc);
+
+        assert!(!app.show_search);
+        assert!(app.search_query.is_empty());
+    }
+
+    #[test]
+    fn search_overlay_typing_refines() {
+        let mut app = test_app();
+        app.get_or_create_conversation("+1", "Alice", false);
+        app.active_conversation = Some("+1".to_string());
+        app.db.insert_message("+1", "Alice", "2025-01-01T00:00:00Z", "hello world", false, None, 1000).unwrap();
+        app.db.insert_message("+1", "Alice", "2025-01-01T00:01:00Z", "goodbye world", false, None, 2000).unwrap();
+
+        app.show_search = true;
+        app.search_query = "hello".to_string();
+        app.run_search();
+        assert_eq!(app.search_results.len(), 1);
+
+        // Type more to search for "world" instead
+        app.search_query = "world".to_string();
+        app.run_search();
+        assert_eq!(app.search_results.len(), 2);
     }
 }
