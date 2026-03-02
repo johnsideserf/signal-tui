@@ -400,6 +400,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_file_browser(frame, app, size);
     }
 
+    // Action menu overlay
+    if app.show_action_menu {
+        draw_action_menu(frame, app, size);
+    }
+
     // Reaction picker overlay
     if app.show_reaction_picker {
         draw_reaction_picker(frame, app, size);
@@ -940,6 +945,69 @@ fn build_reaction_summary(reactions: &[Reaction], verbose: bool) -> Line<'static
         }
         Line::from(spans)
     }
+}
+
+fn draw_action_menu(frame: &mut Frame, app: &App, area: Rect) {
+    let items = app.action_menu_items();
+    if items.is_empty() {
+        return;
+    }
+
+    let popup_width: u16 = 30;
+    let popup_height = items.len() as u16 + 4; // borders + hint line + padding
+
+    let (popup_area, block) = centered_popup(
+        frame, area, popup_width, popup_height, " Actions ",
+    );
+
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    // Content width inside the block borders
+    let content_width = inner.width as usize;
+
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, action) in items.iter().enumerate() {
+        let is_selected = i == app.action_menu_index;
+        let icon = if app.nerd_fonts {
+            format!("{} ", action.nerd_icon)
+        } else {
+            String::new()
+        };
+
+        // Build the row: "  {icon}{label}    {hint}"
+        let label_part = format!("  {icon}{}", action.label);
+        // Right-align the hint with padding
+        let hint_width = action.key_hint.len();
+        let pad = content_width.saturating_sub(label_part.chars().count() + hint_width + 2);
+        let padding = " ".repeat(pad);
+
+        let row_style = if is_selected {
+            Style::default().bg(Color::DarkGray)
+        } else {
+            Style::default()
+        };
+        let hint_style = if is_selected {
+            Style::default().bg(Color::DarkGray).fg(Color::DarkGray).add_modifier(Modifier::DIM)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("{label_part}{padding}"), row_style),
+            Span::styled(format!("{} ", action.key_hint), hint_style),
+        ]));
+    }
+
+    // Hint line
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Esc to close",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let popup = Paragraph::new(lines);
+    frame.render_widget(popup, inner);
 }
 
 fn draw_reaction_picker(frame: &mut Frame, app: &App, area: Rect) {

@@ -40,6 +40,13 @@ pub enum AutocompleteMode {
     Join,
 }
 
+/// An action available in the message action menu.
+pub struct MenuAction {
+    pub label: &'static str,
+    pub key_hint: &'static str,
+    pub nerd_icon: &'static str,
+}
+
 /// Quoted reply context attached to a message.
 #[derive(Debug, Clone)]
 pub struct Quote {
@@ -268,6 +275,10 @@ pub struct App {
     pub send_read_receipts: bool,
     /// Queued read receipts to dispatch: (recipient_phone, timestamps)
     pub pending_read_receipts: Vec<(String, Vec<i64>)>,
+    /// Action menu overlay visible
+    pub show_action_menu: bool,
+    /// Cursor position in action menu
+    pub action_menu_index: usize,
 }
 
 /// A search result entry.
@@ -598,6 +609,173 @@ impl App {
             target_timestamp,
             remove: false,
         })
+    }
+
+    /// Build the list of available actions for the focused message.
+    pub fn action_menu_items(&self) -> Vec<MenuAction> {
+        let msg = match self.selected_message() {
+            Some(m) => m,
+            None => return Vec::new(),
+        };
+        let mut items = Vec::new();
+        if !msg.is_system && !msg.is_deleted {
+            items.push(MenuAction {
+                label: "Reply",
+                key_hint: "q",
+                nerd_icon: "\u{f045a}",
+            });
+        }
+        if msg.sender == "you" && !msg.is_system && !msg.is_deleted {
+            items.push(MenuAction {
+                label: "Edit",
+                key_hint: "e",
+                nerd_icon: "\u{f03eb}",
+            });
+        }
+        if !msg.is_system {
+            items.push(MenuAction {
+                label: "React",
+                key_hint: "r",
+                nerd_icon: "\u{f0785}",
+            });
+        }
+        items.push(MenuAction {
+            label: "Copy",
+            key_hint: "y",
+            nerd_icon: "\u{f018f}",
+        });
+        if !msg.is_system && !msg.is_deleted {
+            items.push(MenuAction {
+                label: "Delete",
+                key_hint: "d",
+                nerd_icon: "\u{f0a79}",
+            });
+        }
+        items
+    }
+
+    /// Handle a key press while the action menu overlay is open.
+    pub fn handle_action_menu_key(&mut self, code: KeyCode) -> Option<SendRequest> {
+        let item_count = self.action_menu_items().len();
+        if item_count == 0 {
+            self.show_action_menu = false;
+            return None;
+        }
+        match code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                if self.action_menu_index < item_count - 1 {
+                    self.action_menu_index += 1;
+                }
+                None
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.action_menu_index = self.action_menu_index.saturating_sub(1);
+                None
+            }
+            KeyCode::Enter => {
+                let items = self.action_menu_items();
+                if let Some(action) = items.get(self.action_menu_index) {
+                    let hint = action.key_hint;
+                    self.show_action_menu = false;
+                    self.execute_action_by_hint(hint)
+                } else {
+                    self.show_action_menu = false;
+                    None
+                }
+            }
+            KeyCode::Char(c @ ('q' | 'e' | 'r' | 'y' | 'd')) => {
+                let hint = match c {
+                    'q' => "q",
+                    'e' => "e",
+                    'r' => "r",
+                    'y' => "y",
+                    'd' => "d",
+                    _ => unreachable!(),
+                };
+                // Only execute if this action is available in the menu
+                let items = self.action_menu_items();
+                if items.iter().any(|a| a.key_hint == hint) {
+                    self.show_action_menu = false;
+                    self.execute_action_by_hint(hint)
+                } else {
+                    None
+                }
+            }
+            KeyCode::Esc => {
+                self.show_action_menu = false;
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Execute an action by its key hint character. Reuses the same logic as
+    /// the direct Normal-mode keybinds.
+    fn execute_action_by_hint(&mut self, hint: &str) -> Option<SendRequest> {
+        match hint {
+            "q" => {
+                // Reply — same as Normal 'q'
+                if let Some(msg) = self.selected_message() {
+                    if !msg.is_system && !msg.is_deleted {
+                        let author_phone = msg.sender_id.clone();
+                        let snippet: String = if msg.body.chars().count() > 50 {
+                            format!("{}…", msg.body.chars().take(50).collect::<String>())
+                        } else {
+                            msg.body.clone()
+                        };
+                        let ts = msg.timestamp_ms;
+                        let phone = if author_phone.is_empty() || author_phone == "you" {
+                            self.account.clone()
+                        } else {
+                            author_phone
+                        };
+                        self.reply_target = Some((phone, snippet, ts));
+                        self.mode = InputMode::Insert;
+                    }
+                }
+                None
+            }
+            "e" => {
+                // Edit — same as Normal 'e'
+                if let Some(msg) = self.selected_message() {
+                    if msg.sender == "you" && !msg.is_deleted && !msg.is_system {
+                        let ts = msg.timestamp_ms;
+                        let body = msg.body.clone();
+                        if let Some(ref conv_id) = self.active_conversation {
+                            let conv_id = conv_id.clone();
+                            self.editing_message = Some((ts, conv_id));
+                            self.input_buffer = body;
+                            self.input_cursor = self.input_buffer.len();
+                            self.mode = InputMode::Insert;
+                        }
+                    }
+                }
+                None
+            }
+            "r" => {
+                // React — open reaction picker
+                if self.selected_message().is_some_and(|m| !m.is_system) {
+                    self.show_reaction_picker = true;
+                    self.reaction_picker_index = 0;
+                }
+                None
+            }
+            "y" => {
+                // Copy
+                self.copy_selected_message(false);
+                None
+            }
+            "d" => {
+                // Delete — open delete confirm
+                if let Some(msg) = self.selected_message() {
+                    if !msg.is_system && !msg.is_deleted {
+                        self.show_delete_confirm = true;
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
     }
 
     /// Handle a key press while the contacts overlay is open.
@@ -1066,6 +1244,8 @@ impl App {
             pending_typing_stop: None,
             send_read_receipts: true,
             pending_read_receipts: Vec::new(),
+            show_action_menu: false,
+            action_menu_index: 0,
         }
     }
 
@@ -1300,6 +1480,10 @@ impl App {
     /// command triggers a message send. Returns `None` otherwise.
     /// Returns `Ok(true)` if the key was consumed by an overlay.
     pub fn handle_overlay_key(&mut self, code: KeyCode) -> (bool, Option<SendRequest>) {
+        if self.show_action_menu {
+            let send = self.handle_action_menu_key(code);
+            return (true, send);
+        }
         if self.show_delete_confirm {
             let send = self.handle_delete_confirm_key(code);
             return (true, send);
@@ -1535,6 +1719,14 @@ impl App {
             (_, KeyCode::Char('N')) => {
                 if !self.search_results.is_empty() {
                     self.jump_to_search_result(false);
+                }
+            }
+
+            // Open action menu on focused message
+            (_, KeyCode::Enter) => {
+                if self.selected_message().is_some_and(|m| !m.is_system) {
+                    self.show_action_menu = true;
+                    self.action_menu_index = 0;
                 }
             }
 
