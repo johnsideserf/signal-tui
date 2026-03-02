@@ -310,7 +310,7 @@ impl SignalClient {
             })
         } else {
             serde_json::json!({
-                "recipient": recipient,
+                "recipient": [recipient],
                 "targetTimestamp": target_timestamp,
                 "account": self.account,
             })
@@ -560,14 +560,17 @@ fn parse_receive_event(
     }
     // Check for editMessage (top-level envelope field) before dataMessage
     if let Some(edit_msg) = envelope.get("editMessage") {
-        return parse_edit_message(envelope, edit_msg, false);
+        return parse_edit_message(envelope, edit_msg, false, None);
     }
 
     if let Some(sync) = envelope.get("syncMessage") {
         if let Some(sent) = sync.get("sentMessage") {
             // Check for edit in sync
             if let Some(edit_msg) = sent.get("editMessage") {
-                return parse_edit_message(envelope, edit_msg, true);
+                let dest = sent.get("destinationNumber")
+                    .or_else(|| sent.get("destination"))
+                    .and_then(|v| v.as_str());
+                return parse_edit_message(envelope, edit_msg, true, dest);
             }
             return parse_sent_sync(envelope, sent, download_dir);
         }
@@ -973,6 +976,7 @@ fn parse_edit_message(
     envelope: &serde_json::Value,
     edit_msg: &serde_json::Value,
     is_outgoing: bool,
+    destination: Option<&str>,
 ) -> Option<SignalEvent> {
     let target_timestamp = edit_msg.get("targetSentTimestamp").and_then(|v| v.as_i64())?;
     let data = edit_msg.get("dataMessage")?;
@@ -995,14 +999,16 @@ fn parse_edit_message(
         .and_then(|g| g.get("groupId"))
         .and_then(|v| v.as_str());
 
-    let conv_id = if is_outgoing {
-        // For outgoing sync edits, conv_id comes from destination or group
-        group_id.map(|g| g.to_string())
-            .unwrap_or_else(|| sender.clone())
-    } else {
-        group_id.map(|g| g.to_string())
-            .unwrap_or_else(|| sender.clone())
-    };
+    let conv_id = group_id
+        .map(|g| g.to_string())
+        .or_else(|| {
+            if is_outgoing {
+                // For outgoing sync edits, use destination (recipient) as conv_id
+                destination.map(|d| d.to_string())
+            } else {
+                Some(sender.clone())
+            }
+        })?;
 
     Some(SignalEvent::EditReceived {
         conv_id,

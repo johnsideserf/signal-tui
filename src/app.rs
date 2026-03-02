@@ -1138,8 +1138,8 @@ impl App {
                 if let Some(msg) = self.selected_message() {
                     if !msg.is_system && !msg.is_deleted {
                         let author_phone = msg.sender_id.clone();
-                        let snippet = if msg.body.len() > 50 {
-                            format!("{}…", &msg.body[..50])
+                        let snippet: String = if msg.body.chars().count() > 50 {
+                            format!("{}…", msg.body.chars().take(50).collect::<String>())
                         } else {
                             msg.body.clone()
                         };
