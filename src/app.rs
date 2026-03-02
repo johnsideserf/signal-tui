@@ -2268,22 +2268,31 @@ impl App {
             return;
         }
 
-        let current = self.focused_msg_index.unwrap_or(total.saturating_sub(1));
+        // Bootstrap: if no message is focused yet, pick the last non-system message
+        // and enter scroll mode so the highlight becomes visible.
+        let current = match self.focused_msg_index {
+            Some(i) => i,
+            None => {
+                let start = (0..total).rev().find(|&i| !conv.messages[i].is_system);
+                if let Some(s) = start {
+                    self.focused_msg_index = Some(s);
+                    if self.scroll_offset == 0 {
+                        self.scroll_offset = 1;
+                    }
+                }
+                return;
+            }
+        };
 
-        if older {
-            // Search backward for a non-system message before current
-            let target = (0..current).rev().find(|&i| !conv.messages[i].is_system);
-            if let Some(t) = target {
-                let diff = current - t;
-                self.scroll_offset = self.scroll_offset.saturating_add(diff);
-            }
+        let target = if older {
+            (0..current).rev().find(|&i| !conv.messages[i].is_system)
         } else {
-            // Search forward for a non-system message after current
-            let target = ((current + 1)..total).find(|&i| !conv.messages[i].is_system);
-            if let Some(t) = target {
-                let diff = t - current;
-                self.scroll_offset = self.scroll_offset.saturating_sub(diff);
-            }
+            ((current + 1)..total).find(|&i| !conv.messages[i].is_system)
+        };
+
+        if let Some(t) = target {
+            self.focused_msg_index = Some(t);
+            // scroll_offset is adjusted by the renderer to keep the focused message visible
         }
     }
 

@@ -113,6 +113,8 @@ pub struct LinkRegion {
     pub y: u16,
     pub url: String,
     pub text: String,
+    /// Background color from the buffer cell, if non-default (e.g. highlight).
+    pub bg: Option<Color>,
 }
 
 /// Extract a URL from link-styled text.
@@ -196,11 +198,16 @@ fn collect_link_regions(buf: &Buffer, area: Rect) -> Vec<LinkRegion> {
             row_last_url = Some(url.clone());
             row_last_reached_edge = reached_edge;
 
+            // Capture background color from the first cell of the link run so
+            // emit_osc8_links can preserve it (e.g. highlight bg on selection).
+            let bg = buf.cell(Position::new(start_x, y))
+                .and_then(|c| c.style().bg);
             regions.push(LinkRegion {
                 x: start_x,
                 y,
                 url,
                 text,
+                bg,
             });
         }
 
@@ -716,13 +723,46 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     // Bottom-align by default; scroll_offset shifts the view upward
     let base_scroll = content_height.saturating_sub(available_height);
     app.scroll_offset = app.scroll_offset.min(base_scroll);
-    let scroll_y = base_scroll - app.scroll_offset;
+    let mut scroll_y = base_scroll - app.scroll_offset;
 
     // Determine the focused message for highlight and full-timestamp display in Normal mode.
     if app.mode == InputMode::Normal && app.scroll_offset > 0 {
-        let idx = find_focused_msg_index(&lines, &line_msg_idx, inner_width, scroll_y, available_height);
-        app.focused_msg_index = idx;
-        app.focused_message_time = idx.and_then(|i| messages.get(i)).map(|m| m.timestamp);
+        if let Some(fi) = app.focused_msg_index {
+            // J/K already set focused_msg_index — ensure it's visible by adjusting scroll.
+            let iw = inner_width.max(1);
+            let mut msg_start: Option<usize> = None;
+            let mut msg_end = 0usize;
+            let mut cumul = 0usize;
+            for (idx, line) in lines.iter().enumerate() {
+                let w = line.width();
+                let h = if w == 0 { 1 } else { w.div_ceil(iw) };
+                if line_msg_idx.get(idx) == Some(&Some(fi)) {
+                    if msg_start.is_none() {
+                        msg_start = Some(cumul);
+                    }
+                    msg_end = cumul + h;
+                }
+                cumul += h;
+            }
+            if let Some(start) = msg_start {
+                if start < scroll_y {
+                    // Message is above viewport — scroll up
+                    app.scroll_offset = base_scroll.saturating_sub(start);
+                    scroll_y = base_scroll - app.scroll_offset;
+                } else if msg_end > scroll_y + available_height {
+                    // Message is below viewport — scroll down
+                    let new_scroll_y = msg_end.saturating_sub(available_height);
+                    app.scroll_offset = base_scroll.saturating_sub(new_scroll_y);
+                    scroll_y = base_scroll - app.scroll_offset;
+                }
+            }
+            app.focused_message_time = messages.get(fi).map(|m| m.timestamp);
+        } else {
+            // j/k line-scroll without J/K — derive focus from viewport bottom
+            let idx = find_focused_msg_index(&lines, &line_msg_idx, inner_width, scroll_y, available_height);
+            app.focused_msg_index = idx;
+            app.focused_message_time = idx.and_then(|i| messages.get(i)).map(|m| m.timestamp);
+        }
     } else {
         app.focused_msg_index = None;
         app.focused_message_time = None;
