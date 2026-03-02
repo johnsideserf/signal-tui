@@ -624,7 +624,7 @@ impl App {
                     let conv_id = result.conv_id.clone();
                     let target_ts = result.timestamp_ms;
                     self.show_search = false;
-                    self.search_query.clear();
+                    // Keep search_query for n/N navigation status display
                     // Jump to the conversation and scroll to the matching message
                     self.join_conversation(&conv_id);
                     self.jump_to_message_timestamp(target_ts);

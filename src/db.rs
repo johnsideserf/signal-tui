@@ -487,13 +487,14 @@ impl Database {
         query: &str,
         limit: usize,
     ) -> Result<Vec<SearchRow>> {
-        let pattern = format!("%{query}%");
+        let escaped = query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+        let pattern = format!("%{escaped}%");
         let mut stmt = self.conn.prepare(
             "SELECT m.sender, m.body, m.timestamp_ms, c.id, c.name
              FROM messages m
              JOIN conversations c ON c.id = m.conversation_id
              WHERE m.conversation_id = ?1
-               AND m.body LIKE ?2 COLLATE NOCASE
+               AND m.body LIKE ?2 ESCAPE '\\' COLLATE NOCASE
                AND m.is_system = 0
                AND m.is_deleted = 0
              ORDER BY m.timestamp_ms DESC
@@ -521,12 +522,13 @@ impl Database {
         query: &str,
         limit: usize,
     ) -> Result<Vec<SearchRow>> {
-        let pattern = format!("%{query}%");
+        let escaped = query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+        let pattern = format!("%{escaped}%");
         let mut stmt = self.conn.prepare(
             "SELECT m.sender, m.body, m.timestamp_ms, c.id, c.name
              FROM messages m
              JOIN conversations c ON c.id = m.conversation_id
-             WHERE m.body LIKE ?1 COLLATE NOCASE
+             WHERE m.body LIKE ?1 ESCAPE '\\' COLLATE NOCASE
                AND m.is_system = 0
                AND m.is_deleted = 0
              ORDER BY m.timestamp_ms DESC
