@@ -1007,6 +1007,16 @@ fn draw_welcome(frame: &mut Frame, app: &App, area: Rect) {
             "  Run with --setup to reconfigure.",
             Style::default().fg(Color::Gray),
         )));
+    } else if app.loading {
+        lines.push(Line::from(Span::styled(
+            "  signal-tui",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Loading...",
+            Style::default().fg(Color::DarkGray),
+        )));
     } else if app.conversation_order.is_empty() {
         lines.push(Line::from(Span::styled(
             "  Welcome to signal-tui",
