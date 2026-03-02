@@ -588,7 +588,7 @@ impl App {
                 self.file_browser_entries.extend(files);
             }
             Err(e) => {
-                self.file_browser_error = Some(format!("Permission denied: {e}"));
+                self.file_browser_error = Some(format!("Cannot read directory: {e}"));
             }
         }
         self.refresh_file_browser_filter();
@@ -1723,11 +1723,11 @@ impl App {
         let action = input::parse_input(&input);
         match action {
             InputAction::SendText(text) => {
-                let attachment = self.pending_attachment.take();
-                if text.is_empty() && attachment.is_none() {
+                if text.is_empty() && self.pending_attachment.is_none() {
                     return None;
                 }
                 if let Some(ref conv_id) = self.active_conversation {
+                    let attachment = self.pending_attachment.take();
                     let is_group = self
                         .conversations
                         .get(conv_id)
