@@ -33,6 +33,11 @@ changes in the status bar.
 | `y` | Copy message body to clipboard |
 | `Y` | Copy full line (`[HH:MM] <sender> body`) to clipboard |
 | `r` | Open reaction picker on focused message |
+| `q` | Reply to focused message (quote reply) |
+| `e` | Edit own outgoing message |
+| `d` | Delete focused message |
+| `n` | Jump to next search result |
+| `N` | Jump to previous search result |
 | `@` | Mention autocomplete (in Insert mode) |
 
 ### Cursor movement

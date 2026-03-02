@@ -1,5 +1,77 @@
 # Changelog
 
+## v0.6.0
+
+### Reply, edit, and delete messages
+
+- **Quote reply** -- press `q` in Normal mode on any message to reply with a
+  quote. A reply indicator appears above the input box, and the sent message
+  includes a quoted block showing the original author and text (closes #15)
+- **Edit messages** -- press `e` on your own outgoing message to edit it.
+  The original text is loaded into the input buffer for modification. Edited
+  messages display an "(edited)" label. Edits sync across devices (closes #24)
+- **Delete messages** -- press `d` on any message to open a delete confirmation.
+  Outgoing messages offer "delete for everyone" (remote delete) or "delete
+  locally". Incoming messages can be deleted locally. Deleted messages show as
+  "[deleted]" (closes #23)
+
+### Message search
+
+- **`/search` command** -- search across all conversations with `/search <query>`
+  (alias: `/s`). Results appear in a scrollable overlay showing sender, message
+  snippet, and conversation name. Press Enter to jump directly to the message in
+  context. Use `n`/`N` in Normal mode to cycle through matches (closes #14)
+- **Highlight matches** -- search terms are highlighted in the result snippets
+
+### File attachments
+
+- **`/attach` command** -- send files with `/attach` to open a file browser
+  overlay. Navigate with `j`/`k`, Enter to select, Backspace to go up a
+  directory. The selected file attaches to your next message, shown as a
+  pending indicator in the input area (closes #54)
+
+### /join autocomplete
+
+- **Contact and group autocomplete** -- `/join` now offers Tab-completable
+  suggestions from your contacts and groups. Type `/join ` and see matching
+  names, or keep typing to filter. Groups and contacts are distinguished by
+  color (closes #21)
+
+### Send typing indicators
+
+- **Outbound typing** -- signal-tui now sends typing indicators to your
+  conversation partner while you type. Typing state starts on the first
+  keypress, auto-stops after 5 seconds of inactivity, and stops immediately
+  when you send or switch conversations (closes #58)
+
+### Send read receipts
+
+- **Read receipt sending** -- when you view a conversation, read receipts are
+  automatically sent to message senders, letting them know you've read their
+  messages. Controlled by the "Send read receipts" toggle in `/settings`
+  (closes #59)
+
+### Welcome screen
+
+- **Getting started hints** -- the welcome screen now shows useful commands
+  and navigation tips including Tab/Shift+Tab for cycling conversations
+
+### Bug fixes
+
+- **Out-of-order messages** -- messages with delayed delivery timestamps are
+  now inserted in correct chronological order (#56)
+- **Link highlight** -- fixed background color bleeding on highlighted links
+  and J/K message navigation edge cases (#55)
+
+### Database
+
+- **Migration v5** -- adds index on `messages(conversation_id, timestamp_ms)`
+  for faster search queries
+- **Migration v6** -- adds `is_edited`, `is_deleted`, `quote_author`,
+  `quote_body`, `quote_ts_ms`, and `sender_id` columns to the messages table
+
+---
+
 ## v0.5.0
 
 ### Message reactions

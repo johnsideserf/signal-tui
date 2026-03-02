@@ -8,6 +8,8 @@ All commands start with `/`. Type `/` in Insert mode to open the autocomplete po
 |---|---|---|---|
 | `/join` | `/j` | `<name>` | Switch to a conversation by contact name, number, or group |
 | `/part` | `/p` | | Leave current conversation |
+| `/search` | `/s` | `<query>` | Search messages across all conversations |
+| `/attach` | | | Open file browser to attach a file |
 | `/sidebar` | `/sb` | | Toggle sidebar visibility |
 | `/bell` | `/notify` | `[type]` | Toggle notifications (`direct`, `group`, or both) |
 | `/mute` | | | Mute/unmute current conversation |
@@ -24,6 +26,12 @@ typing, the list filters down. Use:
 - **Up/Down arrows** to navigate the list
 - **Tab** to complete the selected command
 - **Esc** to dismiss the popup
+
+### /join autocomplete
+
+After typing `/join `, a second autocomplete popup shows matching contacts and
+groups. Filter by name or phone number. Groups are shown in green. Press Tab to
+complete the selection.
 
 ## Examples
 
@@ -51,6 +59,20 @@ typing, the list filters down. Use:
 ```
 /mute
 ```
+
+**Search for a message:**
+```
+/search hello
+```
+
+**Attach a file:**
+```
+/attach
+```
+
+This opens a file browser. Navigate with `j`/`k`, Enter to select a file or
+enter a directory, Backspace to go up. The selected file attaches to your next
+message.
 
 ## Messaging a new contact
 

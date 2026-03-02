@@ -4,7 +4,7 @@
 
 - [x] Send and receive plain text messages (1:1 and group)
 - [x] Receive file attachments (displayed as `[attachment: filename]`)
-- [x] Typing indicators
+- [x] Typing indicators (receive and send)
 - [x] SQLite-backed message persistence with WAL mode
 - [x] Unread message counts with persistent read markers
 - [x] Vim-style modal editing (Normal / Insert modes)
@@ -31,21 +31,52 @@
 - [x] @mention autocomplete (type `@` in group or 1:1 chats)
 - [x] Visible message selection (focus highlight, `J`/`K` message-level navigation)
 - [x] Startup error handling (signal-cli stderr captured in TUI error screen)
+- [x] Reply to specific messages (quote reply with `q` key)
+- [x] Edit own messages (`e` key, "(edited)" label, cross-device sync)
+- [x] Delete messages (`d` key, remote delete + local delete)
+- [x] Message search (`/search`, `n`/`N` navigation)
+- [x] Send file attachments (`/attach` command with file browser)
+- [x] `/join` autocomplete (contacts and groups with Tab completion)
+- [x] Send typing indicators (auto-start/stop on keypress)
+- [x] Send read receipts (automatic on conversation view, configurable)
 
 ## Up next
 
-- [ ] **Send attachments** -- only receiving works today. Add a `/send-file <path>`
-  command.
-- [ ] **Message search** -- full-text search across conversations.
+- [ ] **Group management** -- create groups, add/remove members, view member
+  list (#26)
+- [ ] **Disappearing messages** -- honor disappearing message timers, show
+  countdown, set timer per conversation (#61)
+- [ ] **Message requests** -- accept or reject message requests from unknown
+  senders (#62)
 
 ## Future
 
+### High priority
+
+- [ ] Desktop notifications -- OS-native notifications beyond terminal bell (#19)
+
+### Medium priority
+
+- [ ] Color themes -- custom color schemes beyond the default palette (#18)
+- [ ] Mouse support -- clickable sidebar, messages, and buttons (#17)
+- [ ] Block/unblock contacts -- block and unblock users from the TUI (#60)
+- [ ] Link previews -- display URL previews for shared links (#63)
+- [ ] Polls -- create and vote in Signal polls (#64)
+- [ ] Pinned messages -- view and manage pinned messages (#65)
+- [ ] Text styling -- render bold, italic, strikethrough, monospace, and
+  spoiler formatting (#66)
+- [ ] Cross-device read sync -- sync read state across linked devices (#71)
+
+### Low priority
+
+- [ ] Publish to crates.io (#11)
+- [ ] Display stickers (#67)
+- [ ] View-once messages (#68)
+- [ ] Update profile from TUI (#69)
+- [ ] Identity key verification (#70)
+- [ ] Missed call notifications (#72)
 - [ ] Multi-line message input (Shift+Enter for newlines)
 - [ ] Message history pagination (scroll-up to load older messages)
-- [ ] Correct group typing indicators (per-sender-to-group mapping)
-- [ ] Message deletion and editing
-- [ ] Group management (create, add/remove members, member list)
 - [ ] Scroll position memory per conversation
 - [ ] Configurable keybindings
-- [ ] Reply to specific messages (quote reply)
 - [ ] Forward messages

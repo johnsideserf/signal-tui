@@ -9,6 +9,8 @@ linked devices) sync into the TUI automatically.
 
 - **Images** -- rendered inline as halfblock art when `inline_images = true`
 - **Other files** -- shown as `[attachment: filename]` with the download path
+- **Send files** -- use `/attach` to open a file browser and attach a file to
+  your next message
 
 Received attachments are saved to the `download_dir` configured in your config file
 (default: `~/signal-downloads/`).
@@ -23,7 +25,9 @@ to open in your browser.
 ## Typing indicators
 
 When someone is typing, their name appears below the chat area. Contact name
-resolution is used where available.
+resolution is used where available. signal-tui also sends typing indicators to
+your conversation partners while you type, so they can see when you're composing
+a message.
 
 ## Persistence
 
@@ -97,6 +101,35 @@ When scrolling in Normal mode, the focused message gets a subtle dark background
 highlight. This makes it clear which message `r` (react) and `y`/`Y` (copy) will
 target. Use `J`/`K` (Shift+j/k) to jump between messages, skipping date
 separators and system messages.
+
+## Reply, edit, and delete
+
+In Normal mode, act on the focused message:
+
+- **`q` -- Quote reply** -- reply with a quoted block showing the original
+  message. A reply indicator appears above your input while composing.
+- **`e` -- Edit** -- edit your own outgoing messages. The original text is
+  loaded into the input buffer. Edited messages display "(edited)".
+- **`d` -- Delete** -- delete a message. Outgoing messages offer "delete for
+  everyone" (remote delete) or "delete locally". Incoming messages can be
+  deleted locally. Deleted messages show as "[deleted]".
+
+All three features sync across devices and persist in the database.
+
+## Message search
+
+Use `/search <query>` (alias `/s`) to search across all conversations. Results
+appear in a scrollable overlay with sender, snippet, and conversation name.
+Press Enter to jump to the message in context.
+
+After searching, use `n`/`N` in Normal mode to cycle through matches without
+re-opening the overlay.
+
+## Read receipts
+
+signal-tui sends read receipts to message senders when you view a conversation,
+letting them know you've read their messages. This can be toggled off via
+`/settings` > "Send read receipts".
 
 ## Demo mode
 

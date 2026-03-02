@@ -87,10 +87,14 @@ outbound request). They have a `method` field but no `id`:
 
 | Method | Purpose |
 |---|---|
-| `send` | Send a message to a contact or group |
+| `send` | Send a message (also used for edits via `editTimestamp` param) |
 | `listContacts` | Request the contact address book |
 | `listGroups` | Request the list of groups |
 | `sendSyncRequest` | Request a sync from the primary device |
+| `sendReaction` | Send an emoji reaction to a message |
+| `remoteDelete` | Delete a message for all recipients |
+| `sendTypingIndicator` | Send typing started/stopped indicator |
+| `sendReceipt` | Send a read receipt for one or more messages |
 
 ### Inbound notifications (signal-cli -> signal-tui)
 
@@ -99,6 +103,16 @@ outbound request). They have a `method` field but no `id`:
 | `receive` | Incoming message | `SignalEvent::MessageReceived` |
 | `receiveTyping` | Typing indicator | `SignalEvent::TypingIndicator` |
 | `receiveReceipt` | Delivery/read receipt | `SignalEvent::ReceiptReceived` |
+
+Incoming `receive` envelopes may also contain:
+
+| Envelope field | Purpose | Maps to |
+|---|---|---|
+| `dataMessage.reaction` | Incoming reaction | `SignalEvent::ReactionReceived` |
+| `dataMessage.remoteDelete` | Remote delete request | `SignalEvent::RemoteDeleteReceived` |
+| `dataMessage.quote` | Quoted reply metadata | `quote` field on `SignalMessage` |
+| `editMessage` | Edited message | `SignalEvent::EditReceived` |
+| `syncMessage.sentMessage` | Outgoing sync (own messages from other devices) | Same as above, with `is_outgoing = true` |
 
 ## Parsing logic
 

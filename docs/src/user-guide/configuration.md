@@ -26,6 +26,7 @@ download_dir = "/home/user/signal-downloads"
 notify_direct = true
 notify_group = true
 inline_images = true
+send_read_receipts = true
 ```
 
 ### Field reference
@@ -38,6 +39,7 @@ inline_images = true
 | `notify_direct` | bool | `true` | Terminal bell on new direct messages |
 | `notify_group` | bool | `true` | Terminal bell on new group messages |
 | `inline_images` | bool | `true` | Render image attachments as halfblock art |
+| `send_read_receipts` | bool | `true` | Send read receipts when viewing conversations |
 
 ## CLI flags
 
@@ -57,8 +59,12 @@ toggles for runtime settings:
 - Notification toggles (direct / group)
 - Sidebar visibility
 - Inline image previews
+- Read receipts / receipt colors / nerd font icons
+- Verbose reactions
+- Send read receipts
 
-Changes made in the settings overlay apply immediately to the running session.
+Changes made in the settings overlay are saved to the config file when you
+close the overlay, and persist across sessions.
 
 ## Incognito mode
 

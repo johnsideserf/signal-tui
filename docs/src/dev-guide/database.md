@@ -40,17 +40,45 @@ All messages, ordered by insertion rowid.
 CREATE TABLE messages (
     rowid           INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation_id TEXT NOT NULL REFERENCES conversations(id),
-    sender          TEXT NOT NULL,       -- sender phone or empty for system
+    sender          TEXT NOT NULL,       -- sender display name or empty for system
     timestamp       TEXT NOT NULL,       -- RFC 3339 timestamp
     body            TEXT NOT NULL,       -- message text
-    is_system       INTEGER NOT NULL DEFAULT 0
+    is_system       INTEGER NOT NULL DEFAULT 0,
+    status          INTEGER NOT NULL DEFAULT 0,    -- MessageStatus enum (v3)
+    timestamp_ms    INTEGER NOT NULL DEFAULT 0,    -- server epoch ms (v3)
+    is_edited       INTEGER NOT NULL DEFAULT 0,    -- edited flag (v6)
+    is_deleted      INTEGER NOT NULL DEFAULT 0,    -- deleted flag (v6)
+    quote_author    TEXT,                           -- quoted reply author (v6)
+    quote_body      TEXT,                           -- quoted reply body (v6)
+    quote_ts_ms     INTEGER,                        -- quoted reply timestamp (v6)
+    sender_id       TEXT NOT NULL DEFAULT ''        -- sender phone number (v6)
 );
 
 CREATE INDEX idx_messages_conv_ts ON messages(conversation_id, timestamp);
+CREATE INDEX idx_messages_conv_ts_ms ON messages(conversation_id, timestamp_ms);
 ```
 
 System messages (`is_system = 1`) are used for join/leave notifications and
 are excluded from unread counts.
+
+### `reactions`
+
+Emoji reactions on messages. One reaction per sender per message, with
+the latest emoji replacing any previous one.
+
+```sql
+CREATE TABLE reactions (
+    rowid           INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id TEXT NOT NULL,
+    target_ts_ms    INTEGER NOT NULL,     -- timestamp of the reacted-to message
+    target_author   TEXT NOT NULL,         -- author of the reacted-to message
+    emoji           TEXT NOT NULL,
+    sender          TEXT NOT NULL,         -- who sent this reaction
+    UNIQUE(conversation_id, target_ts_ms, target_author, sender)
+);
+
+CREATE INDEX idx_reactions_target ON reactions(conversation_id, target_ts_ms);
+```
 
 ### `read_markers`
 
@@ -73,6 +101,10 @@ Migrations are version-based and run sequentially in `Database::migrate()`:
 |---|---|
 | 1 | Initial schema: `conversations`, `messages`, `read_markers` tables |
 | 2 | Add `muted` column to `conversations` |
+| 3 | Add `status` and `timestamp_ms` columns to `messages` (delivery status tracking) |
+| 4 | Create `reactions` table with unique constraint per sender per message |
+| 5 | Add index on `messages(conversation_id, timestamp_ms)` for search performance |
+| 6 | Add `is_edited`, `is_deleted`, `quote_author`, `quote_body`, `quote_ts_ms`, `sender_id` columns to `messages` |
 
 Each migration is wrapped in a transaction. The `schema_version` table tracks
 the current version.
