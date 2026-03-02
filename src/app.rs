@@ -39,6 +39,15 @@ pub enum AutocompleteMode {
     Mention,
 }
 
+/// Quoted reply context attached to a message.
+#[derive(Debug, Clone)]
+pub struct Quote {
+    pub author: String,
+    pub body: String,
+    #[allow(dead_code)]
+    pub timestamp_ms: i64,
+}
+
 /// A single displayed message in a conversation
 #[derive(Debug, Clone)]
 pub struct DisplayMessage {
@@ -58,6 +67,14 @@ pub struct DisplayMessage {
     pub reactions: Vec<Reaction>,
     /// Byte ranges of @mentions in body (for styling)
     pub mention_ranges: Vec<(usize, usize)>,
+    /// Quoted reply context
+    pub quote: Option<Quote>,
+    /// Whether this message has been edited
+    pub is_edited: bool,
+    /// Whether this message has been remotely deleted
+    pub is_deleted: bool,
+    /// Phone number / ID of the sender (for wire protocol; "you" for outgoing)
+    pub sender_id: String,
 }
 
 impl DisplayMessage {
@@ -221,6 +238,12 @@ pub struct App {
     pub file_browser_error: Option<String>,
     /// File selected for sending as attachment
     pub pending_attachment: Option<PathBuf>,
+    /// Reply target: (author_phone, body_snippet, timestamp_ms)
+    pub reply_target: Option<(String, String, i64)>,
+    /// Delete confirmation overlay visible
+    pub show_delete_confirm: bool,
+    /// Message being edited: (timestamp_ms, conv_id)
+    pub editing_message: Option<(i64, String)>,
 }
 
 pub const QUICK_REACTIONS: &[&str] = &["\u{1f44d}", "\u{1f44e}", "\u{2764}\u{fe0f}", "\u{1f602}", "\u{1f62e}", "\u{1f622}", "\u{1f64f}", "\u{1f525}"];
@@ -234,6 +257,9 @@ pub enum SendRequest {
         local_ts_ms: i64,
         mentions: Vec<(usize, String)>,
         attachment: Option<PathBuf>,
+        quote_timestamp: Option<i64>,
+        quote_author: Option<String>,
+        quote_body: Option<String>,
     },
     Reaction {
         conv_id: String,
@@ -242,6 +268,19 @@ pub enum SendRequest {
         target_author: String,
         target_timestamp: i64,
         remove: bool,
+    },
+    Edit {
+        recipient: String,
+        body: String,
+        is_group: bool,
+        edit_timestamp: i64,
+        local_ts_ms: i64,
+        mentions: Vec<(usize, String)>,
+    },
+    RemoteDelete {
+        recipient: String,
+        is_group: bool,
+        target_timestamp: i64,
     },
 }
 
@@ -797,6 +836,9 @@ impl App {
             file_browser_filtered: Vec::new(),
             file_browser_error: None,
             pending_attachment: None,
+            reply_target: None,
+            show_delete_confirm: false,
+            editing_message: None,
         }
     }
 
@@ -924,6 +966,10 @@ impl App {
     /// command triggers a message send. Returns `None` otherwise.
     /// Returns `Ok(true)` if the key was consumed by an overlay.
     pub fn handle_overlay_key(&mut self, code: KeyCode) -> (bool, Option<SendRequest>) {
+        if self.show_delete_confirm {
+            let send = self.handle_delete_confirm_key(code);
+            return (true, send);
+        }
         if self.show_file_browser {
             self.handle_file_browser_key(code);
             return (true, None);
@@ -1087,6 +1133,55 @@ impl App {
                 }
             }
 
+            // Reply/quote focused message
+            (_, KeyCode::Char('q')) => {
+                if let Some(msg) = self.selected_message() {
+                    if !msg.is_system && !msg.is_deleted {
+                        let author_phone = msg.sender_id.clone();
+                        let snippet = if msg.body.len() > 50 {
+                            format!("{}…", &msg.body[..50])
+                        } else {
+                            msg.body.clone()
+                        };
+                        let ts = msg.timestamp_ms;
+                        // Resolve sender_id: if empty or "you", use account
+                        let phone = if author_phone.is_empty() || author_phone == "you" {
+                            self.account.clone()
+                        } else {
+                            author_phone
+                        };
+                        self.reply_target = Some((phone, snippet, ts));
+                        self.mode = InputMode::Insert;
+                    }
+                }
+            }
+
+            // Edit own message
+            (_, KeyCode::Char('e')) => {
+                if let Some(msg) = self.selected_message() {
+                    if msg.sender == "you" && !msg.is_deleted && !msg.is_system {
+                        let ts = msg.timestamp_ms;
+                        let body = msg.body.clone();
+                        if let Some(ref conv_id) = self.active_conversation {
+                            let conv_id = conv_id.clone();
+                            self.editing_message = Some((ts, conv_id));
+                            self.input_buffer = body;
+                            self.input_cursor = self.input_buffer.len();
+                            self.mode = InputMode::Insert;
+                        }
+                    }
+                }
+            }
+
+            // Delete message
+            (_, KeyCode::Char('d')) => {
+                if let Some(msg) = self.selected_message() {
+                    if !msg.is_system && !msg.is_deleted {
+                        self.show_delete_confirm = true;
+                    }
+                }
+            }
+
             // Quick actions
             (_, KeyCode::Char('/')) => {
                 self.input_buffer = "/".to_string();
@@ -1113,6 +1208,8 @@ impl App {
             (_, KeyCode::Esc) => {
                 self.mode = InputMode::Normal;
                 self.autocomplete_visible = false;
+                self.reply_target = None;
+                self.editing_message = None;
                 None
             }
             (_, KeyCode::Enter) => self.handle_input(),
@@ -1164,6 +1261,16 @@ impl App {
                 }
                 self.handle_reaction(&conv_id, &emoji, &sender, &target_author, target_timestamp, is_remove);
             }
+            SignalEvent::EditReceived {
+                conv_id, sender: _, sender_name: _, target_timestamp, new_body, new_timestamp: _, is_outgoing: _,
+            } => {
+                self.handle_edit_received(&conv_id, target_timestamp, &new_body);
+            }
+            SignalEvent::RemoteDeleteReceived {
+                conv_id, sender: _, target_timestamp,
+            } => {
+                self.handle_remote_delete(&conv_id, target_timestamp);
+            }
             SignalEvent::ContactList(contacts) => self.handle_contact_list(contacts),
             SignalEvent::GroupList(groups) => self.handle_group_list(groups),
             SignalEvent::Error(ref err) => {
@@ -1214,6 +1321,12 @@ impl App {
                 .unwrap_or_else(|| short_name(&msg.source))
         };
 
+        let sender_id = if msg.is_outgoing {
+            self.account.clone()
+        } else {
+            msg.source.clone()
+        };
+
         // Ensure conversation exists (drop the mutable ref immediately)
         self.get_or_create_conversation(&conv_id, &conv_name, is_group);
 
@@ -1227,11 +1340,24 @@ impl App {
             self.resolve_mentions(body, &msg.mentions)
         });
 
+        // Resolve quote from wire format
+        let msg_quote = msg.quote.as_ref().map(|(ts, author_phone, body)| {
+            let author_display = self.contact_names.get(author_phone)
+                .cloned()
+                .unwrap_or_else(|| if *author_phone == self.account { "you".to_string() } else { author_phone.clone() });
+            (Quote { author: author_display, body: body.clone(), timestamp_ms: *ts }, author_phone.clone(), body.clone(), *ts)
+        });
+        let display_quote = msg_quote.as_ref().map(|(q, _, _, _)| q.clone());
+        let wire_quote_author = msg_quote.as_ref().map(|(_, a, _, _)| a.clone());
+        let wire_quote_body = msg_quote.as_ref().map(|(_, _, b, _)| b.clone());
+        let wire_quote_ts = msg_quote.as_ref().map(|(_, _, _, t)| *t);
+
         // Helper: insert a DisplayMessage in timestamp order and persist to DB
         let mut push_msg = |body: String,
                             image_lines: Option<Vec<Line<'static>>>,
                             image_path: Option<String>,
-                            mention_ranges: Vec<(usize, usize)>| {
+                            mention_ranges: Vec<(usize, usize)>,
+                            quote: Option<Quote>| {
             if let Some(conv) = self.conversations.get_mut(&conv_id) {
                 let pos = conv.messages.partition_point(|m| m.timestamp_ms <= msg_ts_ms);
                 conv.messages.insert(pos, DisplayMessage {
@@ -1245,6 +1371,10 @@ impl App {
                     timestamp_ms: msg_ts_ms,
                     reactions: Vec::new(),
                     mention_ranges,
+                    quote,
+                    is_edited: false,
+                    is_deleted: false,
+                    sender_id: sender_id.clone(),
                 });
                 // Bump last_read_index if we inserted before the read marker
                 if let Some(read_idx) = self.last_read_index.get_mut(&conv_id) {
@@ -1254,8 +1384,12 @@ impl App {
                 }
             }
             db_warn(
-                self.db.insert_message(
+                self.db.insert_message_full(
                     &conv_id, &sender_display, &ts_rfc3339, &body, false, msg_status, msg_ts_ms,
+                    &sender_id,
+                    wire_quote_author.as_deref(),
+                    wire_quote_body.as_deref(),
+                    wire_quote_ts,
                 ),
                 "insert_message",
             );
@@ -1263,7 +1397,7 @@ impl App {
 
         // Add text body (with resolved @mentions)
         if let Some((resolved, ranges)) = resolved_body {
-            push_msg(resolved, None, None, ranges);
+            push_msg(resolved, None, None, ranges, display_quote);
         }
 
         // Add attachment notices
@@ -1293,9 +1427,10 @@ impl App {
                     rendered,
                     att.local_path.clone(),
                     Vec::new(),
+                    None,
                 );
             } else {
-                push_msg(format!("[attachment: {label}]{path_info}"), None, None, Vec::new());
+                push_msg(format!("[attachment: {label}]{path_info}"), None, None, Vec::new(), None);
             }
         }
 
@@ -1381,6 +1516,100 @@ impl App {
                 "upsert_reaction",
             );
         }
+    }
+
+    /// Handle a key press in the delete confirmation overlay.
+    /// Returns Some(SendRequest::RemoteDelete) if remote delete is requested.
+    pub fn handle_delete_confirm_key(&mut self, code: KeyCode) -> Option<SendRequest> {
+        match code {
+            KeyCode::Char('y') => {
+                self.show_delete_confirm = false;
+                let conv_id = self.active_conversation.clone()?;
+                let conv = self.conversations.get(&conv_id)?;
+                let is_group = conv.is_group;
+                let index = self.focused_msg_index.unwrap_or_else(|| {
+                    conv.messages.len().saturating_sub(1)
+                });
+                let msg = conv.messages.get(index)?;
+                let is_outgoing = msg.sender == "you";
+                let target_timestamp = msg.timestamp_ms;
+
+                // Apply local delete
+                let conv = self.conversations.get_mut(&conv_id)?;
+                let msg = conv.messages.get_mut(index)?;
+                msg.is_deleted = true;
+                msg.body = "[deleted]".to_string();
+                msg.reactions.clear();
+                db_warn(
+                    self.db.mark_message_deleted(&conv_id, target_timestamp),
+                    "mark_message_deleted",
+                );
+
+                // Send remote delete only for outgoing messages
+                if is_outgoing {
+                    return Some(SendRequest::RemoteDelete {
+                        recipient: conv_id,
+                        is_group,
+                        target_timestamp,
+                    });
+                }
+                None
+            }
+            KeyCode::Char('l') => {
+                // Local-only delete (for outgoing messages)
+                self.show_delete_confirm = false;
+                let conv_id = self.active_conversation.clone()?;
+                let conv = self.conversations.get(&conv_id)?;
+                let index = self.focused_msg_index.unwrap_or_else(|| {
+                    conv.messages.len().saturating_sub(1)
+                });
+                let msg = conv.messages.get(index)?;
+                let target_timestamp = msg.timestamp_ms;
+
+                let conv = self.conversations.get_mut(&conv_id)?;
+                let msg = conv.messages.get_mut(index)?;
+                msg.is_deleted = true;
+                msg.body = "[deleted]".to_string();
+                msg.reactions.clear();
+                db_warn(
+                    self.db.mark_message_deleted(&conv_id, target_timestamp),
+                    "mark_message_deleted",
+                );
+                None
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                self.show_delete_confirm = false;
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn handle_edit_received(&mut self, conv_id: &str, target_timestamp: i64, new_body: &str) {
+        if let Some(conv) = self.conversations.get_mut(conv_id) {
+            if let Some(msg) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == target_timestamp) {
+                msg.body = new_body.to_string();
+                msg.is_edited = true;
+            }
+        }
+        db_warn(
+            self.db.update_message_body(conv_id, target_timestamp, new_body),
+            "update_message_body",
+        );
+    }
+
+    fn handle_remote_delete(&mut self, conv_id: &str, target_timestamp: i64) {
+        if let Some(conv) = self.conversations.get_mut(conv_id) {
+            if let Some(msg) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == target_timestamp) {
+                msg.is_deleted = true;
+                msg.body = "[deleted]".to_string();
+                msg.reactions.clear();
+            }
+        }
+        db_warn(
+            self.db.mark_message_deleted(conv_id, target_timestamp),
+            "mark_message_deleted",
+        );
     }
 
     fn handle_contact_list(&mut self, contacts: Vec<Contact>) {
@@ -1730,9 +1959,39 @@ impl App {
         let action = input::parse_input(&input);
         match action {
             InputAction::SendText(text) => {
-                if text.is_empty() && self.pending_attachment.is_none() {
+                if text.is_empty() && self.pending_attachment.is_none() && self.editing_message.is_none() {
                     return None;
                 }
+
+                // Handle editing flow: update in-memory + DB + send edit RPC
+                if let Some((edit_ts, edit_conv_id)) = self.editing_message.take() {
+                    if !text.is_empty() {
+                        if let Some(conv) = self.conversations.get_mut(&edit_conv_id) {
+                            if let Some(msg) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == edit_ts && m.sender == "you") {
+                                msg.body = text.clone();
+                                msg.is_edited = true;
+                            }
+                            let is_group = conv.is_group;
+                            let (wire_body, wire_mentions) = self.prepare_outgoing_mentions(&text);
+                            self.pending_mentions.clear();
+                            db_warn(
+                                self.db.update_message_body(&edit_conv_id, edit_ts, &text),
+                                "update_message_body",
+                            );
+                            let now = Utc::now();
+                            return Some(SendRequest::Edit {
+                                recipient: edit_conv_id,
+                                body: wire_body,
+                                is_group,
+                                edit_timestamp: edit_ts,
+                                local_ts_ms: now.timestamp_millis(),
+                                mentions: wire_mentions,
+                            });
+                        }
+                    }
+                    return None;
+                }
+
                 if let Some(ref conv_id) = self.active_conversation {
                     let attachment = self.pending_attachment.take();
                     let is_group = self
@@ -1772,6 +2031,17 @@ impl App {
                     // Add our own message to the display
                     let now = Utc::now();
                     let local_ts_ms = now.timestamp_millis();
+                    // Build quote for display if replying
+                    let quote = self.reply_target.as_ref().map(|(author_phone, body, ts)| {
+                        let author_display = self.contact_names.get(author_phone)
+                            .cloned()
+                            .unwrap_or_else(|| if *author_phone == self.account { "you".to_string() } else { author_phone.clone() });
+                        Quote { author: author_display, body: body.clone(), timestamp_ms: *ts }
+                    });
+                    let quote_timestamp = self.reply_target.as_ref().map(|(_, _, ts)| *ts);
+                    let quote_author = self.reply_target.as_ref().map(|(phone, _, _)| phone.clone());
+                    let quote_body = self.reply_target.as_ref().map(|(_, body, _)| body.clone());
+
                     if let Some(conv) = self.conversations.get_mut(&conv_id) {
                         conv.messages.push(DisplayMessage {
                             sender: "you".to_string(),
@@ -1784,9 +2054,13 @@ impl App {
                             timestamp_ms: local_ts_ms,
                             reactions: Vec::new(),
                             mention_ranges,
+                            quote,
+                            is_edited: false,
+                            is_deleted: false,
+                            sender_id: self.account.clone(),
                         });
                     }
-                    db_warn(self.db.insert_message(
+                    db_warn(self.db.insert_message_full(
                         &conv_id,
                         "you",
                         &now.to_rfc3339(),
@@ -1794,9 +2068,14 @@ impl App {
                         false,
                         Some(MessageStatus::Sending),
                         local_ts_ms,
+                        &self.account,
+                        quote_author.as_deref(),
+                        quote_body.as_deref(),
+                        quote_timestamp,
                     ), "insert_message");
                     self.scroll_offset = 0;
                     self.focused_msg_index = None;
+                    self.reply_target = None;
                     return Some(SendRequest::Message {
                         recipient: conv_id,
                         body: wire_body,
@@ -1804,6 +2083,9 @@ impl App {
                         local_ts_ms,
                         mentions: wire_mentions,
                         attachment,
+                        quote_timestamp,
+                        quote_author,
+                        quote_body,
                     });
                 } else {
                     self.status_message =
@@ -2250,7 +2532,7 @@ impl App {
     /// Get the message at the current scroll position.
     /// Returns the message at the bottom of the visible viewport.
     /// scroll_offset=0 means the newest message; higher values go older.
-    fn selected_message(&self) -> Option<&DisplayMessage> {
+    pub fn selected_message(&self) -> Option<&DisplayMessage> {
         let conv_id = self.active_conversation.as_ref()?;
         let conv = self.conversations.get(conv_id)?;
         let index = self.focused_msg_index.unwrap_or_else(|| {
@@ -2436,6 +2718,7 @@ mod tests {
             is_outgoing: false,
             destination: None,
             mentions: vec![],
+            quote: None,
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         assert_eq!(app.conversations["+15551234567"].name, "+15551234567");
@@ -2464,6 +2747,7 @@ mod tests {
             is_outgoing: false,
             destination: None,
             mentions: vec![],
+            quote: None,
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         assert_eq!(app.conversations["+1"].name, "Alice");
@@ -2500,6 +2784,7 @@ mod tests {
             is_outgoing: false,
             destination: None,
             mentions: vec![],
+            quote: None,
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
 
@@ -2530,6 +2815,7 @@ mod tests {
             is_outgoing: false,
             destination: None,
             mentions: vec![],
+            quote: None,
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
 
@@ -2561,6 +2847,7 @@ mod tests {
                 is_outgoing: false,
                 destination: None,
                 mentions: vec![],
+                quote: None,
             };
             app.handle_signal_event(SignalEvent::MessageReceived(msg));
         }
@@ -2898,6 +3185,10 @@ mod tests {
                 timestamp_ms: ts_ms,
                 reactions: Vec::new(),
                 mention_ranges: Vec::new(),
+                quote: None,
+                is_edited: false,
+                is_deleted: false,
+                sender_id: String::new(),
             });
         }
 
@@ -2943,6 +3234,10 @@ mod tests {
                 timestamp_ms: ts_ms,
                 reactions: Vec::new(),
                 mention_ranges: Vec::new(),
+                quote: None,
+                is_edited: false,
+                is_deleted: false,
+                sender_id: String::new(),
             });
         }
 
@@ -2979,6 +3274,10 @@ mod tests {
                 timestamp_ms: local_ts,
                 reactions: Vec::new(),
                 mention_ranges: Vec::new(),
+                quote: None,
+                is_edited: false,
+                is_deleted: false,
+                sender_id: String::new(),
             });
         }
 
@@ -3015,6 +3314,10 @@ mod tests {
                 timestamp_ms: local_ts,
                 reactions: Vec::new(),
                 mention_ranges: Vec::new(),
+                quote: None,
+                is_edited: false,
+                is_deleted: false,
+                sender_id: String::new(),
             });
         }
 
@@ -3045,6 +3348,7 @@ mod tests {
             is_outgoing: false,
             destination: None,
             mentions: vec![],
+            quote: None,
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
 
@@ -3073,6 +3377,10 @@ mod tests {
                 timestamp_ms: local_ts,
                 reactions: Vec::new(),
                 mention_ranges: Vec::new(),
+                quote: None,
+                is_edited: false,
+                is_deleted: false,
+                sender_id: String::new(),
             });
         }
 
@@ -3122,6 +3430,7 @@ mod tests {
             is_outgoing: false,
             destination: None,
             mentions: vec![],
+            quote: None,
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         let ts_ms = app.conversations["+1"].messages[0].timestamp_ms;
@@ -3158,6 +3467,7 @@ mod tests {
             is_outgoing: false,
             destination: None,
             mentions: vec![],
+            quote: None,
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         let ts_ms = app.conversations["+1"].messages[0].timestamp_ms;
@@ -3202,6 +3512,7 @@ mod tests {
             is_outgoing: false,
             destination: None,
             mentions: vec![],
+            quote: None,
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         let ts_ms = app.conversations["+1"].messages[0].timestamp_ms;
@@ -3250,6 +3561,10 @@ mod tests {
                 timestamp_ms: ts_ms,
                 reactions: Vec::new(),
                 mention_ranges: Vec::new(),
+                quote: None,
+                is_edited: false,
+                is_deleted: false,
+                sender_id: String::new(),
             });
         }
 
@@ -3489,6 +3804,7 @@ mod tests {
             is_outgoing: false,
             destination: None,
             mentions: vec![Mention { start: 0, length: 1, uuid: "uuid-bob".to_string() }],
+            quote: None,
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
 

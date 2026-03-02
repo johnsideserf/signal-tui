@@ -165,6 +165,7 @@ impl SignalClient {
         is_group: bool,
         mentions: &[(usize, String)],
         attachments: &[&Path],
+        quote: Option<(&str, i64, &str)>,
     ) -> Result<String> {
         let id = Uuid::new_v4().to_string();
 
@@ -212,6 +213,12 @@ impl SignalClient {
             );
         }
 
+        if let Some((author, timestamp, body_text)) = quote {
+            params.as_object_mut().unwrap().insert("quoteTimestamp".to_string(), serde_json::json!(timestamp));
+            params.as_object_mut().unwrap().insert("quoteAuthor".to_string(), serde_json::json!(author));
+            params.as_object_mut().unwrap().insert("quoteMessage".to_string(), serde_json::json!(body_text));
+        }
+
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             method: "send".to_string(),
@@ -225,6 +232,103 @@ impl SignalClient {
             .await
             .context("Failed to send to signal-cli stdin")?;
         Ok(id)
+    }
+
+    pub async fn send_edit_message(
+        &self,
+        recipient: &str,
+        body: &str,
+        is_group: bool,
+        edit_timestamp: i64,
+        mentions: &[(usize, String)],
+    ) -> Result<String> {
+        let id = Uuid::new_v4().to_string();
+
+        if let Ok(mut map) = self.pending_requests.lock() {
+            map.insert(id.clone(), ("send".to_string(), Instant::now()));
+        }
+
+        let mut params = if is_group {
+            serde_json::json!({
+                "groupId": recipient,
+                "message": body,
+                "account": self.account,
+                "editTimestamp": edit_timestamp,
+            })
+        } else {
+            serde_json::json!({
+                "recipient": [recipient],
+                "message": body,
+                "account": self.account,
+                "editTimestamp": edit_timestamp,
+            })
+        };
+
+        if !mentions.is_empty() {
+            let mention_arr: Vec<serde_json::Value> = mentions
+                .iter()
+                .map(|(start, uuid)| serde_json::Value::String(format!("{start}:1:{uuid}")))
+                .collect();
+            params.as_object_mut().unwrap().insert(
+                "mention".to_string(),
+                serde_json::Value::Array(mention_arr),
+            );
+        }
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "send".to_string(),
+            id: id.clone(),
+            params: Some(params),
+        };
+
+        let json = serde_json::to_string(&request)?;
+        self.stdin_tx
+            .send(json)
+            .await
+            .context("Failed to send edit to signal-cli stdin")?;
+        Ok(id)
+    }
+
+    pub async fn send_remote_delete(
+        &self,
+        recipient: &str,
+        is_group: bool,
+        target_timestamp: i64,
+    ) -> Result<()> {
+        let id = Uuid::new_v4().to_string();
+
+        if let Ok(mut map) = self.pending_requests.lock() {
+            map.insert(id.clone(), ("remoteDelete".to_string(), Instant::now()));
+        }
+
+        let params = if is_group {
+            serde_json::json!({
+                "groupId": recipient,
+                "targetTimestamp": target_timestamp,
+                "account": self.account,
+            })
+        } else {
+            serde_json::json!({
+                "recipient": recipient,
+                "targetTimestamp": target_timestamp,
+                "account": self.account,
+            })
+        };
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "remoteDelete".to_string(),
+            id,
+            params: Some(params),
+        };
+
+        let json = serde_json::to_string(&request)?;
+        self.stdin_tx
+            .send(json)
+            .await
+            .context("Failed to send remote delete to signal-cli stdin")?;
+        Ok(())
     }
 
     pub async fn list_groups(&self) -> Result<()> {
@@ -414,7 +518,7 @@ fn parse_rpc_result(method: &str, result: &serde_json::Value, rpc_id: Option<&st
                 .collect();
             Some(SignalEvent::GroupList(groups))
         }
-        "sendReaction" => None, // reaction applied optimistically, no action needed
+        "sendReaction" | "remoteDelete" => None, // applied optimistically, no action needed
         _ => None,
     }
 }
@@ -454,8 +558,17 @@ fn parse_receive_event(
     if envelope.get("receiptMessage").is_some() {
         return parse_receipt_message(envelope);
     }
+    // Check for editMessage (top-level envelope field) before dataMessage
+    if let Some(edit_msg) = envelope.get("editMessage") {
+        return parse_edit_message(envelope, edit_msg, false);
+    }
+
     if let Some(sync) = envelope.get("syncMessage") {
         if let Some(sent) = sync.get("sentMessage") {
+            // Check for edit in sync
+            if let Some(edit_msg) = sent.get("editMessage") {
+                return parse_edit_message(envelope, edit_msg, true);
+            }
             return parse_sent_sync(envelope, sent, download_dir);
         }
         return None;
@@ -550,6 +663,28 @@ fn parse_data_message(
         return parse_reaction(envelope, reaction, group_id);
     }
 
+    // Check for remote delete
+    if let Some(remote_delete) = data.get("remoteDelete") {
+        let target_timestamp = remote_delete.get("timestamp").and_then(|v| v.as_i64())?;
+        let sender = envelope
+            .get("sourceNumber")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let group_id = data
+            .get("groupInfo")
+            .and_then(|g| g.get("groupId"))
+            .and_then(|v| v.as_str());
+        let conv_id = group_id
+            .map(|g| g.to_string())
+            .unwrap_or_else(|| sender.clone());
+        return Some(SignalEvent::RemoteDeleteReceived {
+            conv_id,
+            sender,
+            target_timestamp,
+        });
+    }
+
     let source = envelope
         .get("sourceNumber")
         .and_then(|v| v.as_str())
@@ -611,6 +746,14 @@ fn parse_data_message(
         })
         .unwrap_or_default();
 
+    // Parse quoted reply
+    let quote = data.get("quote").and_then(|q| {
+        let q_ts = q.get("id").and_then(|v| v.as_i64())?;
+        let q_author = q.get("authorNumber").and_then(|v| v.as_str())?.to_string();
+        let q_body = q.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        Some((q_ts, q_author, q_body))
+    });
+
     Some(SignalEvent::MessageReceived(SignalMessage {
         source,
         source_name,
@@ -622,6 +765,7 @@ fn parse_data_message(
         is_outgoing: false,
         destination: None,
         mentions,
+        quote,
     }))
 }
 
@@ -633,6 +777,34 @@ fn parse_sent_sync(
     // Check for synced reaction before extracting body/attachments
     if let Some(reaction) = sent.get("reaction") {
         return parse_reaction_sync(envelope, sent, reaction);
+    }
+
+    // Check for synced remote delete
+    if let Some(remote_delete) = sent.get("remoteDelete") {
+        let target_timestamp = remote_delete.get("timestamp").and_then(|v| v.as_i64())?;
+        let sender = envelope
+            .get("sourceNumber")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let group_id = sent
+            .get("groupInfo")
+            .and_then(|g| g.get("groupId"))
+            .and_then(|v| v.as_str());
+        let conv_id = group_id
+            .map(|g| g.to_string())
+            .or_else(|| {
+                sent.get("destinationNumber")
+                    .or_else(|| sent.get("destination"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_else(|| sender.clone());
+        return Some(SignalEvent::RemoteDeleteReceived {
+            conv_id,
+            sender,
+            target_timestamp,
+        });
     }
 
     let source = envelope
@@ -696,6 +868,14 @@ fn parse_sent_sync(
         })
         .unwrap_or_default();
 
+    // Parse quoted reply
+    let quote = sent.get("quote").and_then(|q| {
+        let q_ts = q.get("id").and_then(|v| v.as_i64())?;
+        let q_author = q.get("authorNumber").and_then(|v| v.as_str())?.to_string();
+        let q_body = q.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        Some((q_ts, q_author, q_body))
+    });
+
     Some(SignalEvent::MessageReceived(SignalMessage {
         source,
         source_name: None,
@@ -707,6 +887,7 @@ fn parse_sent_sync(
         is_outgoing: true,
         destination,
         mentions,
+        quote,
     }))
 }
 
@@ -785,6 +966,52 @@ fn parse_reaction_sync(
         target_author,
         target_timestamp,
         is_remove,
+    })
+}
+
+fn parse_edit_message(
+    envelope: &serde_json::Value,
+    edit_msg: &serde_json::Value,
+    is_outgoing: bool,
+) -> Option<SignalEvent> {
+    let target_timestamp = edit_msg.get("targetSentTimestamp").and_then(|v| v.as_i64())?;
+    let data = edit_msg.get("dataMessage")?;
+    let new_body = data.get("message").and_then(|v| v.as_str())?.to_string();
+    let new_timestamp = data.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+
+    let sender = envelope
+        .get("sourceNumber")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let sender_name = envelope
+        .get("sourceName")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+    let group_id = data
+        .get("groupInfo")
+        .and_then(|g| g.get("groupId"))
+        .and_then(|v| v.as_str());
+
+    let conv_id = if is_outgoing {
+        // For outgoing sync edits, conv_id comes from destination or group
+        group_id.map(|g| g.to_string())
+            .unwrap_or_else(|| sender.clone())
+    } else {
+        group_id.map(|g| g.to_string())
+            .unwrap_or_else(|| sender.clone())
+    };
+
+    Some(SignalEvent::EditReceived {
+        conv_id,
+        sender,
+        sender_name,
+        target_timestamp,
+        new_body,
+        new_timestamp,
+        is_outgoing,
     })
 }
 

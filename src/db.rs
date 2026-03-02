@@ -130,6 +130,22 @@ impl Database {
             )?;
         }
 
+        if version < 6 {
+            self.conn.execute_batch(
+                "
+                BEGIN;
+                ALTER TABLE messages ADD COLUMN is_edited INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE messages ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE messages ADD COLUMN quote_author TEXT;
+                ALTER TABLE messages ADD COLUMN quote_body TEXT;
+                ALTER TABLE messages ADD COLUMN quote_ts_ms INTEGER;
+                ALTER TABLE messages ADD COLUMN sender_id TEXT NOT NULL DEFAULT '';
+                UPDATE schema_version SET version = 6;
+                COMMIT;
+                ",
+            )?;
+        }
+
         Ok(())
     }
 
@@ -166,7 +182,7 @@ impl Database {
         for (id, name, is_group) in convs {
             // Load last N messages
             let mut msg_stmt = self.conn.prepare(
-                "SELECT sender, timestamp, body, is_system, status, timestamp_ms FROM messages
+                "SELECT sender, timestamp, body, is_system, status, timestamp_ms, is_edited, is_deleted, quote_author, quote_body, quote_ts_ms, sender_id FROM messages
                  WHERE conversation_id = ?1
                  ORDER BY timestamp_ms DESC, rowid DESC LIMIT ?2",
             )?;
@@ -179,13 +195,23 @@ impl Database {
                     let is_system: bool = row.get::<_, i32>(3)? != 0;
                     let status_i32: i32 = row.get(4)?;
                     let timestamp_ms: i64 = row.get(5)?;
-                    Ok((sender, ts_str, body, is_system, status_i32, timestamp_ms))
+                    let is_edited: bool = row.get::<_, i32>(6)? != 0;
+                    let is_deleted: bool = row.get::<_, i32>(7)? != 0;
+                    let quote_author: Option<String> = row.get(8)?;
+                    let quote_body: Option<String> = row.get(9)?;
+                    let quote_ts_ms: Option<i64> = row.get(10)?;
+                    let sender_id: String = row.get(11)?;
+                    Ok((sender, ts_str, body, is_system, status_i32, timestamp_ms, is_edited, is_deleted, quote_author, quote_body, quote_ts_ms, sender_id))
                 })?
                 .filter_map(|r| r.ok())
-                .filter_map(|(sender, ts_str, body, is_system, status_i32, timestamp_ms)| {
+                .filter_map(|(sender, ts_str, body, is_system, status_i32, timestamp_ms, is_edited, is_deleted, quote_author, quote_body, quote_ts_ms, sender_id)| {
                     let timestamp = chrono::DateTime::parse_from_rfc3339(&ts_str)
                         .ok()?
                         .with_timezone(&chrono::Utc);
+                    let quote = match (quote_author, quote_body, quote_ts_ms) {
+                        (Some(author), Some(body), Some(ts)) => Some(crate::app::Quote { author, body, timestamp_ms: ts }),
+                        _ => None,
+                    };
                     Some(DisplayMessage {
                         sender,
                         timestamp,
@@ -197,6 +223,10 @@ impl Database {
                         timestamp_ms,
                         reactions: Vec::new(),
                         mention_ranges: Vec::new(),
+                        quote,
+                        is_edited,
+                        is_deleted,
+                        sender_id,
                     })
                 })
                 .collect();
@@ -259,7 +289,7 @@ impl Database {
 
     // --- Messages ---
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, dead_code)]
     pub fn insert_message(
         &self,
         conv_id: &str,
@@ -270,11 +300,29 @@ impl Database {
         status: Option<MessageStatus>,
         timestamp_ms: i64,
     ) -> Result<i64> {
+        self.insert_message_full(conv_id, sender, timestamp, body, is_system, status, timestamp_ms, "", None, None, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_message_full(
+        &self,
+        conv_id: &str,
+        sender: &str,
+        timestamp: &str,
+        body: &str,
+        is_system: bool,
+        status: Option<MessageStatus>,
+        timestamp_ms: i64,
+        sender_id: &str,
+        quote_author: Option<&str>,
+        quote_body: Option<&str>,
+        quote_ts_ms: Option<i64>,
+    ) -> Result<i64> {
         let status_i32 = status.map(|s| s.to_i32()).unwrap_or(0);
         self.conn.execute(
-            "INSERT INTO messages (conversation_id, sender, timestamp, body, is_system, status, timestamp_ms)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![conv_id, sender, timestamp, body, is_system as i32, status_i32, timestamp_ms],
+            "INSERT INTO messages (conversation_id, sender, timestamp, body, is_system, status, timestamp_ms, sender_id, quote_author, quote_body, quote_ts_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![conv_id, sender, timestamp, body, is_system as i32, status_i32, timestamp_ms, sender_id, quote_author, quote_body, quote_ts_ms],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -403,6 +451,26 @@ impl Database {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    /// Update the body and mark a message as edited.
+    pub fn update_message_body(&self, conv_id: &str, timestamp_ms: i64, body: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE messages SET body = ?3, is_edited = 1
+             WHERE conversation_id = ?1 AND timestamp_ms = ?2",
+            params![conv_id, timestamp_ms, body],
+        )?;
+        Ok(())
+    }
+
+    /// Mark a message as locally deleted.
+    pub fn mark_message_deleted(&self, conv_id: &str, timestamp_ms: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE messages SET is_deleted = 1, body = '[deleted]'
+             WHERE conversation_id = ?1 AND timestamp_ms = ?2",
+            params![conv_id, timestamp_ms],
+        )?;
+        Ok(())
     }
 
     // --- Muted conversations ---

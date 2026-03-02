@@ -77,6 +77,25 @@ pub enum SignalEvent {
         target_timestamp: i64,
         is_remove: bool,
     },
+    EditReceived {
+        conv_id: String,
+        #[allow(dead_code)]
+        sender: String,
+        #[allow(dead_code)]
+        sender_name: Option<String>,
+        target_timestamp: i64,
+        new_body: String,
+        #[allow(dead_code)]
+        new_timestamp: i64,
+        #[allow(dead_code)]
+        is_outgoing: bool,
+    },
+    RemoteDeleteReceived {
+        conv_id: String,
+        #[allow(dead_code)]
+        sender: String,
+        target_timestamp: i64,
+    },
     ContactList(Vec<Contact>),
     GroupList(Vec<Group>),
     Error(String),
@@ -97,6 +116,8 @@ pub struct SignalMessage {
     pub destination: Option<String>,
     /// Body range mentions from signal-cli (for resolving U+FFFC placeholders)
     pub mentions: Vec<Mention>,
+    /// Quoted reply context: (timestamp_ms, author_phone, body)
+    pub quote: Option<(i64, String, String)>,
 }
 
 /// An attachment on a message

@@ -397,6 +397,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_reaction_picker(frame, app, size);
     }
 
+    // Delete confirmation overlay
+    if app.show_delete_confirm {
+        draw_delete_confirm(frame, app, size);
+    }
+
     // Collect link regions from the rendered buffer for OSC 8 injection
     let area = frame.area();
     app.link_regions = collect_link_regions(frame.buffer_mut(), area);
@@ -613,6 +618,25 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             )));
             line_msg_idx.push(Some(msg_index));
         } else {
+            // Render quoted reply line above message
+            if let Some(ref quote) = msg.quote {
+                let quote_body = truncate(&quote.body, 50);
+                lines.push(Line::from(vec![
+                    Span::styled("  \u{2502} ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("<{}>", quote.author),
+                        Style::default()
+                            .fg(sender_color(&quote.author))
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!(" {quote_body}"),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]));
+                line_msg_idx.push(Some(msg_index));
+            }
+
             let time = msg.format_time();
             let mut spans = Vec::new();
 
@@ -638,37 +662,55 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             ));
 
-            // Style URIs and @mentions
-            let (body_spans, hidden_url) = styled_uri_spans(&msg.body, &msg.mention_ranges);
-            if let Some(url) = hidden_url {
-                // Collect display text for link_url_map lookup
-                let display_text: String = body_spans.iter().map(|s| s.content.as_ref()).collect();
-                app.link_url_map.insert(display_text, url);
+            // "(edited)" label
+            if msg.is_edited {
+                spans.push(Span::styled(
+                    " (edited)",
+                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                ));
             }
-            spans.push(Span::raw(" ".to_string()));
-            spans.extend(body_spans);
+
+            if msg.is_deleted {
+                // Deleted message body
+                spans.push(Span::styled(
+                    " [deleted]",
+                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                ));
+            } else {
+                // Style URIs and @mentions
+                let (body_spans, hidden_url) = styled_uri_spans(&msg.body, &msg.mention_ranges);
+                if let Some(url) = hidden_url {
+                    // Collect display text for link_url_map lookup
+                    let display_text: String = body_spans.iter().map(|s| s.content.as_ref()).collect();
+                    app.link_url_map.insert(display_text, url);
+                }
+                spans.push(Span::raw(" ".to_string()));
+                spans.extend(body_spans);
+            }
 
             lines.push(Line::from(spans));
             line_msg_idx.push(Some(msg_index));
 
-            // Render inline image preview if available
-            if let Some(ref image_lines) = msg.image_lines {
-                let first_idx = lines.len();
-                let count = image_lines.len();
-                for line in image_lines {
-                    lines.push(line.clone());
-                    line_msg_idx.push(Some(msg_index));
-                }
-                // Record for native protocol overlay
-                if use_native {
-                    if let Some(ref path) = msg.image_path {
-                        image_records.push((first_idx, count, path.clone()));
+            // Render inline image preview if available (skip for deleted)
+            if !msg.is_deleted {
+                if let Some(ref image_lines) = msg.image_lines {
+                    let first_idx = lines.len();
+                    let count = image_lines.len();
+                    for line in image_lines {
+                        lines.push(line.clone());
+                        line_msg_idx.push(Some(msg_index));
+                    }
+                    // Record for native protocol overlay
+                    if use_native {
+                        if let Some(ref path) = msg.image_path {
+                            image_records.push((first_idx, count, path.clone()));
+                        }
                     }
                 }
             }
 
-            // Render reaction summary line
-            if !msg.reactions.is_empty() {
+            // Render reaction summary line (skip for deleted)
+            if !msg.is_deleted && !msg.reactions.is_empty() {
                 lines.push(build_reaction_summary(&msg.reactions, app.reaction_verbose));
                 line_msg_idx.push(Some(msg_index));
             }
@@ -914,6 +956,31 @@ fn draw_reaction_picker(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(popup, popup_area);
 }
 
+fn draw_delete_confirm(frame: &mut Frame, app: &App, area: Rect) {
+    let msg = app.selected_message();
+    let is_outgoing = msg.is_some_and(|m| m.sender == "you");
+
+    let (popup_area, block) = centered_popup(
+        frame, area, 44, 5, " Delete Message ",
+    );
+
+    let prompt = if is_outgoing {
+        "Delete for everyone? (y)es / (l)ocal / (n)o"
+    } else {
+        "Delete locally? (y)es / (n)o"
+    };
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  {prompt}"),
+            Style::default().fg(Color::White),
+        )),
+    ];
+    let popup = Paragraph::new(lines).block(block);
+    frame.render_widget(popup, popup_area);
+}
+
 /// Render the welcome/empty-state screen when no conversation is active.
 fn draw_welcome(frame: &mut Frame, app: &App, area: Rect) {
     let mut lines = vec![Line::from("")];
@@ -1015,10 +1082,24 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
         InputMode::Normal => Color::Yellow,
     };
 
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border_color));
+
+    // Show reply/edit indicator as block title
+    if let Some((_, ref snippet, _)) = app.reply_target {
+        let label = format!(" replying: {}… ", truncate(snippet, 30));
+        block = block.title(Line::from(Span::styled(
+            label,
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+        )));
+    } else if app.editing_message.is_some() {
+        block = block.title(Line::from(Span::styled(
+            " editing… ",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::ITALIC),
+        )));
+    }
 
     // Build attachment badge if present
     let badge = app.pending_attachment.as_ref().map(|path| {
