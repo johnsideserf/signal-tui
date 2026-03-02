@@ -2,7 +2,7 @@ use chrono::{DateTime, Local, Utc};
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::text::Line;
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::db::Database;
@@ -205,6 +205,22 @@ pub struct App {
     pub pending_mentions: Vec<(String, Option<String>)>,
     /// Demo mode — prevents config writes
     pub is_demo: bool,
+    /// File browser overlay visible
+    pub show_file_browser: bool,
+    /// Current directory in file browser
+    pub file_browser_dir: PathBuf,
+    /// Directory entries: (name, is_dir, size_bytes)
+    pub file_browser_entries: Vec<(String, bool, u64)>,
+    /// Cursor position in file browser
+    pub file_browser_index: usize,
+    /// Type-to-filter text for file browser
+    pub file_browser_filter: String,
+    /// Filtered indices into file_browser_entries
+    pub file_browser_filtered: Vec<usize>,
+    /// Error message from directory read
+    pub file_browser_error: Option<String>,
+    /// File selected for sending as attachment
+    pub pending_attachment: Option<PathBuf>,
 }
 
 pub const QUICK_REACTIONS: &[&str] = &["\u{1f44d}", "\u{1f44e}", "\u{2764}\u{fe0f}", "\u{1f602}", "\u{1f62e}", "\u{1f622}", "\u{1f64f}", "\u{1f525}"];
@@ -217,6 +233,7 @@ pub enum SendRequest {
         is_group: bool,
         local_ts_ms: i64,
         mentions: Vec<(usize, String)>,
+        attachment: Option<PathBuf>,
     },
     Reaction {
         conv_id: String,
@@ -532,6 +549,133 @@ impl App {
         }
     }
 
+    /// Open the file browser overlay (validates active conversation first).
+    pub fn open_file_browser(&mut self) {
+        if self.active_conversation.is_none() {
+            self.status_message = "No active conversation. Use /join <name> first.".to_string();
+            return;
+        }
+        self.show_file_browser = true;
+        self.file_browser_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        self.file_browser_index = 0;
+        self.file_browser_filter.clear();
+        self.file_browser_error = None;
+        self.refresh_file_browser_entries();
+    }
+
+    /// Read the current directory and populate file_browser_entries.
+    fn refresh_file_browser_entries(&mut self) {
+        self.file_browser_entries.clear();
+        self.file_browser_error = None;
+        match std::fs::read_dir(&self.file_browser_dir) {
+            Ok(entries) => {
+                let mut dirs: Vec<(String, bool, u64)> = Vec::new();
+                let mut files: Vec<(String, bool, u64)> = Vec::new();
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    let meta = entry.metadata();
+                    let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+                    let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+                    if is_dir {
+                        dirs.push((name, true, 0));
+                    } else {
+                        files.push((name, false, size));
+                    }
+                }
+                dirs.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+                files.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+                self.file_browser_entries.extend(dirs);
+                self.file_browser_entries.extend(files);
+            }
+            Err(e) => {
+                self.file_browser_error = Some(format!("Cannot read directory: {e}"));
+            }
+        }
+        self.refresh_file_browser_filter();
+    }
+
+    /// Rebuild the filtered index list based on current filter text.
+    fn refresh_file_browser_filter(&mut self) {
+        let filter_lower = self.file_browser_filter.to_lowercase();
+        self.file_browser_filtered = self
+            .file_browser_entries
+            .iter()
+            .enumerate()
+            .filter(|(_, (name, _, _))| {
+                filter_lower.is_empty() || name.to_lowercase().contains(&filter_lower)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if self.file_browser_filtered.is_empty() {
+            self.file_browser_index = 0;
+        } else if self.file_browser_index >= self.file_browser_filtered.len() {
+            self.file_browser_index = self.file_browser_filtered.len() - 1;
+        }
+    }
+
+    /// Handle a key press while the file browser overlay is open.
+    pub fn handle_file_browser_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                if !self.file_browser_filtered.is_empty()
+                    && self.file_browser_index < self.file_browser_filtered.len() - 1
+                {
+                    self.file_browser_index += 1;
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.file_browser_index = self.file_browser_index.saturating_sub(1);
+            }
+            KeyCode::Enter => {
+                if let Some(&entry_idx) = self.file_browser_filtered.get(self.file_browser_index) {
+                    let (name, is_dir, _) = self.file_browser_entries[entry_idx].clone();
+                    if is_dir {
+                        self.file_browser_dir = self.file_browser_dir.join(&name);
+                        self.file_browser_index = 0;
+                        self.file_browser_filter.clear();
+                        self.refresh_file_browser_entries();
+                    } else {
+                        let path = self.file_browser_dir.join(&name);
+                        self.pending_attachment = Some(path);
+                        self.show_file_browser = false;
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                if !self.file_browser_filter.is_empty() {
+                    self.file_browser_filter.pop();
+                    self.refresh_file_browser_filter();
+                } else {
+                    self.file_browser_navigate_up();
+                }
+            }
+            KeyCode::Char('-') => {
+                self.file_browser_navigate_up();
+            }
+            KeyCode::Esc => {
+                self.show_file_browser = false;
+            }
+            KeyCode::Char(c) => {
+                self.file_browser_filter.push(c);
+                self.refresh_file_browser_filter();
+            }
+            _ => {}
+        }
+    }
+
+    /// Navigate to the parent directory in the file browser.
+    fn file_browser_navigate_up(&mut self) {
+        if let Some(parent) = self.file_browser_dir.parent() {
+            let parent = parent.to_path_buf();
+            if parent != self.file_browser_dir {
+                self.file_browser_dir = parent;
+                self.file_browser_index = 0;
+                self.file_browser_filter.clear();
+                self.refresh_file_browser_entries();
+            }
+        }
+    }
+
     /// Handle a key press while the autocomplete popup is visible.
     /// Returns `Some(SendRequest)` when the user submits a command
     /// that requires sending a message. Returns `None` otherwise.
@@ -645,6 +789,14 @@ impl App {
             mention_trigger_pos: 0,
             pending_mentions: Vec::new(),
             is_demo: false,
+            show_file_browser: false,
+            file_browser_dir: dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")),
+            file_browser_entries: Vec::new(),
+            file_browser_index: 0,
+            file_browser_filter: String::new(),
+            file_browser_filtered: Vec::new(),
+            file_browser_error: None,
+            pending_attachment: None,
         }
     }
 
@@ -772,6 +924,10 @@ impl App {
     /// command triggers a message send. Returns `None` otherwise.
     /// Returns `Ok(true)` if the key was consumed by an overlay.
     pub fn handle_overlay_key(&mut self, code: KeyCode) -> (bool, Option<SendRequest>) {
+        if self.show_file_browser {
+            self.handle_file_browser_key(code);
+            return (true, None);
+        }
         if self.show_reaction_picker {
             let send = self.handle_reaction_picker_key(code);
             return (true, send);
@@ -1567,10 +1723,11 @@ impl App {
         let action = input::parse_input(&input);
         match action {
             InputAction::SendText(text) => {
-                if text.is_empty() {
+                if text.is_empty() && self.pending_attachment.is_none() {
                     return None;
                 }
                 if let Some(ref conv_id) = self.active_conversation {
+                    let attachment = self.pending_attachment.take();
                     let is_group = self
                         .conversations
                         .get(conv_id)
@@ -1578,11 +1735,25 @@ impl App {
                         .unwrap_or(false);
                     let conv_id = conv_id.clone();
 
+                    // Build display body with attachment prefix
+                    let display_body = if let Some(ref path) = attachment {
+                        let fname = path.file_name()
+                            .map(|f| f.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "file".to_string());
+                        if text.is_empty() {
+                            format!("[attachment: {fname}]")
+                        } else {
+                            format!("[attachment: {fname}] {text}")
+                        }
+                    } else {
+                        text.clone()
+                    };
+
                     // Compute mention byte ranges for display styling
                     let mut mention_ranges = Vec::new();
                     for (name, _uuid) in &self.pending_mentions {
                         let needle = format!("@{name}");
-                        if let Some(pos) = text.find(&needle) {
+                        if let Some(pos) = display_body.find(&needle) {
                             mention_ranges.push((pos, pos + needle.len()));
                         }
                     }
@@ -1591,14 +1762,14 @@ impl App {
                     let (wire_body, wire_mentions) = self.prepare_outgoing_mentions(&text);
                     self.pending_mentions.clear();
 
-                    // Add our own message to the display (human-readable @Name)
+                    // Add our own message to the display
                     let now = Utc::now();
                     let local_ts_ms = now.timestamp_millis();
                     if let Some(conv) = self.conversations.get_mut(&conv_id) {
                         conv.messages.push(DisplayMessage {
                             sender: "you".to_string(),
                             timestamp: now,
-                            body: text.clone(),
+                            body: display_body.clone(),
                             is_system: false,
                             image_lines: None,
                             image_path: None,
@@ -1612,7 +1783,7 @@ impl App {
                         &conv_id,
                         "you",
                         &now.to_rfc3339(),
-                        &text,
+                        &display_body,
                         false,
                         Some(MessageStatus::Sending),
                         local_ts_ms,
@@ -1625,6 +1796,7 @@ impl App {
                         is_group,
                         local_ts_ms,
                         mentions: wire_mentions,
+                        attachment,
                     });
                 } else {
                     self.status_message =
@@ -1638,6 +1810,7 @@ impl App {
                 self.active_conversation = None;
                 self.scroll_offset = 0;
                 self.focused_msg_index = None;
+                self.pending_attachment = None;
                 self.update_status();
             }
             InputAction::Quit => {
@@ -1693,6 +1866,9 @@ impl App {
             InputAction::Settings => {
                 self.show_settings = true;
                 self.settings_index = 0;
+            }
+            InputAction::Attach => {
+                self.open_file_browser();
             }
             InputAction::Contacts => {
                 self.show_contacts = true;
@@ -1867,6 +2043,8 @@ impl App {
                 if self.input_cursor > 0 {
                     self.input_cursor -= 1;
                     self.input_buffer.remove(self.input_cursor);
+                } else if self.pending_attachment.is_some() {
+                    self.pending_attachment = None;
                 }
                 true
             }
@@ -1950,6 +2128,7 @@ impl App {
 
     fn join_conversation(&mut self, target: &str) {
         self.mark_read();
+        self.pending_attachment = None;
 
         // Try exact match first
         if self.conversations.contains_key(target) {
@@ -1999,6 +2178,7 @@ impl App {
             return;
         }
         self.mark_read();
+        self.pending_attachment = None;
         let idx = self
             .active_conversation
             .as_ref()
@@ -2020,6 +2200,7 @@ impl App {
             return;
         }
         self.mark_read();
+        self.pending_attachment = None;
         let len = self.conversation_order.len();
         let idx = self
             .active_conversation
@@ -3298,5 +3479,65 @@ mod tests {
         let conv = &app.conversations["+1"];
         assert_eq!(conv.messages[0].body, "@Bob check this");
         assert_eq!(conv.messages[0].mention_ranges.len(), 1);
+    }
+
+    #[test]
+    fn backspace_at_zero_clears_pending_attachment() {
+        let mut app = test_app();
+        app.pending_attachment = Some(std::path::PathBuf::from("/tmp/photo.jpg"));
+        app.input_cursor = 0;
+        app.input_buffer.clear();
+
+        app.apply_input_edit(KeyCode::Backspace);
+        assert!(app.pending_attachment.is_none());
+    }
+
+    #[test]
+    fn empty_text_with_attachment_sends() {
+        let mut app = test_app();
+        app.get_or_create_conversation("+1", "Alice", false);
+        app.active_conversation = Some("+1".to_string());
+        app.pending_attachment = Some(std::path::PathBuf::from("/tmp/photo.jpg"));
+        app.input_buffer.clear();
+        app.input_cursor = 0;
+
+        let result = app.handle_input();
+        assert!(result.is_some());
+        // Attachment should be consumed
+        assert!(app.pending_attachment.is_none());
+    }
+
+    #[test]
+    fn attach_no_conversation_shows_error() {
+        let mut app = test_app();
+        app.active_conversation = None;
+        app.open_file_browser();
+        assert!(!app.show_file_browser);
+        assert!(app.status_message.contains("No active conversation"));
+    }
+
+    #[test]
+    fn next_conversation_clears_attachment() {
+        let mut app = test_app();
+        app.get_or_create_conversation("+1", "Alice", false);
+        app.get_or_create_conversation("+2", "Bob", false);
+        app.active_conversation = Some("+1".to_string());
+        app.pending_attachment = Some(std::path::PathBuf::from("/tmp/photo.jpg"));
+
+        app.next_conversation();
+        assert!(app.pending_attachment.is_none());
+    }
+
+    #[test]
+    fn part_clears_attachment() {
+        let mut app = test_app();
+        app.get_or_create_conversation("+1", "Alice", false);
+        app.active_conversation = Some("+1".to_string());
+        app.pending_attachment = Some(std::path::PathBuf::from("/tmp/photo.jpg"));
+        app.input_buffer = "/part".to_string();
+        app.input_cursor = 5;
+
+        app.handle_input();
+        assert!(app.pending_attachment.is_none());
     }
 }
