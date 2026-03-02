@@ -312,6 +312,31 @@ async fn show_error_screen(
     }
 }
 
+/// Convert a ratatui Color to a crossterm Color for direct terminal output.
+fn ratatui_color_to_crossterm(c: Color) -> crossterm::style::Color {
+    match c {
+        Color::Reset => crossterm::style::Color::Reset,
+        Color::Black => crossterm::style::Color::Black,
+        Color::Red => crossterm::style::Color::DarkRed,
+        Color::Green => crossterm::style::Color::DarkGreen,
+        Color::Yellow => crossterm::style::Color::DarkYellow,
+        Color::Blue => crossterm::style::Color::DarkBlue,
+        Color::Magenta => crossterm::style::Color::DarkMagenta,
+        Color::Cyan => crossterm::style::Color::DarkCyan,
+        Color::Gray => crossterm::style::Color::Grey,
+        Color::DarkGray => crossterm::style::Color::DarkGrey,
+        Color::LightRed => crossterm::style::Color::Red,
+        Color::LightGreen => crossterm::style::Color::Green,
+        Color::LightYellow => crossterm::style::Color::Yellow,
+        Color::LightBlue => crossterm::style::Color::Blue,
+        Color::LightMagenta => crossterm::style::Color::Magenta,
+        Color::LightCyan => crossterm::style::Color::Cyan,
+        Color::White => crossterm::style::Color::White,
+        Color::Rgb(r, g, b) => crossterm::style::Color::Rgb { r, g, b },
+        Color::Indexed(i) => crossterm::style::Color::AnsiValue(i),
+    }
+}
+
 /// Write OSC 8 terminal hyperlink escape sequences directly to the terminal
 /// for each detected link region, bypassing ratatui's buffer.
 fn emit_osc8_links(
@@ -321,6 +346,7 @@ fn emit_osc8_links(
     if links.is_empty() {
         return Ok(());
     }
+    use crossterm::style::SetBackgroundColor;
     use std::io::Write;
     queue!(backend, SavePosition)?;
     for link in links {
@@ -329,6 +355,11 @@ fn emit_osc8_links(
             backend,
             SetForegroundColor(crossterm::style::Color::Blue)
         )?;
+        if let Some(bg) = link.bg {
+            // Preserve the background color (e.g. highlight) that ratatui rendered.
+            let ct_bg = ratatui_color_to_crossterm(bg);
+            queue!(backend, SetBackgroundColor(ct_bg))?;
+        }
         queue!(
             backend,
             Print(format!(
