@@ -37,6 +37,7 @@ pub enum InputMode {
 pub enum AutocompleteMode {
     Command,
     Mention,
+    Join,
 }
 
 /// Quoted reply context attached to a message.
@@ -216,6 +217,8 @@ pub struct App {
     pub autocomplete_mode: AutocompleteMode,
     /// Mention autocomplete candidates: (phone, display_name, uuid)
     pub mention_candidates: Vec<(String, String, Option<String>)>,
+    /// Join autocomplete candidates: (display_text, completion_value)
+    pub join_candidates: Vec<(String, String)>,
     /// Byte offset of the '@' trigger in input_buffer
     pub mention_trigger_pos: usize,
     /// Completed mentions for the current input: (display_name, uuid)
@@ -900,6 +903,7 @@ impl App {
         let list_len = match self.autocomplete_mode {
             AutocompleteMode::Command => self.autocomplete_candidates.len(),
             AutocompleteMode::Mention => self.mention_candidates.len(),
+            AutocompleteMode::Join => self.join_candidates.len(),
         };
         match code {
             KeyCode::Up => {
@@ -923,6 +927,7 @@ impl App {
                 self.autocomplete_visible = false;
                 self.autocomplete_candidates.clear();
                 self.mention_candidates.clear();
+                self.join_candidates.clear();
                 self.autocomplete_index = 0;
             }
             KeyCode::Enter => {
@@ -930,6 +935,7 @@ impl App {
                     self.apply_autocomplete();
                     // Don't submit on Enter for mentions — just complete
                 } else {
+                    // Command and Join: apply + submit
                     self.apply_autocomplete();
                     return self.handle_input();
                 }
@@ -1003,6 +1009,7 @@ impl App {
             number_to_uuid: HashMap::new(),
             autocomplete_mode: AutocompleteMode::Command,
             mention_candidates: Vec::new(),
+            join_candidates: Vec::new(),
             mention_trigger_pos: 0,
             pending_mentions: Vec::new(),
             is_demo: false,
@@ -2407,6 +2414,78 @@ impl App {
             }
         }
 
+        // Try /join autocomplete: starts with "/join " or "/j "
+        let join_prefix = if buf.starts_with("/join ") {
+            Some("/join ".len())
+        } else if buf.starts_with("/j ") {
+            Some("/j ".len())
+        } else {
+            None
+        };
+        if let Some(prefix_len) = join_prefix {
+            let filter_lower = buf[prefix_len..].to_lowercase();
+            let mut candidates: Vec<(String, String)> = Vec::new();
+
+            // Collect contacts from contact_names
+            for (phone, name) in &self.contact_names {
+                // Skip group IDs (they don't start with '+')
+                if !phone.starts_with('+') {
+                    continue;
+                }
+                let display = format!("{name} ({phone})");
+                if filter_lower.is_empty()
+                    || name.to_lowercase().contains(&filter_lower)
+                    || phone.contains(&filter_lower)
+                {
+                    candidates.push((display, phone.clone()));
+                }
+            }
+
+            // Collect groups
+            for group in self.groups.values() {
+                let display = format!("#{}", group.name);
+                if filter_lower.is_empty()
+                    || group.name.to_lowercase().contains(&filter_lower)
+                {
+                    candidates.push((display, group.id.clone()));
+                }
+            }
+
+            // Also include existing conversations not yet covered
+            for conv_id in &self.conversation_order {
+                if let Some(conv) = self.conversations.get(conv_id) {
+                    let already_listed = candidates.iter().any(|(_, val)| {
+                        val == conv_id
+                    });
+                    if !already_listed {
+                        let display = if conv.is_group {
+                            format!("#{}", conv.name)
+                        } else {
+                            format!("{} ({})", conv.name, conv_id)
+                        };
+                        if filter_lower.is_empty()
+                            || conv.name.to_lowercase().contains(&filter_lower)
+                            || conv_id.to_lowercase().contains(&filter_lower)
+                        {
+                            candidates.push((display, conv_id.clone()));
+                        }
+                    }
+                }
+            }
+
+            candidates.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+
+            if !candidates.is_empty() {
+                self.autocomplete_visible = true;
+                self.autocomplete_mode = AutocompleteMode::Join;
+                self.join_candidates = candidates;
+                if self.autocomplete_index >= self.join_candidates.len() {
+                    self.autocomplete_index = 0;
+                }
+                return;
+            }
+        }
+
         // Try @mention autocomplete
         if let Some(ref conv_id) = self.active_conversation {
             if let Some(conv) = self.conversations.get(conv_id) {
@@ -2468,6 +2547,7 @@ impl App {
         self.autocomplete_visible = false;
         self.autocomplete_candidates.clear();
         self.mention_candidates.clear();
+        self.join_candidates.clear();
         self.autocomplete_index = 0;
     }
 
@@ -2613,6 +2693,17 @@ impl App {
                     self.pending_mentions.push((name, uuid));
                     self.autocomplete_visible = false;
                     self.mention_candidates.clear();
+                    self.autocomplete_index = 0;
+                }
+            }
+            AutocompleteMode::Join => {
+                if let Some((_display, value)) =
+                    self.join_candidates.get(self.autocomplete_index).cloned()
+                {
+                    self.input_buffer = format!("/join {value}");
+                    self.input_cursor = self.input_buffer.len();
+                    self.autocomplete_visible = false;
+                    self.join_candidates.clear();
                     self.autocomplete_index = 0;
                 }
             }
@@ -3140,6 +3231,149 @@ mod tests {
         app.autocomplete_index = len + 5; // way out of bounds
         app.update_autocomplete(); // should clamp
         assert!(app.autocomplete_index < app.autocomplete_candidates.len());
+    }
+
+    // --- Join autocomplete tests ---
+
+    #[test]
+    fn join_autocomplete_shows_contacts() {
+        let mut app = test_app();
+        app.contact_names.insert("+1".to_string(), "Alice".to_string());
+        app.contact_names.insert("+2".to_string(), "Bob".to_string());
+        app.input_buffer = "/join ".to_string();
+        app.update_autocomplete();
+        assert!(app.autocomplete_visible);
+        assert_eq!(app.autocomplete_mode, AutocompleteMode::Join);
+        assert_eq!(app.join_candidates.len(), 2);
+    }
+
+    #[test]
+    fn join_autocomplete_shows_groups() {
+        let mut app = test_app();
+        app.groups.insert("g1".to_string(), Group {
+            id: "g1".to_string(),
+            name: "Family".to_string(),
+            members: vec![],
+            member_uuids: vec![],
+        });
+        app.input_buffer = "/join ".to_string();
+        app.update_autocomplete();
+        assert!(app.autocomplete_visible);
+        assert_eq!(app.autocomplete_mode, AutocompleteMode::Join);
+        assert_eq!(app.join_candidates.len(), 1);
+        assert!(app.join_candidates[0].0.starts_with('#'));
+    }
+
+    #[test]
+    fn join_autocomplete_filters_by_name() {
+        let mut app = test_app();
+        app.contact_names.insert("+1".to_string(), "Alice".to_string());
+        app.contact_names.insert("+2".to_string(), "Bob".to_string());
+        app.input_buffer = "/join al".to_string();
+        app.update_autocomplete();
+        assert!(app.autocomplete_visible);
+        assert_eq!(app.join_candidates.len(), 1);
+        assert!(app.join_candidates[0].0.contains("Alice"));
+    }
+
+    #[test]
+    fn join_autocomplete_filters_by_phone() {
+        let mut app = test_app();
+        app.contact_names.insert("+1234".to_string(), "Alice".to_string());
+        app.contact_names.insert("+5678".to_string(), "Bob".to_string());
+        app.input_buffer = "/join +123".to_string();
+        app.update_autocomplete();
+        assert!(app.autocomplete_visible);
+        assert_eq!(app.join_candidates.len(), 1);
+        assert!(app.join_candidates[0].1 == "+1234");
+    }
+
+    #[test]
+    fn join_autocomplete_alias() {
+        let mut app = test_app();
+        app.contact_names.insert("+1".to_string(), "Alice".to_string());
+        app.input_buffer = "/j ".to_string();
+        app.update_autocomplete();
+        assert!(app.autocomplete_visible);
+        assert_eq!(app.autocomplete_mode, AutocompleteMode::Join);
+        assert_eq!(app.join_candidates.len(), 1);
+    }
+
+    #[test]
+    fn join_autocomplete_no_match_hides() {
+        let mut app = test_app();
+        app.contact_names.insert("+1".to_string(), "Alice".to_string());
+        app.input_buffer = "/join zzz".to_string();
+        app.update_autocomplete();
+        assert!(!app.autocomplete_visible);
+    }
+
+    #[test]
+    fn apply_join_autocomplete() {
+        let mut app = test_app();
+        app.contact_names.insert("+1".to_string(), "Alice".to_string());
+        app.input_buffer = "/join al".to_string();
+        app.update_autocomplete();
+        assert!(app.autocomplete_visible);
+        app.apply_autocomplete();
+        assert_eq!(app.input_buffer, "/join +1");
+        assert_eq!(app.input_cursor, 8);
+        assert!(!app.autocomplete_visible);
+    }
+
+    #[test]
+    fn apply_join_autocomplete_group() {
+        let mut app = test_app();
+        app.groups.insert("g1".to_string(), Group {
+            id: "g1".to_string(),
+            name: "Family".to_string(),
+            members: vec![],
+            member_uuids: vec![],
+        });
+        app.input_buffer = "/join fam".to_string();
+        app.update_autocomplete();
+        assert!(app.autocomplete_visible);
+        app.apply_autocomplete();
+        assert_eq!(app.input_buffer, "/join g1");
+        assert_eq!(app.input_cursor, 8);
+    }
+
+    #[test]
+    fn join_autocomplete_includes_conversations() {
+        let mut app = test_app();
+        // Create a conversation that isn't in contact_names
+        app.get_or_create_conversation("+9999", "+9999", false);
+        app.input_buffer = "/join +999".to_string();
+        app.update_autocomplete();
+        assert!(app.autocomplete_visible);
+        assert_eq!(app.join_candidates.len(), 1);
+    }
+
+    #[test]
+    fn join_autocomplete_skips_group_ids_in_contacts() {
+        let mut app = test_app();
+        // group IDs in contact_names don't start with '+'
+        app.contact_names.insert("g1".to_string(), "Family".to_string());
+        app.contact_names.insert("+1".to_string(), "Alice".to_string());
+        app.input_buffer = "/join ".to_string();
+        app.update_autocomplete();
+        assert!(app.autocomplete_visible);
+        // Only Alice should appear from contact_names (g1 is skipped as non-phone)
+        let contact_entries: Vec<_> = app.join_candidates.iter()
+            .filter(|(_, v)| v == "+1")
+            .collect();
+        assert_eq!(contact_entries.len(), 1);
+    }
+
+    #[test]
+    fn join_autocomplete_index_clamped() {
+        let mut app = test_app();
+        app.contact_names.insert("+1".to_string(), "Alice".to_string());
+        app.input_buffer = "/join ".to_string();
+        app.update_autocomplete();
+        app.autocomplete_index = 100; // way out of bounds
+        app.update_autocomplete(); // should clamp
+        assert!(app.autocomplete_index < app.join_candidates.len());
     }
 
     // --- apply_input_edit tests ---
