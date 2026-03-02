@@ -1862,6 +1862,9 @@ impl App {
             SignalEvent::SystemMessage { conv_id, body, timestamp, timestamp_ms } => {
                 self.handle_system_message(&conv_id, &body, timestamp, timestamp_ms);
             }
+            SignalEvent::ReadSyncReceived { read_messages } => {
+                self.handle_read_sync(read_messages);
+            }
             SignalEvent::ContactList(contacts) => self.handle_contact_list(contacts),
             SignalEvent::GroupList(groups) => self.handle_group_list(groups),
             SignalEvent::Error(ref err) => {
@@ -2256,6 +2259,73 @@ impl App {
             self.db.mark_message_deleted(conv_id, target_timestamp),
             "mark_message_deleted",
         );
+    }
+
+    fn handle_read_sync(&mut self, read_messages: Vec<(String, i64)>) {
+        // Group entries by conversation: for 1:1, the sender phone IS the conv_id.
+        // For groups, we need to scan existing conversations to find which group
+        // contains a message with that timestamp from that sender.
+        let mut max_ts_per_conv: HashMap<String, i64> = HashMap::new();
+
+        for (sender, timestamp) in &read_messages {
+            // First try direct match: sender is a 1:1 conversation
+            if self.conversations.contains_key(sender.as_str()) {
+                let entry = max_ts_per_conv.entry(sender.clone()).or_insert(0);
+                *entry = (*entry).max(*timestamp);
+                continue;
+            }
+            // Otherwise, scan group conversations for a message matching this timestamp
+            let mut found = false;
+            for (conv_id, conv) in &self.conversations {
+                if !conv.is_group {
+                    continue;
+                }
+                if conv.messages.iter().any(|m| m.timestamp_ms == *timestamp) {
+                    let entry = max_ts_per_conv.entry(conv_id.clone()).or_insert(0);
+                    *entry = (*entry).max(*timestamp);
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                crate::debug_log::logf(format_args!(
+                    "read_sync: no conversation found for sender={sender} ts={timestamp}"
+                ));
+            }
+        }
+
+        // For each conversation, advance the read marker
+        for (conv_id, max_ts) in &max_ts_per_conv {
+            let new_read_idx = if let Some(conv) = self.conversations.get(conv_id) {
+                // partition_point gives the index of the first message with ts > max_ts
+                conv.messages.partition_point(|m| m.timestamp_ms <= *max_ts)
+            } else {
+                continue;
+            };
+
+            // Only advance, never retreat
+            let current = self.last_read_index.get(conv_id).copied().unwrap_or(0);
+            if new_read_idx > current {
+                self.last_read_index.insert(conv_id.clone(), new_read_idx);
+
+                // Recompute unread from remaining messages after the read marker
+                if let Some(conv) = self.conversations.get_mut(conv_id) {
+                    let unread = conv.messages[new_read_idx..]
+                        .iter()
+                        .filter(|m| !m.is_system && m.status.is_none())
+                        .count();
+                    conv.unread = unread;
+                }
+
+                // Persist to DB
+                if let Ok(Some(rowid)) = self.db.max_rowid_up_to_timestamp(conv_id, *max_ts) {
+                    db_warn(
+                        self.db.save_read_marker(conv_id, rowid),
+                        "save_read_marker (read_sync)",
+                    );
+                }
+            }
+        }
     }
 
     fn handle_contact_list(&mut self, contacts: Vec<Contact>) {
@@ -5049,5 +5119,77 @@ mod tests {
         let read_idx = app.last_read_index["+15551234567"];
         assert_eq!(total, 2);
         assert_eq!(read_idx, total);
+    }
+
+    #[test]
+    fn read_sync_advances_read_marker_and_clears_unread() {
+        let mut app = test_app();
+
+        // Create a conversation with 3 messages (all incoming, unread)
+        let msg = |body: &str, ts_ms: i64| SignalMessage {
+            source: "+15551234567".to_string(),
+            source_name: Some("Alice".to_string()),
+            timestamp: DateTime::from_timestamp_millis(ts_ms).unwrap(),
+            body: Some(body.to_string()),
+            attachments: vec![],
+            group_id: None,
+            group_name: None,
+            is_outgoing: false,
+            destination: None,
+            mentions: vec![],
+            quote: None,
+        };
+        app.handle_signal_event(SignalEvent::MessageReceived(msg("one", 1000)));
+        app.handle_signal_event(SignalEvent::MessageReceived(msg("two", 2000)));
+        app.handle_signal_event(SignalEvent::MessageReceived(msg("three", 3000)));
+
+        assert_eq!(app.conversations["+15551234567"].unread, 3);
+        assert_eq!(app.last_read_index.get("+15551234567").copied().unwrap_or(0), 0);
+
+        // Simulate reading through timestamp 2000 on another device
+        app.handle_signal_event(SignalEvent::ReadSyncReceived {
+            read_messages: vec![("+15551234567".to_string(), 2000)],
+        });
+
+        // Read marker should advance to index 2 (after msg "one" and "two")
+        assert_eq!(app.last_read_index["+15551234567"], 2);
+        // Only "three" should remain unread
+        assert_eq!(app.conversations["+15551234567"].unread, 1);
+    }
+
+    #[test]
+    fn read_sync_does_not_retreat_read_marker() {
+        let mut app = test_app();
+
+        let msg = |body: &str, ts_ms: i64| SignalMessage {
+            source: "+15551234567".to_string(),
+            source_name: Some("Alice".to_string()),
+            timestamp: DateTime::from_timestamp_millis(ts_ms).unwrap(),
+            body: Some(body.to_string()),
+            attachments: vec![],
+            group_id: None,
+            group_name: None,
+            is_outgoing: false,
+            destination: None,
+            mentions: vec![],
+            quote: None,
+        };
+        app.handle_signal_event(SignalEvent::MessageReceived(msg("one", 1000)));
+        app.handle_signal_event(SignalEvent::MessageReceived(msg("two", 2000)));
+        app.handle_signal_event(SignalEvent::MessageReceived(msg("three", 3000)));
+
+        // First sync reads up to ts 3000 (all messages)
+        app.handle_signal_event(SignalEvent::ReadSyncReceived {
+            read_messages: vec![("+15551234567".to_string(), 3000)],
+        });
+        assert_eq!(app.last_read_index["+15551234567"], 3);
+        assert_eq!(app.conversations["+15551234567"].unread, 0);
+
+        // A stale sync for ts 1000 should NOT retreat the read marker
+        app.handle_signal_event(SignalEvent::ReadSyncReceived {
+            read_messages: vec![("+15551234567".to_string(), 1000)],
+        });
+        assert_eq!(app.last_read_index["+15551234567"], 3);
+        assert_eq!(app.conversations["+15551234567"].unread, 0);
     }
 }

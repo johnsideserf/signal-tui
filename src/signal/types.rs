@@ -102,6 +102,9 @@ pub enum SignalEvent {
         timestamp: DateTime<Utc>,
         timestamp_ms: i64,
     },
+    ReadSyncReceived {
+        read_messages: Vec<(String, i64)>,
+    },
     ContactList(Vec<Contact>),
     GroupList(Vec<Group>),
     Error(String),

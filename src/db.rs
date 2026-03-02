@@ -553,6 +553,17 @@ impl Database {
         Ok(rows)
     }
 
+    /// Find the max rowid for messages up to (and including) a given timestamp.
+    /// Uses the idx_messages_conv_ts_ms index for efficient lookup.
+    pub fn max_rowid_up_to_timestamp(&self, conv_id: &str, timestamp_ms: i64) -> Result<Option<i64>> {
+        let result = self.conn.query_row(
+            "SELECT MAX(rowid) FROM messages WHERE conversation_id = ?1 AND timestamp_ms <= ?2",
+            params![conv_id, timestamp_ms],
+            |row| row.get::<_, Option<i64>>(0),
+        )?;
+        Ok(result)
+    }
+
     // --- Muted conversations ---
 
     pub fn set_muted(&self, conv_id: &str, muted: bool) -> Result<()> {
@@ -692,6 +703,31 @@ mod tests {
         let r2 = db.insert_message("+1", "Alice", "2025-01-01T00:01:00Z", "msg2", false, None, 0).unwrap();
 
         assert_eq!(db.last_message_rowid("+1").unwrap(), Some(r2));
+    }
+
+    #[test]
+    fn max_rowid_up_to_timestamp() {
+        let db = test_db();
+        db.upsert_conversation("+1", "Alice", false).unwrap();
+
+        // No messages → None
+        assert_eq!(db.max_rowid_up_to_timestamp("+1", 5000).unwrap(), None);
+
+        let r1 = db.insert_message("+1", "Alice", "2025-01-01T00:00:00Z", "msg1", false, None, 1000).unwrap();
+        let r2 = db.insert_message("+1", "Alice", "2025-01-01T00:01:00Z", "msg2", false, None, 2000).unwrap();
+        let _r3 = db.insert_message("+1", "Alice", "2025-01-01T00:02:00Z", "msg3", false, None, 3000).unwrap();
+
+        // Timestamp before all messages → None
+        assert_eq!(db.max_rowid_up_to_timestamp("+1", 500).unwrap(), None);
+
+        // Timestamp matching first message
+        assert_eq!(db.max_rowid_up_to_timestamp("+1", 1000).unwrap(), Some(r1));
+
+        // Timestamp matching second message
+        assert_eq!(db.max_rowid_up_to_timestamp("+1", 2000).unwrap(), Some(r2));
+
+        // Timestamp between second and third
+        assert_eq!(db.max_rowid_up_to_timestamp("+1", 2500).unwrap(), Some(r2));
     }
 
     #[test]

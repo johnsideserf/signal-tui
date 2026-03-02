@@ -707,10 +707,32 @@ fn parse_receive_event(
             }
             return parse_sent_sync(envelope, sent, download_dir);
         }
+        if let Some(event) = parse_read_sync(sync) {
+            return Some(event);
+        }
         return None;
     }
 
     parse_data_message(envelope, download_dir)
+}
+
+fn parse_read_sync(sync: &serde_json::Value) -> Option<SignalEvent> {
+    let read_messages = sync.get("readMessages")?.as_array()?;
+    if read_messages.is_empty() {
+        return None;
+    }
+    let entries: Vec<(String, i64)> = read_messages
+        .iter()
+        .filter_map(|entry| {
+            let sender = entry.get("sender").and_then(|v| v.as_str())?.to_string();
+            let timestamp = entry.get("timestamp").and_then(|v| v.as_i64())?;
+            Some((sender, timestamp))
+        })
+        .collect();
+    if entries.is_empty() {
+        return None;
+    }
+    Some(SignalEvent::ReadSyncReceived { read_messages: entries })
 }
 
 fn parse_typing_indicator(envelope: &serde_json::Value) -> Option<SignalEvent> {
@@ -2106,5 +2128,59 @@ mod tests {
             }
             _ => panic!("Expected SystemMessage, got {:?}", event),
         }
+    }
+
+    #[test]
+    fn parse_read_sync_basic() {
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            result: None,
+            error: None,
+            method: Some("receive".to_string()),
+            params: Some(json!({
+                "envelope": {
+                    "sourceNumber": "+10000000000",
+                    "timestamp": 1700000000000_i64,
+                    "syncMessage": {
+                        "readMessages": [
+                            {"sender": "+15551234567", "timestamp": 1700000000001_i64},
+                            {"sender": "+15559876543", "timestamp": 1700000000002_i64}
+                        ]
+                    }
+                }
+            })),
+        };
+        let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
+        match event {
+            SignalEvent::ReadSyncReceived { read_messages } => {
+                assert_eq!(read_messages.len(), 2);
+                assert_eq!(read_messages[0], ("+15551234567".to_string(), 1700000000001));
+                assert_eq!(read_messages[1], ("+15559876543".to_string(), 1700000000002));
+            }
+            _ => panic!("Expected ReadSyncReceived, got {:?}", event),
+        }
+    }
+
+    #[test]
+    fn parse_read_sync_empty_array_returns_none() {
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            result: None,
+            error: None,
+            method: Some("receive".to_string()),
+            params: Some(json!({
+                "envelope": {
+                    "sourceNumber": "+10000000000",
+                    "timestamp": 1700000000000_i64,
+                    "syncMessage": {
+                        "readMessages": []
+                    }
+                }
+            })),
+        };
+        let event = parse_signal_event(&resp, std::path::Path::new("/tmp"));
+        assert!(event.is_none());
     }
 }
