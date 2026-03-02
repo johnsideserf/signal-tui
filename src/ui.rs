@@ -18,7 +18,7 @@ use crate::input::COMMANDS;
 // Layout constants
 const SIDEBAR_AUTO_HIDE_WIDTH: u16 = 60;
 const MIN_CHAT_WIDTH: u16 = 30;
-const MSG_WINDOW_MULTIPLIER: usize = 3;
+const MSG_WINDOW_MULTIPLIER: usize = 10;
 
 // Popup dimensions
 const SETTINGS_POPUP_WIDTH: u16 = 42;
@@ -573,9 +573,11 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let available_height = inner.height as usize;
     let total = messages.len();
 
-    // Build lines from a generous window covering the viewport at the current scroll position.
-    // Always include messages up to `total`; scroll_offset controls the paragraph scroll instead.
-    let start = total.saturating_sub(available_height * MSG_WINDOW_MULTIPLIER + app.scroll_offset);
+    // Build lines from a fixed window of recent messages.
+    // scroll_offset is NOT included here — it controls the Paragraph scroll position instead.
+    // Including it would expand the window by 1 message per scroll increment, growing
+    // content_height and base_scroll in lockstep, keeping scroll_y constant (viewport stuck).
+    let start = total.saturating_sub(available_height * MSG_WINDOW_MULTIPLIER);
     let visible = &messages[start..total];
 
     // Get last_read_index for unread marker
@@ -776,7 +778,9 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut scroll_y = base_scroll - app.scroll_offset;
 
     // Determine the focused message for highlight and full-timestamp display in Normal mode.
-    if app.mode == InputMode::Normal && app.scroll_offset > 0 {
+    // Check focused_msg_index too so J/K navigation works even when content fits the viewport
+    // (base_scroll == 0 clamps scroll_offset to 0, but J/K focus should persist).
+    if app.mode == InputMode::Normal && (app.scroll_offset > 0 || app.focused_msg_index.is_some()) {
         if let Some(fi) = app.focused_msg_index {
             // J/K already set focused_msg_index — ensure it's visible by adjusting scroll.
             let iw = inner_width.max(1);
@@ -1477,10 +1481,10 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         ("/join <name>", "Switch to a conversation"),
         ("/part", "Leave current conversation"),
         ("/attach", "Attach a file"),
+        ("/search <query>", "Search messages"),
         ("/sidebar", "Toggle sidebar visibility"),
         ("/bell [type]", "Toggle notifications"),
         ("/mute", "Mute/unmute conversation"),
-        ("/search <query>", "Search messages"),
         ("/contacts", "Browse contacts"),
         ("/settings", "Open settings"),
         ("/quit", "Exit signal-tui"),
@@ -1511,6 +1515,9 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         ("x / D", "Delete char / to end"),
         ("y / Y", "Copy message / full line"),
         ("r", "React to focused message"),
+        ("q", "Reply / quote message"),
+        ("e", "Edit own message"),
+        ("d", "Delete message"),
         ("n / N", "Next / prev search match"),
         ("/", "Start command input"),
     ];
