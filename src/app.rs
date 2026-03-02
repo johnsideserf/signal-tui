@@ -133,6 +133,8 @@ pub struct App {
     pub last_read_index: HashMap<String, usize>,
     /// Whether we are connected to signal-cli
     pub connected: bool,
+    /// True until the first ContactList event arrives (initial sync in progress)
+    pub loading: bool,
     /// Current input mode (Normal or Insert)
     pub mode: InputMode,
     /// SQLite database for persistent storage
@@ -993,6 +995,7 @@ impl App {
             typing_indicators: HashMap::new(),
             last_read_index: HashMap::new(),
             connected: false,
+            loading: true,
             mode: InputMode::Insert,
             db,
             connection_error: None,
@@ -1983,6 +1986,7 @@ impl App {
     }
 
     fn handle_contact_list(&mut self, contacts: Vec<Contact>) {
+        self.loading = false;
         for contact in contacts {
             // Store name in lookup for future message resolution
             if let Some(ref name) = contact.name {
