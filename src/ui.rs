@@ -1023,12 +1023,16 @@ fn draw_welcome(frame: &mut Frame, app: &App, area: Rect) {
         )));
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "  Use /join +1234567890 to message someone",
+            "  /join +1234567890  message someone by phone number",
             Style::default().fg(Color::Gray),
         )));
         lines.push(Line::from(Span::styled(
-            "  Use /help for all commands",
-            Style::default().fg(Color::DarkGray),
+            "  /contacts          browse your synced contacts",
+            Style::default().fg(Color::Gray),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  /help              see all commands and keybindings",
+            Style::default().fg(Color::Gray),
         )));
     } else {
         lines.push(Line::from(Span::styled(
@@ -1037,16 +1041,41 @@ fn draw_welcome(frame: &mut Frame, app: &App, area: Rect) {
         )));
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "  Use /join <contact> to start a conversation",
+            "  Getting started",
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  Tab / Shift+Tab    cycle through conversations",
             Style::default().fg(Color::Gray),
         )));
         lines.push(Line::from(Span::styled(
-            "  Use /help for all commands",
+            "  /join <contact>    open a conversation by name or number",
+            Style::default().fg(Color::Gray),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  Esc                switch to Normal mode (vim keys)",
             Style::default().fg(Color::Gray),
         )));
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "  Ctrl+←/→ to resize sidebar",
+            "  Useful commands",
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  /contacts          browse synced contacts",
+            Style::default().fg(Color::Gray),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  /settings          configure preferences",
+            Style::default().fg(Color::Gray),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  /help              all commands and keybindings",
+            Style::default().fg(Color::Gray),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Ctrl+\u{2190}/\u{2192} to resize sidebar",
             Style::default().fg(Color::DarkGray),
         )));
     }
