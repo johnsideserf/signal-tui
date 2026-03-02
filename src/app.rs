@@ -1859,6 +1859,9 @@ impl App {
             } => {
                 self.handle_remote_delete(&conv_id, target_timestamp);
             }
+            SignalEvent::SystemMessage { conv_id, body, timestamp, timestamp_ms } => {
+                self.handle_system_message(&conv_id, &body, timestamp, timestamp_ms);
+            }
             SignalEvent::ContactList(contacts) => self.handle_contact_list(contacts),
             SignalEvent::GroupList(groups) => self.handle_group_list(groups),
             SignalEvent::Error(ref err) => {
@@ -2042,6 +2045,48 @@ impl App {
         if is_active && !msg.is_outgoing {
             self.queue_single_read_receipt(&sender_id, msg_ts_ms);
         }
+    }
+
+    fn handle_system_message(
+        &mut self,
+        conv_id: &str,
+        body: &str,
+        timestamp: DateTime<Utc>,
+        timestamp_ms: i64,
+    ) {
+        let is_group = self.conversations.get(conv_id).map(|c| c.is_group).unwrap_or(false);
+        let conv_name = self.contact_names.get(conv_id).cloned().unwrap_or_else(|| conv_id.to_string());
+        self.get_or_create_conversation(conv_id, &conv_name, is_group);
+        if let Some(conv) = self.conversations.get_mut(conv_id) {
+            let pos = conv.messages.partition_point(|m| m.timestamp_ms <= timestamp_ms);
+            conv.messages.insert(pos, DisplayMessage {
+                sender: String::new(),
+                timestamp,
+                body: body.to_string(),
+                is_system: true,
+                image_lines: None,
+                image_path: None,
+                status: None,
+                timestamp_ms,
+                reactions: Vec::new(),
+                mention_ranges: Vec::new(),
+                quote: None,
+                is_edited: false,
+                is_deleted: false,
+                sender_id: String::new(),
+            });
+            // Bump last_read_index if we inserted before the read marker
+            if let Some(read_idx) = self.last_read_index.get_mut(conv_id) {
+                if pos <= *read_idx {
+                    *read_idx += 1;
+                }
+            }
+        }
+        let ts_rfc3339 = timestamp.to_rfc3339();
+        db_warn(
+            self.db.insert_message(conv_id, "", &ts_rfc3339, body, true, None, timestamp_ms),
+            "insert_system_message",
+        );
     }
 
     fn handle_reaction(
@@ -4925,5 +4970,25 @@ mod tests {
         app.search_query = "world".to_string();
         app.run_search();
         assert_eq!(app.search_results.len(), 2);
+    }
+
+    #[test]
+    fn system_message_inserted_with_is_system_true() {
+        let mut app = test_app();
+        let ts = chrono::Utc::now();
+        let ts_ms = ts.timestamp_millis();
+        app.handle_signal_event(SignalEvent::SystemMessage {
+            conv_id: "+15551234567".to_string(),
+            body: "Missed voice call".to_string(),
+            timestamp: ts,
+            timestamp_ms: ts_ms,
+        });
+
+        assert!(app.conversations.contains_key("+15551234567"));
+        let conv = &app.conversations["+15551234567"];
+        assert_eq!(conv.messages.len(), 1);
+        assert!(conv.messages[0].is_system);
+        assert_eq!(conv.messages[0].body, "Missed voice call");
+        assert!(conv.messages[0].sender.is_empty());
     }
 }

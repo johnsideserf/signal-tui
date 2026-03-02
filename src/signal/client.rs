@@ -632,6 +632,28 @@ fn parse_receive_event(
         if msg.contains("SyncMessage missing destination") {
             return None; // Known signal-cli bug — silently ignore
         }
+        // Safety number change → system message instead of generic error
+        let exc_type = exc.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if exc_type == "UntrustedIdentityException" {
+            let envelope = params.get("envelope");
+            let conv_id = envelope
+                .and_then(|e| e.get("sourceNumber"))
+                .and_then(|v| v.as_str())
+                .or_else(|| exc.get("sender").and_then(|v| v.as_str()))
+                .unwrap_or("unknown")
+                .to_string();
+            let timestamp_ms = envelope
+                .and_then(|e| e.get("timestamp"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let timestamp = DateTime::from_timestamp_millis(timestamp_ms).unwrap_or_default();
+            return Some(SignalEvent::SystemMessage {
+                conv_id,
+                body: "\u{26A0} Safety number changed".to_string(),
+                timestamp,
+                timestamp_ms,
+            });
+        }
         return Some(SignalEvent::Error(format!("signal-cli: {msg}")));
     }
 
@@ -642,6 +664,32 @@ fn parse_receive_event(
     }
     if envelope.get("receiptMessage").is_some() {
         return parse_receipt_message(envelope);
+    }
+    // Call messages (missed calls)
+    if let Some(call_msg) = envelope.get("callMessage") {
+        if call_msg.get("offerMessage").is_some() {
+            let call_type = call_msg
+                .get("offerMessage")
+                .and_then(|o| o.get("type"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("AUDIO_CALL");
+            let kind = if call_type == "VIDEO_CALL" { "video" } else { "voice" };
+            let conv_id = envelope
+                .get("sourceNumber")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let timestamp_ms = envelope.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+            let timestamp = DateTime::from_timestamp_millis(timestamp_ms).unwrap_or_default();
+            return Some(SignalEvent::SystemMessage {
+                conv_id,
+                body: format!("Missed {kind} call"),
+                timestamp,
+                timestamp_ms,
+            });
+        }
+        // Ignore ICE candidates, hangup, busy (call signaling noise)
+        return None;
     }
     // Check for editMessage (top-level envelope field) before dataMessage
     if let Some(edit_msg) = envelope.get("editMessage") {
@@ -773,6 +821,46 @@ fn parse_data_message(
         });
     }
 
+    // Expiration timer update → system message
+    if data.get("isExpirationUpdate").and_then(|v| v.as_bool()).unwrap_or(false) {
+        let group_id = data.get("groupInfo").and_then(|g| g.get("groupId")).and_then(|v| v.as_str());
+        let conv_id = group_id
+            .map(|g| g.to_string())
+            .unwrap_or_else(|| {
+                envelope.get("sourceNumber").and_then(|v| v.as_str()).unwrap_or("unknown").to_string()
+            });
+        let seconds = data.get("expiresInSeconds").and_then(|v| v.as_i64()).unwrap_or(0);
+        let timestamp_ms = data.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+        let timestamp = DateTime::from_timestamp_millis(timestamp_ms).unwrap_or_default();
+        return Some(SignalEvent::SystemMessage {
+            conv_id,
+            body: format_expiration(seconds),
+            timestamp,
+            timestamp_ms,
+        });
+    }
+
+    // Group update with no body/reaction/remoteDelete → system message
+    if let Some(group_info) = data.get("groupInfo") {
+        let group_type = group_info.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if group_type == "UPDATE"
+            && data.get("message").and_then(|v| v.as_str()).is_none()
+            && data.get("reaction").is_none()
+            && data.get("remoteDelete").is_none()
+        {
+            let conv_id = group_info.get("groupId").and_then(|v| v.as_str())
+                .unwrap_or("unknown").to_string();
+            let timestamp_ms = data.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+            let timestamp = DateTime::from_timestamp_millis(timestamp_ms).unwrap_or_default();
+            return Some(SignalEvent::SystemMessage {
+                conv_id,
+                body: "Group updated".to_string(),
+                timestamp,
+                timestamp_ms,
+            });
+        }
+    }
+
     let source = envelope
         .get("sourceNumber")
         .and_then(|v| v.as_str())
@@ -894,6 +982,52 @@ fn parse_sent_sync(
             sender,
             target_timestamp,
         });
+    }
+
+    // Expiration timer update (synced) → system message
+    if sent.get("isExpirationUpdate").and_then(|v| v.as_bool()).unwrap_or(false) {
+        let group_id = sent.get("groupInfo").and_then(|g| g.get("groupId")).and_then(|v| v.as_str());
+        let conv_id = group_id
+            .map(|g| g.to_string())
+            .or_else(|| {
+                sent.get("destinationNumber")
+                    .or_else(|| sent.get("destination"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_else(|| {
+                envelope.get("sourceNumber").and_then(|v| v.as_str()).unwrap_or("unknown").to_string()
+            });
+        let seconds = sent.get("expiresInSeconds").and_then(|v| v.as_i64()).unwrap_or(0);
+        let timestamp_ms = sent.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+        let timestamp = DateTime::from_timestamp_millis(timestamp_ms).unwrap_or_default();
+        return Some(SignalEvent::SystemMessage {
+            conv_id,
+            body: format_expiration(seconds),
+            timestamp,
+            timestamp_ms,
+        });
+    }
+
+    // Group update (synced) with no body/reaction/remoteDelete → system message
+    if let Some(group_info) = sent.get("groupInfo") {
+        let group_type = group_info.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if group_type == "UPDATE"
+            && sent.get("message").and_then(|v| v.as_str()).is_none()
+            && sent.get("reaction").is_none()
+            && sent.get("remoteDelete").is_none()
+        {
+            let conv_id = group_info.get("groupId").and_then(|v| v.as_str())
+                .unwrap_or("unknown").to_string();
+            let timestamp_ms = sent.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+            let timestamp = DateTime::from_timestamp_millis(timestamp_ms).unwrap_or_default();
+            return Some(SignalEvent::SystemMessage {
+                conv_id,
+                body: "Group updated".to_string(),
+                timestamp,
+                timestamp_ms,
+            });
+        }
     }
 
     let source = envelope
@@ -1228,6 +1362,26 @@ fn mime_to_ext(mime: &str) -> &str {
         "text/plain" => "txt",
         _ => "bin",
     }
+}
+
+/// Format an expiration timer value as a human-readable string.
+fn format_expiration(seconds: i64) -> String {
+    if seconds == 0 {
+        return "Disappearing messages disabled".to_string();
+    }
+    let (n, unit) = if seconds < 60 {
+        (seconds, "second")
+    } else if seconds < 3600 {
+        (seconds / 60, "minute")
+    } else if seconds < 86400 {
+        (seconds / 3600, "hour")
+    } else if seconds < 604800 {
+        (seconds / 86400, "day")
+    } else {
+        (seconds / 604800, "week")
+    };
+    let plural = if n == 1 { "" } else { "s" };
+    format!("Disappearing messages set to {n} {unit}{plural}")
 }
 
 #[cfg(test)]
@@ -1743,6 +1897,214 @@ mod tests {
                 assert_eq!(contacts[1].uuid, None);
             }
             _ => panic!("Expected ContactList"),
+        }
+    }
+
+    // --- System message tests ---
+
+    #[test]
+    fn parse_call_message_voice() {
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            result: None,
+            error: None,
+            method: Some("receive".to_string()),
+            params: Some(json!({
+                "envelope": {
+                    "sourceNumber": "+15551234567",
+                    "sourceName": "Alice",
+                    "timestamp": 1700000000000_i64,
+                    "callMessage": {
+                        "offerMessage": {
+                            "type": "AUDIO_CALL",
+                            "id": 12345
+                        }
+                    }
+                }
+            })),
+        };
+        let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
+        match event {
+            SignalEvent::SystemMessage { conv_id, body, .. } => {
+                assert_eq!(conv_id, "+15551234567");
+                assert_eq!(body, "Missed voice call");
+            }
+            _ => panic!("Expected SystemMessage, got {:?}", event),
+        }
+    }
+
+    #[test]
+    fn parse_call_message_video() {
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            result: None,
+            error: None,
+            method: Some("receive".to_string()),
+            params: Some(json!({
+                "envelope": {
+                    "sourceNumber": "+15551234567",
+                    "timestamp": 1700000000000_i64,
+                    "callMessage": {
+                        "offerMessage": {
+                            "type": "VIDEO_CALL",
+                            "id": 12345
+                        }
+                    }
+                }
+            })),
+        };
+        let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
+        match event {
+            SignalEvent::SystemMessage { body, .. } => {
+                assert_eq!(body, "Missed video call");
+            }
+            _ => panic!("Expected SystemMessage, got {:?}", event),
+        }
+    }
+
+    #[test]
+    fn parse_call_message_ignores_hangup() {
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            result: None,
+            error: None,
+            method: Some("receive".to_string()),
+            params: Some(json!({
+                "envelope": {
+                    "sourceNumber": "+15551234567",
+                    "timestamp": 1700000000000_i64,
+                    "callMessage": {
+                        "hangupMessage": {
+                            "id": 12345,
+                            "type": "NORMAL"
+                        }
+                    }
+                }
+            })),
+        };
+        assert!(parse_signal_event(&resp, std::path::Path::new("/tmp")).is_none());
+    }
+
+    #[test]
+    fn parse_untrusted_identity() {
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            result: None,
+            error: None,
+            method: Some("receive".to_string()),
+            params: Some(json!({
+                "exception": {
+                    "type": "UntrustedIdentityException",
+                    "message": "Untrusted identity for +15551234567"
+                },
+                "envelope": {
+                    "sourceNumber": "+15551234567",
+                    "timestamp": 1700000000000_i64
+                }
+            })),
+        };
+        let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
+        match event {
+            SignalEvent::SystemMessage { conv_id, body, .. } => {
+                assert_eq!(conv_id, "+15551234567");
+                assert!(body.contains("Safety number changed"));
+            }
+            _ => panic!("Expected SystemMessage, got {:?}", event),
+        }
+    }
+
+    #[test]
+    fn parse_group_update() {
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            result: None,
+            error: None,
+            method: Some("receive".to_string()),
+            params: Some(json!({
+                "envelope": {
+                    "sourceNumber": "+15551234567",
+                    "timestamp": 1700000000000_i64,
+                    "dataMessage": {
+                        "timestamp": 1700000000000_i64,
+                        "groupInfo": {
+                            "groupId": "group123",
+                            "type": "UPDATE"
+                        }
+                    }
+                }
+            })),
+        };
+        let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
+        match event {
+            SignalEvent::SystemMessage { conv_id, body, .. } => {
+                assert_eq!(conv_id, "group123");
+                assert_eq!(body, "Group updated");
+            }
+            _ => panic!("Expected SystemMessage, got {:?}", event),
+        }
+    }
+
+    #[test]
+    fn parse_expiration_update() {
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            result: None,
+            error: None,
+            method: Some("receive".to_string()),
+            params: Some(json!({
+                "envelope": {
+                    "sourceNumber": "+15551234567",
+                    "timestamp": 1700000000000_i64,
+                    "dataMessage": {
+                        "timestamp": 1700000000000_i64,
+                        "isExpirationUpdate": true,
+                        "expiresInSeconds": 604800
+                    }
+                }
+            })),
+        };
+        let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
+        match event {
+            SignalEvent::SystemMessage { conv_id, body, .. } => {
+                assert_eq!(conv_id, "+15551234567");
+                assert_eq!(body, "Disappearing messages set to 1 week");
+            }
+            _ => panic!("Expected SystemMessage, got {:?}", event),
+        }
+    }
+
+    #[test]
+    fn parse_expiration_disabled() {
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            result: None,
+            error: None,
+            method: Some("receive".to_string()),
+            params: Some(json!({
+                "envelope": {
+                    "sourceNumber": "+15551234567",
+                    "timestamp": 1700000000000_i64,
+                    "dataMessage": {
+                        "timestamp": 1700000000000_i64,
+                        "isExpirationUpdate": true,
+                        "expiresInSeconds": 0
+                    }
+                }
+            })),
+        };
+        let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
+        match event {
+            SignalEvent::SystemMessage { body, .. } => {
+                assert_eq!(body, "Disappearing messages disabled");
+            }
+            _ => panic!("Expected SystemMessage, got {:?}", event),
         }
     }
 }
