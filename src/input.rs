@@ -12,6 +12,8 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { name: "/sidebar",  alias: "/sb", args: "",        description: "Toggle sidebar" },
     CommandInfo { name: "/bell",     alias: "",    args: "[type]",  description: "Toggle notifications (direct/group)" },
     CommandInfo { name: "/mute",     alias: "",    args: "",        description: "Mute/unmute current chat" },
+    CommandInfo { name: "/block",    alias: "",    args: "",        description: "Block current contact/group" },
+    CommandInfo { name: "/unblock",  alias: "",    args: "",        description: "Unblock current contact/group" },
     CommandInfo { name: "/attach",   alias: "/a",  args: "",        description: "Attach a file" },
     CommandInfo { name: "/search",   alias: "/s",  args: "<query>", description: "Search messages" },
     CommandInfo { name: "/contacts", alias: "/c",  args: "",        description: "Browse contacts" },
@@ -39,6 +41,10 @@ pub enum InputAction {
     ToggleBell(Option<String>),
     /// Mute/unmute the current conversation
     ToggleMute,
+    /// Block the current contact/group
+    Block,
+    /// Unblock the current contact/group
+    Unblock,
     /// Show help text
     Help,
     /// Open settings overlay
@@ -91,6 +97,8 @@ pub fn parse_input(input: &str) -> InputAction {
             }
         }
         "/mute" => InputAction::ToggleMute,
+        "/block" => InputAction::Block,
+        "/unblock" => InputAction::Unblock,
         "/attach" | "/a" => InputAction::Attach,
         "/search" | "/s" => {
             if arg.is_empty() {
@@ -371,6 +379,16 @@ mod tests {
         assert!(parse_duration_to_seconds("").is_err());
         assert!(parse_duration_to_seconds("0s").is_err());
         assert!(parse_duration_to_seconds("-1h").is_err());
+    }
+
+    #[test]
+    fn block_command() {
+        assert!(matches!(parse_input("/block"), InputAction::Block));
+    }
+
+    #[test]
+    fn unblock_command() {
+        assert!(matches!(parse_input("/unblock"), InputAction::Unblock));
     }
 
     #[test]

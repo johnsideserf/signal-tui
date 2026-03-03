@@ -181,6 +181,8 @@ pub struct App {
     pub notify_group: bool,
     /// Conversations muted from notifications
     pub muted_conversations: HashSet<String>,
+    /// Conversations blocked via signal-cli
+    pub blocked_conversations: HashSet<String>,
     /// Autocomplete popup visible
     pub autocomplete_visible: bool,
     /// Indices into COMMANDS for current matches
@@ -400,6 +402,14 @@ pub enum SendRequest {
         recipient: String,
         is_group: bool,
         response_type: String,
+    },
+    Block {
+        recipient: String,
+        is_group: bool,
+    },
+    Unblock {
+        recipient: String,
+        is_group: bool,
     },
 }
 
@@ -1633,6 +1643,7 @@ impl App {
             notify_direct: true,
             notify_group: true,
             muted_conversations: HashSet::new(),
+            blocked_conversations: HashSet::new(),
             autocomplete_visible: false,
             autocomplete_candidates: Vec::new(),
             autocomplete_index: 0,
@@ -1754,6 +1765,7 @@ impl App {
 
         self.conversation_order = order;
         self.muted_conversations = self.db.load_muted()?;
+        self.blocked_conversations = self.db.load_blocked()?;
 
         // Fix 1:1 conversations still named as phone numbers: scan message senders
         // for a real display name (from source_name in previous sessions).
@@ -1806,6 +1818,9 @@ impl App {
             None => return,
         };
         if !conv.accepted {
+            return;
+        }
+        if self.blocked_conversations.contains(conv_id) {
             return;
         }
         // Collect timestamps grouped by sender phone number
@@ -2264,11 +2279,11 @@ impl App {
                         return self.build_typing_request(true);
                     }
                     // Send typing start if not already sent, buffer is non-empty,
-                    // input is not a command, and there's an active conversation
+                    // input is not a command, conversation is active and not blocked
                     if !self.typing_sent
                         && !self.input_buffer.is_empty()
                         && !self.input_buffer.starts_with('/')
-                        && self.active_conversation.is_some()
+                        && self.active_conversation.as_ref().is_some_and(|id| !self.blocked_conversations.contains(id))
                     {
                         self.typing_sent = true;
                         return self.build_typing_request(false);
@@ -2552,7 +2567,7 @@ impl App {
             }
             let conv_accepted = self.conversations.get(&conv_id).map(|c| c.accepted).unwrap_or(true);
             let type_enabled = if is_group { self.notify_group } else { self.notify_direct };
-            if type_enabled && conv_accepted && !self.muted_conversations.contains(&conv_id) {
+            if type_enabled && conv_accepted && !self.muted_conversations.contains(&conv_id) && !self.blocked_conversations.contains(&conv_id) {
                 self.pending_bell = true;
             }
         }
@@ -2560,7 +2575,7 @@ impl App {
         // Active conversation: send read receipt and advance read marker
         let conv_accepted = self.conversations.get(&conv_id).map(|c| c.accepted).unwrap_or(true);
         if is_active {
-            if !msg.is_outgoing && conv_accepted {
+            if !msg.is_outgoing && conv_accepted && !self.blocked_conversations.contains(&conv_id) {
                 self.queue_single_read_receipt(&sender_id, msg_ts_ms);
             }
             if let Some(conv) = self.conversations.get(&conv_id) {
@@ -3591,6 +3606,45 @@ impl App {
                     }
                 } else {
                     self.status_message = "no active conversation to mute".to_string();
+                }
+            }
+            InputAction::Block => {
+                if let Some(ref conv_id) = self.active_conversation {
+                    let conv_id = conv_id.clone();
+                    let is_group = self.conversations.get(&conv_id).map(|c| c.is_group).unwrap_or(false);
+                    if self.blocked_conversations.contains(&conv_id) {
+                        let name = self.conversations.get(&conv_id)
+                            .map(|c| c.name.as_str()).unwrap_or(&conv_id);
+                        self.status_message = format!("{name} is already blocked");
+                    } else {
+                        let name = self.conversations.get(&conv_id)
+                            .map(|c| c.name.as_str()).unwrap_or(&conv_id);
+                        self.status_message = format!("blocked {name}");
+                        self.blocked_conversations.insert(conv_id.clone());
+                        db_warn(self.db.set_blocked(&conv_id, true), "set_blocked");
+                        return Some(SendRequest::Block { recipient: conv_id, is_group });
+                    }
+                } else {
+                    self.status_message = "no active conversation to block".to_string();
+                }
+            }
+            InputAction::Unblock => {
+                if let Some(ref conv_id) = self.active_conversation {
+                    let conv_id = conv_id.clone();
+                    let is_group = self.conversations.get(&conv_id).map(|c| c.is_group).unwrap_or(false);
+                    if self.blocked_conversations.remove(&conv_id) {
+                        let name = self.conversations.get(&conv_id)
+                            .map(|c| c.name.as_str()).unwrap_or(&conv_id);
+                        self.status_message = format!("unblocked {name}");
+                        db_warn(self.db.set_blocked(&conv_id, false), "set_blocked");
+                        return Some(SendRequest::Unblock { recipient: conv_id, is_group });
+                    } else {
+                        let name = self.conversations.get(&conv_id)
+                            .map(|c| c.name.as_str()).unwrap_or(&conv_id);
+                        self.status_message = format!("{name} is not blocked");
+                    }
+                } else {
+                    self.status_message = "no active conversation to unblock".to_string();
                 }
             }
             InputAction::Settings => {
@@ -6310,6 +6364,105 @@ mod tests {
         assert!(!app.conversations["+1"].accepted);
 
         // Try to queue read receipts — should be empty since conv is unaccepted
+        app.queue_read_receipts_for_conv("+1", 0);
+        assert!(app.pending_read_receipts.is_empty());
+    }
+
+    // --- Block / Unblock tests ---
+
+    #[test]
+    fn block_adds_to_set_and_returns_send_request() {
+        let mut app = test_app();
+        app.get_or_create_conversation("+1", "Alice", false);
+        app.active_conversation = Some("+1".to_string());
+        app.input_buffer = "/block".to_string();
+        let req = app.handle_input();
+        assert!(app.blocked_conversations.contains("+1"));
+        assert!(matches!(req, Some(SendRequest::Block { ref recipient, is_group }) if recipient == "+1" && !is_group));
+        assert!(app.status_message.contains("blocked"));
+    }
+
+    #[test]
+    fn unblock_removes_from_set_and_returns_send_request() {
+        let mut app = test_app();
+        app.get_or_create_conversation("+1", "Alice", false);
+        app.active_conversation = Some("+1".to_string());
+        app.blocked_conversations.insert("+1".to_string());
+        app.input_buffer = "/unblock".to_string();
+        let req = app.handle_input();
+        assert!(!app.blocked_conversations.contains("+1"));
+        assert!(matches!(req, Some(SendRequest::Unblock { ref recipient, is_group }) if recipient == "+1" && !is_group));
+        assert!(app.status_message.contains("unblocked"));
+    }
+
+    #[test]
+    fn block_already_blocked_shows_status() {
+        let mut app = test_app();
+        app.get_or_create_conversation("+1", "Alice", false);
+        app.active_conversation = Some("+1".to_string());
+        app.blocked_conversations.insert("+1".to_string());
+        app.input_buffer = "/block".to_string();
+        let req = app.handle_input();
+        assert!(req.is_none());
+        assert!(app.status_message.contains("already blocked"));
+    }
+
+    #[test]
+    fn unblock_not_blocked_shows_status() {
+        let mut app = test_app();
+        app.get_or_create_conversation("+1", "Alice", false);
+        app.active_conversation = Some("+1".to_string());
+        app.input_buffer = "/unblock".to_string();
+        let req = app.handle_input();
+        assert!(req.is_none());
+        assert!(app.status_message.contains("not blocked"));
+    }
+
+    #[test]
+    fn block_no_active_conversation() {
+        let mut app = test_app();
+        app.input_buffer = "/block".to_string();
+        let req = app.handle_input();
+        assert!(req.is_none());
+        assert!(app.status_message.contains("no active conversation"));
+    }
+
+    #[test]
+    fn unblock_no_active_conversation() {
+        let mut app = test_app();
+        app.input_buffer = "/unblock".to_string();
+        let req = app.handle_input();
+        assert!(req.is_none());
+        assert!(app.status_message.contains("no active conversation"));
+    }
+
+    #[test]
+    fn bell_skipped_for_blocked_conversations() {
+        let mut app = test_app();
+        // Create accepted conversation first, then block it
+        app.get_or_create_conversation("+1", "Alice", false);
+        if let Some(conv) = app.conversations.get_mut("+1") {
+            conv.accepted = true;
+        }
+        app.blocked_conversations.insert("+1".to_string());
+        // Receive a message — bell should NOT fire
+        app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
+        assert!(!app.pending_bell);
+    }
+
+    #[test]
+    fn read_receipts_not_sent_for_blocked_conversations() {
+        let mut app = test_app();
+        app.send_read_receipts = true;
+        // Create accepted conversation, block it, add a message
+        app.get_or_create_conversation("+1", "Alice", false);
+        if let Some(conv) = app.conversations.get_mut("+1") {
+            conv.accepted = true;
+        }
+        app.blocked_conversations.insert("+1".to_string());
+        app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
+
+        // Try to queue read receipts — should be empty since conv is blocked
         app.queue_read_receipts_for_conv("+1", 0);
         assert!(app.pending_read_receipts.is_empty());
     }

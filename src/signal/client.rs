@@ -666,6 +666,62 @@ impl SignalClient {
         Ok(())
     }
 
+    /// Block a contact or group.
+    pub async fn block_contact(&self, recipient: &str, is_group: bool) -> Result<()> {
+        let id = Uuid::new_v4().to_string();
+        if let Ok(mut map) = self.pending_requests.lock() {
+            map.insert(id.clone(), ("block".to_string(), Instant::now()));
+        }
+        let params = if is_group {
+            serde_json::json!({
+                "groupId": [recipient],
+                "account": self.account,
+            })
+        } else {
+            serde_json::json!({
+                "recipient": [recipient],
+                "account": self.account,
+            })
+        };
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "block".to_string(),
+            id,
+            params: Some(params),
+        };
+        let json = serde_json::to_string(&request)?;
+        self.stdin_tx.send(json).await.context("Failed to send block to signal-cli stdin")?;
+        Ok(())
+    }
+
+    /// Unblock a contact or group.
+    pub async fn unblock_contact(&self, recipient: &str, is_group: bool) -> Result<()> {
+        let id = Uuid::new_v4().to_string();
+        if let Ok(mut map) = self.pending_requests.lock() {
+            map.insert(id.clone(), ("unblock".to_string(), Instant::now()));
+        }
+        let params = if is_group {
+            serde_json::json!({
+                "groupId": [recipient],
+                "account": self.account,
+            })
+        } else {
+            serde_json::json!({
+                "recipient": [recipient],
+                "account": self.account,
+            })
+        };
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "unblock".to_string(),
+            id,
+            params: Some(params),
+        };
+        let json = serde_json::to_string(&request)?;
+        self.stdin_tx.send(json).await.context("Failed to send unblock to signal-cli stdin")?;
+        Ok(())
+    }
+
     /// Leave (quit) a group.
     pub async fn quit_group(&self, group_id: &str) -> Result<()> {
         let id = Uuid::new_v4().to_string();
@@ -806,7 +862,7 @@ fn parse_rpc_result(method: &str, result: &serde_json::Value, rpc_id: Option<&st
                 .collect();
             Some(SignalEvent::GroupList(groups))
         }
-        "sendReaction" | "remoteDelete" | "sendTypingIndicator" | "sendReceipt" | "updateContact" | "updateGroup" | "quitGroup" | "sendMessageRequestResponse" => None, // fire-and-forget, no action needed
+        "sendReaction" | "remoteDelete" | "sendTypingIndicator" | "sendReceipt" | "updateContact" | "updateGroup" | "quitGroup" | "sendMessageRequestResponse" | "block" | "unblock" => None, // fire-and-forget, no action needed
         _ => None,
     }
 }

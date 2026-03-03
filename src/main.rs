@@ -586,6 +586,16 @@ async fn dispatch_send(
                 app.status_message = format!("Left group \"{}\"", name);
             }
         }
+        SendRequest::Block { recipient, is_group } => {
+            if let Err(e) = signal_client.block_contact(&recipient, is_group).await {
+                app.status_message = format!("block error: {e}");
+            }
+        }
+        SendRequest::Unblock { recipient, is_group } => {
+            if let Err(e) = signal_client.unblock_contact(&recipient, is_group).await {
+                app.status_message = format!("unblock error: {e}");
+            }
+        }
         SendRequest::MessageRequestResponse { recipient, is_group, response_type } => {
             if let Err(e) = signal_client.send_message_request_response(&recipient, is_group, &response_type).await {
                 app.status_message = format!("message request error: {e}");
