@@ -184,6 +184,17 @@ impl Database {
             )?;
         }
 
+        if version < 10 {
+            self.conn.execute_batch(
+                "
+                BEGIN;
+                ALTER TABLE messages ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+                UPDATE schema_version SET version = 10;
+                COMMIT;
+                ",
+            )?;
+        }
+
         Ok(())
     }
 
@@ -238,7 +249,7 @@ impl Database {
         for (id, name, is_group, expiration_timer, accepted) in convs {
             // Load last N messages
             let mut msg_stmt = self.conn.prepare(
-                "SELECT sender, timestamp, body, is_system, status, timestamp_ms, is_edited, is_deleted, quote_author, quote_body, quote_ts_ms, sender_id, expires_in_seconds, expiration_start_ms FROM messages
+                "SELECT sender, timestamp, body, is_system, status, timestamp_ms, is_edited, is_deleted, quote_author, quote_body, quote_ts_ms, sender_id, expires_in_seconds, expiration_start_ms, pinned FROM messages
                  WHERE conversation_id = ?1
                  ORDER BY timestamp_ms DESC, rowid DESC LIMIT ?2",
             )?;
@@ -259,10 +270,11 @@ impl Database {
                     let sender_id: String = row.get(11)?;
                     let expires_in_seconds: i64 = row.get(12)?;
                     let expiration_start_ms: i64 = row.get(13)?;
-                    Ok((sender, ts_str, body, is_system, status_i32, timestamp_ms, is_edited, is_deleted, quote_author, quote_body, quote_ts_ms, sender_id, expires_in_seconds, expiration_start_ms))
+                    let is_pinned: bool = row.get::<_, i32>(14)? != 0;
+                    Ok((sender, ts_str, body, is_system, status_i32, timestamp_ms, is_edited, is_deleted, quote_author, quote_body, quote_ts_ms, sender_id, expires_in_seconds, expiration_start_ms, is_pinned))
                 })?
                 .filter_map(|r| r.ok())
-                .filter_map(|(sender, ts_str, body, is_system, status_i32, timestamp_ms, is_edited, is_deleted, quote_author, quote_body, quote_ts_ms, sender_id, expires_in_seconds, expiration_start_ms)| {
+                .filter_map(|(sender, ts_str, body, is_system, status_i32, timestamp_ms, is_edited, is_deleted, quote_author, quote_body, quote_ts_ms, sender_id, expires_in_seconds, expiration_start_ms, is_pinned)| {
                     let timestamp = chrono::DateTime::parse_from_rfc3339(&ts_str)
                         .ok()?
                         .with_timezone(&chrono::Utc);
@@ -290,6 +302,7 @@ impl Database {
                         quote,
                         is_edited,
                         is_deleted,
+                        is_pinned,
                         sender_id,
                         expires_in_seconds,
                         expiration_start_ms,
@@ -539,6 +552,16 @@ impl Database {
             "UPDATE messages SET is_deleted = 1, body = '[deleted]'
              WHERE conversation_id = ?1 AND timestamp_ms = ?2",
             params![conv_id, timestamp_ms],
+        )?;
+        Ok(())
+    }
+
+    /// Set the pinned state of a message.
+    pub fn set_message_pinned(&self, conv_id: &str, timestamp_ms: i64, pinned: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE messages SET pinned = ?3
+             WHERE conversation_id = ?1 AND timestamp_ms = ?2",
+            params![conv_id, timestamp_ms, pinned as i32],
         )?;
         Ok(())
     }

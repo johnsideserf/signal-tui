@@ -119,6 +119,8 @@ pub struct DisplayMessage {
     pub is_edited: bool,
     /// Whether this message has been remotely deleted
     pub is_deleted: bool,
+    /// Whether this message is pinned
+    pub is_pinned: bool,
     /// Phone number / ID of the sender (for wire protocol; "you" for outgoing)
     pub sender_id: String,
     /// Disappearing message timer (seconds, 0 = no expiration)
@@ -453,6 +455,18 @@ pub enum SendRequest {
     Unblock {
         recipient: String,
         is_group: bool,
+    },
+    Pin {
+        recipient: String,
+        is_group: bool,
+        target_author: String,
+        target_timestamp: i64,
+    },
+    Unpin {
+        recipient: String,
+        is_group: bool,
+        target_author: String,
+        target_timestamp: i64,
     },
 }
 
@@ -1203,6 +1217,13 @@ impl App {
                 nerd_icon: "\u{f0a79}",
             });
         }
+        if !msg.is_system && !msg.is_deleted {
+            items.push(MenuAction {
+                label: if msg.is_pinned { "Unpin" } else { "Pin" },
+                key_hint: "p",
+                nerd_icon: "\u{f0403}",
+            });
+        }
         items
     }
 
@@ -1235,13 +1256,14 @@ impl App {
                     None
                 }
             }
-            KeyCode::Char(c @ ('q' | 'e' | 'r' | 'y' | 'd')) => {
+            KeyCode::Char(c @ ('q' | 'e' | 'r' | 'y' | 'd' | 'p')) => {
                 let hint = match c {
                     'q' => "q",
                     'e' => "e",
                     'r' => "r",
                     'y' => "y",
                     'd' => "d",
+                    'p' => "p",
                     _ => unreachable!(),
                 };
                 // Only execute if this action is available in the menu
@@ -1325,6 +1347,10 @@ impl App {
                     }
                 }
                 None
+            }
+            "p" => {
+                // Pin/Unpin
+                self.execute_pin_toggle()
             }
             _ => None,
         }
@@ -2108,7 +2134,7 @@ impl App {
     }
 
     /// Handle Normal mode key. Returns true if consumed.
-    pub fn handle_normal_key(&mut self, modifiers: KeyModifiers, code: KeyCode) {
+    pub fn handle_normal_key(&mut self, modifiers: KeyModifiers, code: KeyCode) -> Option<SendRequest> {
         match (modifiers, code) {
             // Scrolling (line-by-line: clear focused_msg_index so the draw
             // function re-derives it from the viewport position each frame)
@@ -2333,8 +2359,14 @@ impl App {
                 }
             }
 
+            // Pin/Unpin focused message
+            (_, KeyCode::Char('p')) => {
+                return self.execute_pin_toggle();
+            }
+
             _ => {}
         }
+        None
     }
 
     /// Handle Insert mode key.
@@ -2446,6 +2478,16 @@ impl App {
                 conv_id, sender: _, target_timestamp,
             } => {
                 self.handle_remote_delete(&conv_id, target_timestamp);
+            }
+            SignalEvent::PinReceived {
+                conv_id, sender, target_author: _, target_timestamp,
+            } => {
+                self.handle_pin_received(&conv_id, &sender, target_timestamp, true);
+            }
+            SignalEvent::UnpinReceived {
+                conv_id, sender, target_author: _, target_timestamp,
+            } => {
+                self.handle_pin_received(&conv_id, &sender, target_timestamp, false);
             }
             SignalEvent::SystemMessage { conv_id, body, timestamp, timestamp_ms } => {
                 self.handle_system_message(&conv_id, &body, timestamp, timestamp_ms);
@@ -2599,6 +2641,7 @@ impl App {
                     quote,
                     is_edited: false,
                     is_deleted: false,
+                    is_pinned: false,
                     sender_id: sender_id.clone(),
                     expires_in_seconds: msg_expires_in,
                     expiration_start_ms: msg_expiration_start,
@@ -2740,6 +2783,7 @@ impl App {
                 quote: None,
                 is_edited: false,
                 is_deleted: false,
+                is_pinned: false,
                 sender_id: String::new(),
                 expires_in_seconds: 0,
                 expiration_start_ms: 0,
@@ -2948,6 +2992,70 @@ impl App {
             self.db.mark_message_deleted(conv_id, target_timestamp),
             "mark_message_deleted",
         );
+    }
+
+    fn handle_pin_received(&mut self, conv_id: &str, sender: &str, target_timestamp: i64, pinned: bool) {
+        if let Some(conv) = self.conversations.get_mut(conv_id) {
+            if let Some(msg) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == target_timestamp) {
+                msg.is_pinned = pinned;
+            }
+        }
+        db_warn(
+            self.db.set_message_pinned(conv_id, target_timestamp, pinned),
+            "set_message_pinned",
+        );
+        // Insert system message
+        let sender_name = self.contact_names.get(sender).cloned().unwrap_or_else(|| sender.to_string());
+        let action = if pinned { "pinned" } else { "unpinned" };
+        let body = format!("{sender_name} {action} a message");
+        let now = Utc::now();
+        let now_ms = now.timestamp_millis();
+        self.handle_system_message(conv_id, &body, now, now_ms);
+    }
+
+    fn execute_pin_toggle(&mut self) -> Option<SendRequest> {
+        let msg = self.selected_message()?;
+        if msg.is_system || msg.is_deleted {
+            return None;
+        }
+        let was_pinned = msg.is_pinned;
+        let target_timestamp = msg.timestamp_ms;
+        let author_phone = msg.sender_id.clone();
+        let conv_id = self.active_conversation.clone()?;
+        let is_group = self.conversations.get(&conv_id).map(|c| c.is_group).unwrap_or(false);
+
+        let target_author = if author_phone.is_empty() || author_phone == "you" {
+            self.account.clone()
+        } else {
+            author_phone
+        };
+
+        // Optimistically toggle
+        if let Some(conv) = self.conversations.get_mut(&conv_id) {
+            if let Some(m) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == target_timestamp) {
+                m.is_pinned = !was_pinned;
+            }
+        }
+        db_warn(
+            self.db.set_message_pinned(&conv_id, target_timestamp, !was_pinned),
+            "set_message_pinned",
+        );
+
+        if was_pinned {
+            Some(SendRequest::Unpin {
+                recipient: conv_id,
+                is_group,
+                target_author,
+                target_timestamp,
+            })
+        } else {
+            Some(SendRequest::Pin {
+                recipient: conv_id,
+                is_group,
+                target_author,
+                target_timestamp,
+            })
+        }
     }
 
     fn handle_read_sync(&mut self, read_messages: Vec<(String, i64)>) {
@@ -3634,6 +3742,7 @@ impl App {
                             quote,
                             is_edited: false,
                             is_deleted: false,
+                            is_pinned: false,
                             sender_id: self.account.clone(),
                             expires_in_seconds: out_expires,
                             expiration_start_ms: out_expiry_start,
@@ -5223,6 +5332,7 @@ mod tests {
                 quote: None,
                 is_edited: false,
                 is_deleted: false,
+                is_pinned: false,
                 sender_id: String::new(),
                 expires_in_seconds: 0,
                 expiration_start_ms: 0,
@@ -5275,6 +5385,7 @@ mod tests {
                 quote: None,
                 is_edited: false,
                 is_deleted: false,
+                is_pinned: false,
                 sender_id: String::new(),
                 expires_in_seconds: 0,
                 expiration_start_ms: 0,
@@ -5318,6 +5429,7 @@ mod tests {
                 quote: None,
                 is_edited: false,
                 is_deleted: false,
+                is_pinned: false,
                 sender_id: String::new(),
                 expires_in_seconds: 0,
                 expiration_start_ms: 0,
@@ -5361,6 +5473,7 @@ mod tests {
                 quote: None,
                 is_edited: false,
                 is_deleted: false,
+                is_pinned: false,
                 sender_id: String::new(),
                 expires_in_seconds: 0,
                 expiration_start_ms: 0,
@@ -5429,6 +5542,7 @@ mod tests {
                 quote: None,
                 is_edited: false,
                 is_deleted: false,
+                is_pinned: false,
                 sender_id: String::new(),
                 expires_in_seconds: 0,
                 expiration_start_ms: 0,
@@ -5622,6 +5736,7 @@ mod tests {
                 quote: None,
                 is_edited: false,
                 is_deleted: false,
+                is_pinned: false,
                 sender_id: String::new(),
                 expires_in_seconds: 0,
                 expiration_start_ms: 0,
@@ -5690,6 +5805,7 @@ mod tests {
             quote: None,
             is_edited: false,
             is_deleted: false,
+            is_pinned: false,
             sender_id: "+3".to_string(), // Charlie's phone — not in contacts
             expires_in_seconds: 0,
             expiration_start_ms: 0,
@@ -5714,6 +5830,7 @@ mod tests {
             quote: Some(Quote { author: "+10000000000".to_string(), body: "quoted".to_string(), timestamp_ms: 500, author_id: "+10000000000".to_string() }),
             is_edited: false,
             is_deleted: false,
+            is_pinned: false,
             sender_id: "+1".to_string(),
             expires_in_seconds: 0,
             expiration_start_ms: 0,
@@ -5734,6 +5851,7 @@ mod tests {
             quote: Some(Quote { author: "+3".to_string(), body: "hey".to_string(), timestamp_ms: 900, author_id: "+3".to_string() }),
             is_edited: false,
             is_deleted: false,
+            is_pinned: false,
             sender_id: "+10000000000".to_string(),
             expires_in_seconds: 0,
             expiration_start_ms: 0,

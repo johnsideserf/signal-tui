@@ -96,6 +96,20 @@ pub enum SignalEvent {
         sender: String,
         target_timestamp: i64,
     },
+    PinReceived {
+        conv_id: String,
+        sender: String,
+        #[allow(dead_code)]
+        target_author: String,
+        target_timestamp: i64,
+    },
+    UnpinReceived {
+        conv_id: String,
+        sender: String,
+        #[allow(dead_code)]
+        target_author: String,
+        target_timestamp: i64,
+    },
     SystemMessage {
         conv_id: String,
         body: String,

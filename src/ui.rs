@@ -675,9 +675,48 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             .title_style(Style::default().fg(theme.accent));
     }
 
-    let inner = block.inner(area);
-    app.mouse_messages_area = inner;
+    let full_inner = block.inner(area);
     frame.render_widget(block, area);
+
+    let messages_ref = match &app.active_conversation {
+        Some(id) => app.conversations.get(id).map(|c| &c.messages),
+        None => None,
+    };
+
+    // Find the most recently pinned message for the banner
+    let pinned_banner: Option<(String, String)> = messages_ref.and_then(|msgs| {
+        msgs.iter()
+            .rev()
+            .find(|m| m.is_pinned && !m.is_deleted)
+            .map(|m| {
+                let sender = m.sender.clone();
+                let body: String = m.body.chars().take(80).collect();
+                (sender, body)
+            })
+    });
+
+    let (banner_area, inner) = if pinned_banner.is_some() && full_inner.height > 2 {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(0)])
+            .split(full_inner);
+        (Some(chunks[0]), chunks[1])
+    } else {
+        (None, full_inner)
+    };
+
+    if let Some((ref pin_sender, ref pin_body)) = pinned_banner {
+        if let Some(banner) = banner_area {
+            let pin_text = format!("\u{1f4cc} {pin_sender}: {pin_body}");
+            let pin_line = Line::from(Span::styled(
+                truncate(&pin_text, banner.width as usize),
+                Style::default().fg(theme.warning).add_modifier(Modifier::BOLD),
+            ));
+            frame.render_widget(Paragraph::new(pin_line), banner);
+        }
+    }
+
+    app.mouse_messages_area = inner;
 
     let messages = match &app.active_conversation {
         Some(id) => {
@@ -811,6 +850,14 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                 spans.push(Span::styled(
                     " (edited)",
                     Style::default().fg(theme.fg_muted).add_modifier(Modifier::ITALIC),
+                ));
+            }
+
+            // "(pinned)" label
+            if msg.is_pinned {
+                spans.push(Span::styled(
+                    " (pinned)",
+                    Style::default().fg(theme.warning).add_modifier(Modifier::ITALIC),
                 ));
             }
 

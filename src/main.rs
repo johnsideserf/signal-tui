@@ -598,6 +598,16 @@ async fn dispatch_send(
                 app.status_message = format!("unblock error: {e}");
             }
         }
+        SendRequest::Pin { recipient, is_group, target_author, target_timestamp } => {
+            if let Err(e) = signal_client.send_pin_message(&recipient, is_group, &target_author, target_timestamp).await {
+                app.status_message = format!("pin error: {e}");
+            }
+        }
+        SendRequest::Unpin { recipient, is_group, target_author, target_timestamp } => {
+            if let Err(e) = signal_client.send_unpin_message(&recipient, is_group, &target_author, target_timestamp).await {
+                app.status_message = format!("unpin error: {e}");
+            }
+        }
         SendRequest::MessageRequestResponse { recipient, is_group, response_type } => {
             if let Err(e) = signal_client.send_message_request_response(&recipient, is_group, &response_type).await {
                 app.status_message = format!("message request error: {e}");
@@ -681,10 +691,7 @@ async fn run_app(
                         }
                         if !overlay_handled {
                             let send_request = match app.mode {
-                                InputMode::Normal => {
-                                    app.handle_normal_key(key.modifiers, key.code);
-                                    None
-                                }
+                                InputMode::Normal => app.handle_normal_key(key.modifiers, key.code),
                                 InputMode::Insert => app.handle_insert_key(key.modifiers, key.code),
                             };
                             if let Some(req) = send_request {
@@ -820,11 +827,11 @@ async fn run_demo_app(
                     if !app.handle_global_key(key.modifiers, key.code) {
                         let (overlay_handled, _) = app.handle_overlay_key(key.code);
                         if !overlay_handled {
-                            match app.mode {
+                            let _ = match app.mode {
                                 InputMode::Normal => app.handle_normal_key(key.modifiers, key.code),
                                 // In demo mode, messages echo locally but don't send
-                                InputMode::Insert => { app.handle_insert_key(key.modifiers, key.code); }
-                            }
+                                InputMode::Insert => app.handle_insert_key(key.modifiers, key.code),
+                            };
                         }
                     }
                 }
@@ -885,6 +892,7 @@ fn populate_demo_data(app: &mut App) {
             quote: None,
             is_edited: false,
             is_deleted: false,
+            is_pinned: false,
             sender_id: String::new(),
             expires_in_seconds: 0,
             expiration_start_ms: 0,
