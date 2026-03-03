@@ -162,6 +162,17 @@ impl Database {
             )?;
         }
 
+        if version < 8 {
+            self.conn.execute_batch(
+                "
+                BEGIN;
+                ALTER TABLE conversations ADD COLUMN accepted INTEGER NOT NULL DEFAULT 1;
+                UPDATE schema_version SET version = 8;
+                COMMIT;
+                ",
+            )?;
+        }
+
         Ok(())
     }
 
@@ -177,26 +188,43 @@ impl Database {
         Ok(())
     }
 
+    pub fn update_accepted(&self, id: &str, accepted: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE conversations SET accepted = ?2 WHERE id = ?1",
+            params![id, accepted as i32],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_conversation(&self, id: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM reactions WHERE conversation_id = ?1", params![id])?;
+        self.conn.execute("DELETE FROM messages WHERE conversation_id = ?1", params![id])?;
+        self.conn.execute("DELETE FROM read_markers WHERE conversation_id = ?1", params![id])?;
+        self.conn.execute("DELETE FROM conversations WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
     /// Load all conversations with their most recent messages (up to `msg_limit`).
     pub fn load_conversations(&self, msg_limit: usize) -> Result<Vec<Conversation>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, name, is_group, expiration_timer FROM conversations")?;
+            .prepare("SELECT id, name, is_group, expiration_timer, accepted FROM conversations")?;
 
-        let convs: Vec<(String, String, bool, i64)> = stmt
+        let convs: Vec<(String, String, bool, i64, bool)> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, i32>(2)? != 0,
                     row.get::<_, i64>(3)?,
+                    row.get::<_, i32>(4)? != 0,
                 ))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         let mut result = Vec::with_capacity(convs.len());
 
-        for (id, name, is_group, expiration_timer) in convs {
+        for (id, name, is_group, expiration_timer, accepted) in convs {
             // Load last N messages
             let mut msg_stmt = self.conn.prepare(
                 "SELECT sender, timestamp, body, is_system, status, timestamp_ms, is_edited, is_deleted, quote_author, quote_body, quote_ts_ms, sender_id, expires_in_seconds, expiration_start_ms FROM messages
@@ -293,6 +321,7 @@ impl Database {
                 unread,
                 is_group,
                 expiration_timer,
+                accepted,
             });
         }
 
@@ -857,6 +886,42 @@ mod tests {
         let results = db.search_messages("+1", "hello", 50).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].1, "real hello");
+    }
+
+    #[test]
+    fn migration_v8_defaults_accepted_to_1() {
+        let db = test_db();
+        db.upsert_conversation("+1", "Alice", false).unwrap();
+        let convs = db.load_conversations(100).unwrap();
+        assert!(convs[0].accepted);
+    }
+
+    #[test]
+    fn update_accepted_round_trip() {
+        let db = test_db();
+        db.upsert_conversation("+1", "Alice", false).unwrap();
+        db.update_accepted("+1", false).unwrap();
+        let convs = db.load_conversations(100).unwrap();
+        assert!(!convs[0].accepted);
+
+        db.update_accepted("+1", true).unwrap();
+        let convs = db.load_conversations(100).unwrap();
+        assert!(convs[0].accepted);
+    }
+
+    #[test]
+    fn delete_conversation_removes_all_data() {
+        let db = test_db();
+        db.upsert_conversation("+1", "Alice", false).unwrap();
+        db.insert_message("+1", "Alice", "2025-01-01T00:00:00Z", "hello", false, None, 1000).unwrap();
+        db.upsert_reaction("+1", 1000, "Alice", "Bob", "👍").unwrap();
+        db.save_read_marker("+1", 1).unwrap();
+
+        db.delete_conversation("+1").unwrap();
+
+        let convs = db.load_conversations(100).unwrap();
+        assert!(convs.is_empty());
+        assert_eq!(db.load_reactions("+1").unwrap().len(), 0);
     }
 
     #[test]

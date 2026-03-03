@@ -490,6 +490,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_group_menu(frame, app, size);
     }
 
+    // Message request overlay
+    if app.show_message_request {
+        draw_message_request(frame, app, size);
+    }
+
     // Action menu overlay
     if app.show_action_menu {
         draw_action_menu(frame, app, size);
@@ -548,8 +553,10 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
                 spans.push(Span::raw("  "));
             }
 
-            // Unread dot
-            if has_unread && !is_active {
+            // Unread / message request marker
+            if !conv.accepted {
+                spans.push(Span::styled("? ", Style::default().fg(Color::Magenta)));
+            } else if has_unread && !is_active {
                 spans.push(Span::styled("• ", Style::default().fg(Color::Yellow)));
             } else {
                 spans.push(Span::raw("  "));
@@ -1293,6 +1300,45 @@ fn draw_group_menu(frame: &mut Frame, app: &App, area: Rect) {
             frame.render_widget(popup, inner);
         }
     }
+}
+
+fn draw_message_request(frame: &mut Frame, app: &App, area: Rect) {
+    let conv_id = match app.active_conversation.as_ref() {
+        Some(id) => id,
+        None => return,
+    };
+    let conv = match app.conversations.get(conv_id) {
+        Some(c) => c,
+        None => return,
+    };
+
+    let msg_count = conv.messages.len();
+    let name = &conv.name;
+    let phone = &conv.id;
+
+    let (popup_area, block) = centered_popup(frame, area, 36, 9, " Message Request ");
+    frame.render_widget(block, popup_area);
+
+    let inner = popup_area.inner(ratatui::layout::Margin { vertical: 1, horizontal: 2 });
+    let lines = vec![
+        Line::from(Span::styled(name.as_str(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled(phone.as_str(), Style::default().fg(Color::DarkGray))),
+        Line::from(Span::styled(
+            format!("{} message{}", msg_count, if msg_count == 1 { "" } else { "s" }),
+            Style::default().fg(Color::Gray),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("(a)", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled("ccept / ", Style::default().fg(Color::Gray)),
+            Span::styled("(d)", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled("elete", Style::default().fg(Color::Gray)),
+        ]),
+        Line::from(Span::styled("Esc to go back", Style::default().fg(Color::DarkGray))),
+    ];
+
+    let text = Paragraph::new(lines).alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(text, inner);
 }
 
 fn draw_action_menu(frame: &mut Frame, app: &App, area: Rect) {

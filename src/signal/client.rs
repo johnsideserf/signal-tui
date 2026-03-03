@@ -513,6 +513,40 @@ impl SignalClient {
         Ok(())
     }
 
+    /// Accept or delete a message request.
+    pub async fn send_message_request_response(
+        &self,
+        recipient: &str,
+        is_group: bool,
+        response_type: &str,
+    ) -> Result<()> {
+        let id = Uuid::new_v4().to_string();
+        if let Ok(mut map) = self.pending_requests.lock() {
+            map.insert(id.clone(), ("sendMessageRequestResponse".to_string(), Instant::now()));
+        }
+        let mut params = serde_json::json!({
+            "type": response_type,
+            "account": self.account,
+        });
+        if is_group {
+            params["groupId"] = serde_json::json!(recipient);
+        } else {
+            params["recipient"] = serde_json::json!([recipient]);
+        }
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "sendMessageRequestResponse".to_string(),
+            id,
+            params: Some(params),
+        };
+        let json = serde_json::to_string(&request)?;
+        self.stdin_tx
+            .send(json)
+            .await
+            .context("Failed to send message request response to signal-cli stdin")?;
+        Ok(())
+    }
+
     /// Set the disappearing message timer for a 1:1 contact.
     pub async fn send_update_contact_expiration(
         &self,
@@ -772,7 +806,7 @@ fn parse_rpc_result(method: &str, result: &serde_json::Value, rpc_id: Option<&st
                 .collect();
             Some(SignalEvent::GroupList(groups))
         }
-        "sendReaction" | "remoteDelete" | "sendTypingIndicator" | "sendReceipt" | "updateContact" | "updateGroup" | "quitGroup" => None, // fire-and-forget, no action needed
+        "sendReaction" | "remoteDelete" | "sendTypingIndicator" | "sendReceipt" | "updateContact" | "updateGroup" | "quitGroup" | "sendMessageRequestResponse" => None, // fire-and-forget, no action needed
         _ => None,
     }
 }

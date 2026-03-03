@@ -586,6 +586,17 @@ async fn dispatch_send(
                 app.status_message = format!("Left group \"{}\"", name);
             }
         }
+        SendRequest::MessageRequestResponse { recipient, is_group, response_type } => {
+            if let Err(e) = signal_client.send_message_request_response(&recipient, is_group, &response_type).await {
+                app.status_message = format!("message request error: {e}");
+            } else {
+                app.status_message = match response_type.as_str() {
+                    "accept" => "Message request accepted".to_string(),
+                    "delete" => "Message request deleted".to_string(),
+                    _ => String::new(),
+                };
+            }
+        }
     }
 }
 
@@ -862,6 +873,7 @@ fn populate_demo_data(app: &mut App) {
         unread: 0,
         is_group: false,
         expiration_timer: 0,
+        accepted: true,
     };
 
     // --- Bob: code review ---
@@ -877,6 +889,7 @@ fn populate_demo_data(app: &mut App) {
         unread: 0,
         is_group: false,
         expiration_timer: 0,
+        accepted: true,
     };
 
     // --- Carol: single unread ---
@@ -890,6 +903,7 @@ fn populate_demo_data(app: &mut App) {
         unread: 1,
         is_group: false,
         expiration_timer: 0,
+        accepted: true,
     };
 
     // --- Dave: older meetup conversation ---
@@ -905,6 +919,7 @@ fn populate_demo_data(app: &mut App) {
         unread: 0,
         is_group: false,
         expiration_timer: 0,
+        accepted: true,
     };
 
     // --- #Rust Devs: group technical discussion with @mentions ---
@@ -926,6 +941,7 @@ fn populate_demo_data(app: &mut App) {
         unread: 0,
         is_group: true,
         expiration_timer: 0,
+        accepted: true,
     };
 
     // --- #Family: group with unread ---
@@ -943,6 +959,7 @@ fn populate_demo_data(app: &mut App) {
         unread: 2,
         is_group: true,
         expiration_timer: 0,
+        accepted: true,
     };
 
     // Insert conversations and set ordering

@@ -123,6 +123,8 @@ pub struct Conversation {
     pub is_group: bool,
     /// Disappearing message timer in seconds (0 = off)
     pub expiration_timer: i64,
+    /// Whether this conversation has been accepted (message requests are unaccepted)
+    pub accepted: bool,
 }
 
 /// Application state
@@ -309,6 +311,8 @@ pub struct App {
     pub group_menu_filtered: Vec<(String, String)>,
     /// Separate text input buffer for rename/create (avoids disturbing input_buffer)
     pub group_menu_input: String,
+    /// Message request overlay visible
+    pub show_message_request: bool,
 }
 
 /// A search result entry.
@@ -391,6 +395,11 @@ pub enum SendRequest {
     },
     LeaveGroup {
         group_id: String,
+    },
+    MessageRequestResponse {
+        recipient: String,
+        is_group: bool,
+        response_type: String,
     },
 }
 
@@ -916,6 +925,50 @@ impl App {
     }
 
     /// Handle a key press while the reaction picker overlay is open.
+    fn handle_message_request_key(&mut self, code: KeyCode) -> Option<SendRequest> {
+        let conv_id = match self.active_conversation.clone() {
+            Some(id) => id,
+            None => {
+                self.show_message_request = false;
+                return None;
+            }
+        };
+        match code {
+            KeyCode::Char('a') => {
+                let is_group = self.conversations.get(&conv_id).map(|c| c.is_group).unwrap_or(false);
+                if let Some(conv) = self.conversations.get_mut(&conv_id) {
+                    conv.accepted = true;
+                }
+                db_warn(self.db.update_accepted(&conv_id, true), "update_accepted");
+                self.show_message_request = false;
+                Some(SendRequest::MessageRequestResponse {
+                    recipient: conv_id,
+                    is_group,
+                    response_type: "accept".to_string(),
+                })
+            }
+            KeyCode::Char('d') => {
+                let is_group = self.conversations.get(&conv_id).map(|c| c.is_group).unwrap_or(false);
+                self.conversations.remove(&conv_id);
+                self.conversation_order.retain(|id| id != &conv_id);
+                db_warn(self.db.delete_conversation(&conv_id), "delete_conversation");
+                self.show_message_request = false;
+                self.active_conversation = None;
+                Some(SendRequest::MessageRequestResponse {
+                    recipient: conv_id,
+                    is_group,
+                    response_type: "delete".to_string(),
+                })
+            }
+            KeyCode::Esc => {
+                self.show_message_request = false;
+                self.active_conversation = None;
+                None
+            }
+            _ => None,
+        }
+    }
+
     fn handle_reaction_picker_key(&mut self, code: KeyCode) -> Option<SendRequest> {
         match code {
             KeyCode::Char('h') | KeyCode::Left => {
@@ -1645,6 +1698,7 @@ impl App {
             group_menu_filter: String::new(),
             group_menu_filtered: Vec::new(),
             group_menu_input: String::new(),
+            show_message_request: false,
         }
     }
 
@@ -1751,6 +1805,9 @@ impl App {
             Some(c) => c,
             None => return,
         };
+        if !conv.accepted {
+            return;
+        }
         // Collect timestamps grouped by sender phone number
         let mut by_sender: HashMap<String, Vec<i64>> = HashMap::new();
         for msg in conv.messages.iter().skip(start_index) {
@@ -1893,6 +1950,10 @@ impl App {
         }
         if self.show_reaction_picker {
             let send = self.handle_reaction_picker_key(code);
+            return (true, send);
+        }
+        if self.show_message_request {
+            let send = self.handle_message_request_key(code);
             return (true, send);
         }
         if self.group_menu_state.is_some() {
@@ -2336,8 +2397,15 @@ impl App {
             msg.source.clone()
         };
 
-        // Ensure conversation exists (drop the mutable ref immediately)
+        // Ensure conversation exists; detect message requests for new 1:1 from unknown senders
+        let is_new = !self.conversations.contains_key(&conv_id);
         self.get_or_create_conversation(&conv_id, &conv_name, is_group);
+        if is_new && !msg.is_outgoing && !is_group && !self.contact_names.contains_key(&conv_id) {
+            if let Some(conv) = self.conversations.get_mut(&conv_id) {
+                conv.accepted = false;
+                db_warn(self.db.update_accepted(&conv_id, false), "update_accepted");
+            }
+        }
 
         let ts_rfc3339 = msg.timestamp.to_rfc3339();
         let msg_ts_ms = msg.timestamp.timestamp_millis();
@@ -2482,15 +2550,17 @@ impl App {
             if let Some(c) = self.conversations.get_mut(&conv_id) {
                 c.unread += 1;
             }
+            let conv_accepted = self.conversations.get(&conv_id).map(|c| c.accepted).unwrap_or(true);
             let type_enabled = if is_group { self.notify_group } else { self.notify_direct };
-            if type_enabled && !self.muted_conversations.contains(&conv_id) {
+            if type_enabled && conv_accepted && !self.muted_conversations.contains(&conv_id) {
                 self.pending_bell = true;
             }
         }
 
         // Active conversation: send read receipt and advance read marker
+        let conv_accepted = self.conversations.get(&conv_id).map(|c| c.accepted).unwrap_or(true);
         if is_active {
-            if !msg.is_outgoing {
+            if !msg.is_outgoing && conv_accepted {
                 self.queue_single_read_receipt(&sender_id, msg_ts_ms);
             }
             if let Some(conv) = self.conversations.get(&conv_id) {
@@ -2834,6 +2904,18 @@ impl App {
                 }
             }
         }
+        // Auto-accept unaccepted 1:1 conversations whose sender is now a known contact
+        let to_accept: Vec<String> = self.conversations.iter()
+            .filter(|(_, c)| !c.accepted && !c.is_group && self.contact_names.contains_key(&c.id))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in to_accept {
+            if let Some(conv) = self.conversations.get_mut(&id) {
+                conv.accepted = true;
+                db_warn(self.db.update_accepted(&id, true), "update_accepted");
+            }
+        }
+
         // Re-resolve reaction senders: DB stores phone numbers but display
         // needs contact names (or "you" for own reactions).
         self.resolve_stored_names();
@@ -3268,6 +3350,7 @@ impl App {
                     unread: 0,
                     is_group,
                     expiration_timer: 0,
+                    accepted: true,
                 },
             );
             self.conversation_order.push(id.to_string());
@@ -4005,8 +4088,13 @@ impl App {
                 let prefix = if conv.is_group { "#" } else { "" };
                 self.status_message = format!("connected | {}{}", prefix, conv.name);
             }
+            // Show message request overlay for unaccepted conversations
+            self.show_message_request = self.active_conversation.as_ref()
+                .and_then(|id| self.conversations.get(id))
+                .is_some_and(|c| !c.accepted);
         } else {
             self.status_message = "connected | no conversation selected".to_string();
+            self.show_message_request = false;
         }
     }
 
@@ -6082,5 +6170,147 @@ mod tests {
         assert!(req.is_some());
         assert!(matches!(req, Some(SendRequest::RenameGroup { group_id, name }) if group_id == "g1" && name == "New Name"));
         assert_eq!(app.group_menu_state, None);
+    }
+
+    // --- Message request tests ---
+
+    fn msg_from(source: &str) -> SignalMessage {
+        SignalMessage {
+            source: source.to_string(),
+            source_name: None,
+            timestamp: chrono::Utc::now(),
+            body: Some("hello".to_string()),
+            attachments: vec![],
+            group_id: None,
+            group_name: None,
+            is_outgoing: false,
+            destination: None,
+            mentions: vec![],
+            text_styles: vec![],
+            quote: None,
+            expires_in_seconds: 0,
+        }
+    }
+
+    #[test]
+    fn unknown_sender_creates_unaccepted_conversation() {
+        let mut app = test_app();
+        app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
+        assert!(!app.conversations["+1"].accepted);
+    }
+
+    #[test]
+    fn outgoing_sync_creates_accepted_conversation() {
+        let mut app = test_app();
+        let msg = SignalMessage {
+            source: "+10000000000".to_string(),
+            source_name: None,
+            timestamp: chrono::Utc::now(),
+            body: Some("hey".to_string()),
+            attachments: vec![],
+            group_id: None,
+            group_name: None,
+            is_outgoing: true,
+            destination: Some("+1".to_string()),
+            mentions: vec![],
+            text_styles: vec![],
+            quote: None,
+            expires_in_seconds: 0,
+        };
+        app.handle_signal_event(SignalEvent::MessageReceived(msg));
+        assert!(app.conversations["+1"].accepted);
+    }
+
+    #[test]
+    fn known_contact_creates_accepted_conversation() {
+        let mut app = test_app();
+        app.contact_names.insert("+1".to_string(), "Alice".to_string());
+        app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
+        assert!(app.conversations["+1"].accepted);
+    }
+
+    #[test]
+    fn contact_sync_auto_accepts_matching_conversations() {
+        let mut app = test_app();
+        // Message from unknown creates unaccepted
+        app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
+        assert!(!app.conversations["+1"].accepted);
+
+        // Contact list arrives with +1 → auto-accept
+        app.handle_signal_event(SignalEvent::ContactList(vec![
+            Contact { number: "+1".to_string(), name: Some("Alice".to_string()), uuid: None },
+        ]));
+        assert!(app.conversations["+1"].accepted);
+    }
+
+    #[test]
+    fn accept_key_returns_send_request_and_marks_accepted() {
+        let mut app = test_app();
+        app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
+        app.active_conversation = Some("+1".to_string());
+        app.show_message_request = true;
+
+        let req = app.handle_message_request_key(KeyCode::Char('a'));
+        assert!(app.conversations["+1"].accepted);
+        assert!(!app.show_message_request);
+        assert!(matches!(
+            req,
+            Some(SendRequest::MessageRequestResponse { ref response_type, .. })
+            if response_type == "accept"
+        ));
+    }
+
+    #[test]
+    fn delete_key_removes_conversation() {
+        let mut app = test_app();
+        app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
+        app.active_conversation = Some("+1".to_string());
+        app.show_message_request = true;
+
+        let req = app.handle_message_request_key(KeyCode::Char('d'));
+        assert!(!app.conversations.contains_key("+1"));
+        assert!(!app.conversation_order.contains(&"+1".to_string()));
+        assert!(app.active_conversation.is_none());
+        assert!(!app.show_message_request);
+        assert!(matches!(
+            req,
+            Some(SendRequest::MessageRequestResponse { ref response_type, .. })
+            if response_type == "delete"
+        ));
+    }
+
+    #[test]
+    fn esc_closes_message_request_overlay() {
+        let mut app = test_app();
+        app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
+        app.active_conversation = Some("+1".to_string());
+        app.show_message_request = true;
+
+        let req = app.handle_message_request_key(KeyCode::Esc);
+        assert!(req.is_none());
+        assert!(!app.show_message_request);
+        assert!(app.active_conversation.is_none());
+    }
+
+    #[test]
+    fn bell_skipped_for_unaccepted_conversations() {
+        let mut app = test_app();
+        // First message creates the conversation (unaccepted)
+        app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
+        // Bell should NOT have been set
+        assert!(!app.pending_bell);
+    }
+
+    #[test]
+    fn read_receipts_not_sent_for_unaccepted_conversations() {
+        let mut app = test_app();
+        app.send_read_receipts = true;
+        // Create unaccepted conversation and switch to it
+        app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
+        assert!(!app.conversations["+1"].accepted);
+
+        // Try to queue read receipts — should be empty since conv is unaccepted
+        app.queue_read_receipts_for_conv("+1", 0);
+        assert!(app.pending_read_receipts.is_empty());
     }
 }
