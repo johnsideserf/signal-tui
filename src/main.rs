@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use crossterm::{
     cursor::{MoveTo, RestorePosition, SavePosition},
-    event::{self, Event, KeyEventKind},
+    event::{self, EnableMouseCapture, DisableMouseCapture, Event, KeyEventKind},
     execute, queue,
     style::{Print, ResetColor, SetForegroundColor},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -131,7 +131,7 @@ async fn main() -> Result<()> {
     // Set up terminal BEFORE anything else so all errors render in the TUI
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -140,7 +140,7 @@ async fn main() -> Result<()> {
 
     // Restore terminal
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     terminal.show_cursor()?;
 
     if let Err(e) = result {
@@ -628,6 +628,7 @@ async fn run_app(
     app.nerd_fonts = config.nerd_fonts;
     app.reaction_verbose = config.reaction_verbose;
     app.send_read_receipts = config.send_read_receipts;
+    app.mouse_enabled = config.mouse_enabled;
     app.load_from_db()?;
     app.set_connected();
 
@@ -659,28 +660,36 @@ async fn run_app(
         let has_terminal_event = event::poll(POLL_TIMEOUT)?;
 
         if has_terminal_event {
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {
-                    continue;
-                }
-                if !app.handle_global_key(key.modifiers, key.code) {
-                    let (overlay_handled, send_request) = app.handle_overlay_key(key.code);
-                    if let Some(req) = send_request {
-                        dispatch_send(signal_client, &mut app, req).await;
+            match event::read()? {
+                Event::Key(key) => {
+                    if key.kind != KeyEventKind::Press {
+                        continue;
                     }
-                    if !overlay_handled {
-                        let send_request = match app.mode {
-                            InputMode::Normal => {
-                                app.handle_normal_key(key.modifiers, key.code);
-                                None
-                            }
-                            InputMode::Insert => app.handle_insert_key(key.modifiers, key.code),
-                        };
+                    if !app.handle_global_key(key.modifiers, key.code) {
+                        let (overlay_handled, send_request) = app.handle_overlay_key(key.code);
                         if let Some(req) = send_request {
                             dispatch_send(signal_client, &mut app, req).await;
                         }
+                        if !overlay_handled {
+                            let send_request = match app.mode {
+                                InputMode::Normal => {
+                                    app.handle_normal_key(key.modifiers, key.code);
+                                    None
+                                }
+                                InputMode::Insert => app.handle_insert_key(key.modifiers, key.code),
+                            };
+                            if let Some(req) = send_request {
+                                dispatch_send(signal_client, &mut app, req).await;
+                            }
+                        }
                     }
                 }
+                Event::Mouse(mouse) => {
+                    if let Some(req) = app.handle_mouse_event(mouse) {
+                        dispatch_send(signal_client, &mut app, req).await;
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -794,20 +803,26 @@ async fn run_demo_app(
         let has_terminal_event = event::poll(POLL_TIMEOUT)?;
 
         if has_terminal_event {
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {
-                    continue;
-                }
-                if !app.handle_global_key(key.modifiers, key.code) {
-                    let (overlay_handled, _) = app.handle_overlay_key(key.code);
-                    if !overlay_handled {
-                        match app.mode {
-                            InputMode::Normal => app.handle_normal_key(key.modifiers, key.code),
-                            // In demo mode, messages echo locally but don't send
-                            InputMode::Insert => { app.handle_insert_key(key.modifiers, key.code); }
+            match event::read()? {
+                Event::Key(key) => {
+                    if key.kind != KeyEventKind::Press {
+                        continue;
+                    }
+                    if !app.handle_global_key(key.modifiers, key.code) {
+                        let (overlay_handled, _) = app.handle_overlay_key(key.code);
+                        if !overlay_handled {
+                            match app.mode {
+                                InputMode::Normal => app.handle_normal_key(key.modifiers, key.code),
+                                // In demo mode, messages echo locally but don't send
+                                InputMode::Insert => { app.handle_insert_key(key.modifiers, key.code); }
+                            }
                         }
                     }
                 }
+                Event::Mouse(mouse) => {
+                    app.handle_mouse_event(mouse);
+                }
+                _ => {}
             }
         }
 
@@ -873,12 +888,31 @@ fn populate_demo_data(app: &mut App) {
         name: "Alice".to_string(),
         id: alice_id.clone(),
         messages: vec![
-            dm("Alice", ts(9, 15), "Hey! Are you free this weekend?"),
-            dm("you", ts(9, 17), "Yeah, what did you have in mind?"),
-            dm("Alice", ts(9, 18), "There's a farmers market Saturday morning"),
-            dm("you", ts(9, 20), "Sounds great, what time?"),
-            dm("Alice", ts(9, 21), "Opens at 8, but 9 is fine. Less crowded."),
-            dm("you", ts(9, 23), "Perfect, let's do 9"),
+            dm("Alice", ts(8, 0), "Good morning! How's your day going?"),
+            dm("you", ts(8, 5), "Just getting started, coffee in hand"),
+            dm("Alice", ts(8, 10), "Nice! I've been up since 6, went for a run"),
+            dm("you", ts(8, 15), "Impressive. I can barely get out of bed before 7"),
+            dm("Alice", ts(8, 20), "Ha! It gets easier once you build the habit"),
+            dm("you", ts(8, 25), "That's what everyone says..."),
+            dm("Alice", ts(8, 30), "Trust me, after a week it becomes automatic"),
+            dm("you", ts(8, 35), "Maybe I'll try next week"),
+            dm("Alice", ts(8, 40), "I'll hold you to that!"),
+            dm("you", ts(8, 45), "Please don't"),
+            dm("Alice", ts(9, 0), "Too late, setting a reminder now"),
+            dm("you", ts(9, 5), "Oh no..."),
+            dm("Alice", ts(9, 10), "Anyway, are you free this weekend?"),
+            dm("you", ts(9, 12), "Yeah, what did you have in mind?"),
+            dm("Alice", ts(9, 15), "There's a farmers market Saturday morning"),
+            dm("you", ts(9, 17), "Sounds great, what time?"),
+            dm("Alice", ts(9, 18), "Opens at 8, but 9 is fine. Less crowded."),
+            dm("you", ts(9, 20), "Perfect, let's do 9"),
+            dm("Alice", ts(9, 22), "Great! I'll pick you up at 8:45"),
+            dm("you", ts(9, 23), "Sounds like a plan"),
+            dm("Alice", ts(9, 25), "We should also check out that new bakery nearby"),
+            dm("you", ts(9, 27), "Oh yeah, I heard their sourdough is amazing"),
+            dm("Alice", ts(9, 30), "And they have those fancy croissants too"),
+            dm("you", ts(9, 32), "You had me at croissants"),
+            dm("Alice", ts(9, 35), "Perfect, it's a date then! See you Saturday"),
         ],
         unread: 0,
         is_group: false,

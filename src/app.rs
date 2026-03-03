@@ -1,5 +1,6 @@
 use chrono::{DateTime, Local, Utc};
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::Rect;
 use ratatui::text::Line;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -315,6 +316,16 @@ pub struct App {
     pub group_menu_input: String,
     /// Message request overlay visible
     pub show_message_request: bool,
+    /// Inner area of sidebar List widget (None when sidebar is hidden)
+    pub mouse_sidebar_inner: Option<Rect>,
+    /// Inner area of messages block
+    pub mouse_messages_area: Rect,
+    /// Outer area of input box (includes borders)
+    pub mouse_input_area: Rect,
+    /// Badge + "> " length in the input box
+    pub mouse_input_prefix_len: u16,
+    /// Enable mouse support (click sidebar, scroll messages, click links)
+    pub mouse_enabled: bool,
 }
 
 /// A search result entry.
@@ -491,6 +502,13 @@ pub const SETTINGS: &[SettingDef] = &[
         get: |a| a.send_read_receipts,
         set: |a, v| a.send_read_receipts = v,
         save: Some(|c, v| c.send_read_receipts = v),
+        on_toggle: None,
+    },
+    SettingDef {
+        label: "Mouse support",
+        get: |a| a.mouse_enabled,
+        set: |a, v| a.mouse_enabled = v,
+        save: Some(|c, v| c.mouse_enabled = v),
         on_toggle: None,
     },
 ];
@@ -1710,6 +1728,11 @@ impl App {
             group_menu_filtered: Vec::new(),
             group_menu_input: String::new(),
             show_message_request: false,
+            mouse_sidebar_inner: None,
+            mouse_messages_area: Rect::default(),
+            mouse_input_area: Rect::default(),
+            mouse_input_prefix_len: 0,
+            mouse_enabled: true,
         }
     }
 
@@ -4252,6 +4275,102 @@ impl App {
             }
         }
     }
+
+    // --- Mouse support ---
+
+    /// Returns true if any overlay is currently visible (mouse events should be ignored).
+    pub fn has_overlay(&self) -> bool {
+        self.show_settings
+            || self.show_help
+            || self.show_contacts
+            || self.show_search
+            || self.show_file_browser
+            || self.show_action_menu
+            || self.show_reaction_picker
+            || self.show_delete_confirm
+            || self.group_menu_state.is_some()
+            || self.show_message_request
+            || self.autocomplete_visible
+    }
+
+    /// Handle a mouse event. Returns an optional SendRequest (currently unused but future-proof).
+    pub fn handle_mouse_event(&mut self, event: MouseEvent) -> Option<SendRequest> {
+        if !self.mouse_enabled || self.has_overlay() {
+            return None;
+        }
+        match event.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.handle_left_click(event.column, event.row);
+            }
+            MouseEventKind::ScrollUp => {
+                if self.is_in_rect(event.column, event.row, self.mouse_messages_area) {
+                    self.scroll_offset = self.scroll_offset.saturating_add(3);
+                    self.focused_msg_index = None;
+                }
+            }
+            MouseEventKind::ScrollDown => {
+                if self.is_in_rect(event.column, event.row, self.mouse_messages_area) {
+                    self.scroll_offset = self.scroll_offset.saturating_sub(3);
+                    self.focused_msg_index = None;
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+
+    fn handle_left_click(&mut self, col: u16, row: u16) {
+        // 1. Check link regions first (highest priority — links overlay everything)
+        for link in &self.link_regions {
+            let text_len = link.text.len() as u16;
+            if row == link.y && col >= link.x && col < link.x + text_len {
+                let url = link.url.clone();
+                self.open_url(&url);
+                return;
+            }
+        }
+
+        // 2. Sidebar click — switch conversation
+        if let Some(inner) = self.mouse_sidebar_inner {
+            if self.is_in_rect(col, row, inner) {
+                let index = (row - inner.y) as usize;
+                if index < self.conversation_order.len() {
+                    let conv_id = self.conversation_order[index].clone();
+                    self.join_conversation(&conv_id);
+                }
+                return;
+            }
+        }
+
+        // 3. Input area click — position cursor and enter Insert mode
+        if self.is_in_rect(col, row, self.mouse_input_area) {
+            self.mode = InputMode::Insert;
+            // Content starts after left border (1) + prefix
+            let content_start_col = self.mouse_input_area.x + 1 + self.mouse_input_prefix_len;
+            if col >= content_start_col {
+                let text_width = (self.mouse_input_area.width.saturating_sub(2)) as usize
+                    - self.mouse_input_prefix_len as usize;
+                let input_scroll = self.input_cursor.saturating_sub(text_width);
+                let click_offset = (col - content_start_col) as usize;
+                self.input_cursor = (input_scroll + click_offset).min(self.input_buffer.len());
+            } else {
+                self.input_cursor = 0;
+            }
+        }
+    }
+
+    fn is_in_rect(&self, col: u16, row: u16, rect: Rect) -> bool {
+        col >= rect.x
+            && col < rect.x + rect.width
+            && row >= rect.y
+            && row < rect.y + rect.height
+    }
+
+    fn open_url(&mut self, url: &str) {
+        if let Err(e) = open::that(url) {
+            self.status_message = format!("Failed to open URL: {e}");
+        }
+    }
 }
 
 /// Shorten a phone number for display: +15551234567 -> +1***4567
@@ -6465,5 +6584,163 @@ mod tests {
         // Try to queue read receipts — should be empty since conv is blocked
         app.queue_read_receipts_for_conv("+1", 0);
         assert!(app.pending_read_receipts.is_empty());
+    }
+
+    // --- Mouse support tests ---
+
+    fn mouse_down(col: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: col,
+            row,
+            modifiers: KeyModifiers::empty(),
+        }
+    }
+
+    fn mouse_scroll_up(col: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: col,
+            row,
+            modifiers: KeyModifiers::empty(),
+        }
+    }
+
+    fn mouse_scroll_down(col: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: col,
+            row,
+            modifiers: KeyModifiers::empty(),
+        }
+    }
+
+    #[test]
+    fn mouse_disabled_ignores_events() {
+        let mut app = test_app();
+        app.mouse_enabled = false;
+        app.mouse_messages_area = Rect::new(0, 0, 80, 20);
+        let result = app.handle_mouse_event(mouse_scroll_up(10, 10));
+        assert!(result.is_none());
+        assert_eq!(app.scroll_offset, 0);
+    }
+
+    #[test]
+    fn mouse_overlay_ignores_events() {
+        let mut app = test_app();
+        app.show_settings = true;
+        app.mouse_messages_area = Rect::new(0, 0, 80, 20);
+        let result = app.handle_mouse_event(mouse_scroll_up(10, 10));
+        assert!(result.is_none());
+        assert_eq!(app.scroll_offset, 0);
+    }
+
+    #[test]
+    fn mouse_scroll_up_increases_offset() {
+        let mut app = test_app();
+        app.mouse_messages_area = Rect::new(0, 0, 80, 20);
+        app.handle_mouse_event(mouse_scroll_up(10, 10));
+        assert_eq!(app.scroll_offset, 3);
+    }
+
+    #[test]
+    fn mouse_scroll_down_decreases_offset() {
+        let mut app = test_app();
+        app.mouse_messages_area = Rect::new(0, 0, 80, 20);
+        app.scroll_offset = 10;
+        app.handle_mouse_event(mouse_scroll_down(10, 10));
+        assert_eq!(app.scroll_offset, 7);
+    }
+
+    #[test]
+    fn mouse_scroll_down_saturates_at_zero() {
+        let mut app = test_app();
+        app.mouse_messages_area = Rect::new(0, 0, 80, 20);
+        app.scroll_offset = 1;
+        app.handle_mouse_event(mouse_scroll_down(10, 10));
+        assert_eq!(app.scroll_offset, 0);
+    }
+
+    #[test]
+    fn mouse_sidebar_click_switches_conversation() {
+        let mut app = test_app();
+        // Create two conversations
+        app.get_or_create_conversation("+1", "Alice", false);
+        app.get_or_create_conversation("+2", "Bob", false);
+        app.active_conversation = Some("+1".to_string());
+
+        // Sidebar inner starts at row 0, so clicking row 1 selects the second conv
+        app.mouse_sidebar_inner = Some(Rect::new(0, 0, 20, 10));
+        app.handle_mouse_event(mouse_down(5, 1));
+        assert_eq!(app.active_conversation.as_deref(), Some("+2"));
+    }
+
+    #[test]
+    fn mouse_input_click_positions_cursor() {
+        let mut app = test_app();
+        app.mode = InputMode::Normal;
+        app.input_buffer = "hello world".to_string();
+        app.input_cursor = 0;
+        // Input area with borders: x=10, y=20, w=40, h=3
+        app.mouse_input_area = Rect::new(10, 20, 40, 3);
+        app.mouse_input_prefix_len = 2; // "> "
+
+        // Click at column 18 (inside input area)
+        // content_start_col = 10 + 1 + 2 = 13, so click_offset = 18 - 13 = 5
+        app.handle_mouse_event(mouse_down(18, 21));
+        assert_eq!(app.mode, InputMode::Insert);
+        assert_eq!(app.input_cursor, 5);
+    }
+
+    #[test]
+    fn has_overlay_detects_all_overlays() {
+        let mut app = test_app();
+        assert!(!app.has_overlay());
+
+        app.show_settings = true;
+        assert!(app.has_overlay());
+        app.show_settings = false;
+
+        app.show_help = true;
+        assert!(app.has_overlay());
+        app.show_help = false;
+
+        app.show_contacts = true;
+        assert!(app.has_overlay());
+        app.show_contacts = false;
+
+        app.show_search = true;
+        assert!(app.has_overlay());
+        app.show_search = false;
+
+        app.show_file_browser = true;
+        assert!(app.has_overlay());
+        app.show_file_browser = false;
+
+        app.show_action_menu = true;
+        assert!(app.has_overlay());
+        app.show_action_menu = false;
+
+        app.show_reaction_picker = true;
+        assert!(app.has_overlay());
+        app.show_reaction_picker = false;
+
+        app.show_delete_confirm = true;
+        assert!(app.has_overlay());
+        app.show_delete_confirm = false;
+
+        app.group_menu_state = Some(GroupMenuState::Menu);
+        assert!(app.has_overlay());
+        app.group_menu_state = None;
+
+        app.show_message_request = true;
+        assert!(app.has_overlay());
+        app.show_message_request = false;
+
+        app.autocomplete_visible = true;
+        assert!(app.has_overlay());
+        app.autocomplete_visible = false;
+
+        assert!(!app.has_overlay());
     }
 }

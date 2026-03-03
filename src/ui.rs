@@ -443,6 +443,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_sidebar(frame, app, horizontal[0]);
         draw_chat_area(frame, app, horizontal[1])
     } else {
+        app.mouse_sidebar_inner = None;
         draw_chat_area(frame, app, body_area)
     };
 
@@ -524,7 +525,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 }
 
-fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
     let max_name_width = (area.width as usize).saturating_sub(5); // "• # " + margin
 
     let items: Vec<ListItem> = app
@@ -596,14 +597,14 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
 
-    let sidebar = List::new(items).block(
-        Block::default()
-            .borders(Borders::RIGHT)
-            .border_type(BorderType::Rounded)
-            .title(" Chats ")
-            .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-    );
+    let block = Block::default()
+        .borders(Borders::RIGHT)
+        .border_type(BorderType::Rounded)
+        .title(" Chats ")
+        .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+    app.mouse_sidebar_inner = Some(block.inner(area));
 
+    let sidebar = List::new(items).block(block);
     frame.render_widget(sidebar, area);
 }
 
@@ -619,6 +620,7 @@ fn draw_chat_area(frame: &mut Frame, app: &mut App, area: Rect) -> Rect {
     let messages_area = chat_layout[0];
     let input_area = chat_layout[1];
 
+    app.mouse_input_area = input_area;
     draw_messages(frame, app, messages_area);
     draw_input(frame, app, input_area);
     input_area
@@ -671,6 +673,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let inner = block.inner(area);
+    app.mouse_messages_area = inner;
     frame.render_widget(block, area);
 
     let messages = match &app.active_conversation {
@@ -1592,7 +1595,7 @@ fn find_focused_msg_index(
     }
 }
 
-fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
     let border_color = match app.mode {
         InputMode::Insert => Color::Cyan,
         InputMode::Normal => Color::Yellow,
@@ -1641,6 +1644,7 @@ fn draw_input(frame: &mut Frame, app: &App, area: Rect) {
     let inner_width = area.width.saturating_sub(2) as usize;
     let prefix = "> ";
     let prefix_len = prefix.len() + badge_len;
+    app.mouse_input_prefix_len = prefix_len as u16;
     let text_width = inner_width.saturating_sub(prefix_len); // usable chars for buffer text
 
     if app.input_buffer.is_empty() && badge.is_none() {

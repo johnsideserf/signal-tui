@@ -51,6 +51,10 @@ pub struct Config {
     /// Send read receipts to message senders when viewing conversations
     #[serde(default = "default_true")]
     pub send_read_receipts: bool,
+
+    /// Enable mouse support (click sidebar, scroll messages, click links)
+    #[serde(default = "default_true")]
+    pub mouse_enabled: bool,
 }
 
 fn default_true() -> bool {
@@ -82,6 +86,7 @@ impl Default for Config {
             nerd_fonts: false,
             reaction_verbose: false,
             send_read_receipts: true,
+            mouse_enabled: true,
         }
     }
 }
