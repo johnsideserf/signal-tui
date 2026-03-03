@@ -173,6 +173,17 @@ impl Database {
             )?;
         }
 
+        if version < 9 {
+            self.conn.execute_batch(
+                "
+                BEGIN;
+                ALTER TABLE conversations ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0;
+                UPDATE schema_version SET version = 9;
+                COMMIT;
+                ",
+            )?;
+        }
+
         Ok(())
     }
 
@@ -635,6 +646,26 @@ impl Database {
         Ok(ids.into_iter().collect())
     }
 
+    // --- Blocked conversations ---
+
+    pub fn set_blocked(&self, conv_id: &str, blocked: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE conversations SET blocked = ?2 WHERE id = ?1",
+            params![conv_id, blocked as i32],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_blocked(&self) -> Result<std::collections::HashSet<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM conversations WHERE blocked = 1",
+        )?;
+        let ids: Vec<String> = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(ids.into_iter().collect())
+    }
+
     // --- Disappearing messages ---
 
     pub fn update_expiration_timer(&self, conv_id: &str, seconds: i64) -> Result<()> {
@@ -922,6 +953,30 @@ mod tests {
         let convs = db.load_conversations(100).unwrap();
         assert!(convs.is_empty());
         assert_eq!(db.load_reactions("+1").unwrap().len(), 0);
+    }
+
+    #[test]
+    fn migration_v9_defaults_blocked_to_0() {
+        let db = test_db();
+        db.upsert_conversation("+1", "Alice", false).unwrap();
+        let blocked = db.load_blocked().unwrap();
+        assert!(!blocked.contains("+1"));
+    }
+
+    #[test]
+    fn blocked_round_trip() {
+        let db = test_db();
+        db.upsert_conversation("+1", "Alice", false).unwrap();
+        db.upsert_conversation("+2", "Bob", false).unwrap();
+
+        db.set_blocked("+1", true).unwrap();
+        let blocked = db.load_blocked().unwrap();
+        assert!(blocked.contains("+1"));
+        assert!(!blocked.contains("+2"));
+
+        db.set_blocked("+1", false).unwrap();
+        let blocked = db.load_blocked().unwrap();
+        assert!(!blocked.contains("+1"));
     }
 
     #[test]

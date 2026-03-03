@@ -588,6 +588,9 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
             if is_muted {
                 spans.push(Span::styled(" ~", Style::default().fg(Color::DarkGray)));
             }
+            if app.blocked_conversations.contains(id) {
+                spans.push(Span::styled(" x", Style::default().fg(Color::Red)));
+            }
 
             ListItem::new(Line::from(spans))
         })
