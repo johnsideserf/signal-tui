@@ -1968,7 +1968,19 @@ fn parse_text_styles(data: &serde_json::Value) -> Vec<TextStyle> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
     use serde_json::json;
+
+    fn make_resp(params: serde_json::Value) -> JsonRpcResponse {
+        JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            result: None,
+            error: None,
+            method: Some("receive".to_string()),
+            params: Some(params),
+        }
+    }
 
     // --- Test 2: listContacts parsing populates contacts ---
 
@@ -2144,66 +2156,43 @@ mod tests {
         assert!(parse_rpc_result("send", &result, None).is_none());
     }
 
-    #[test]
-    fn parse_receipt_event_extracts_type_and_timestamps() {
-        // signal-cli uses boolean fields: isDelivery, isRead, isViewed
-        let resp = JsonRpcResponse {
-            jsonrpc: "2.0".to_string(),
-            id: None,
-            result: None,
-            error: None,
-            method: Some("receive".to_string()),
-            params: Some(json!({
-                "envelope": {
-                    "sourceNumber": "+15551234567",
-                    "timestamp": 1700000000000_i64,
-                    "receiptMessage": {
-                        "when": 1700000000000_i64,
-                        "isDelivery": true,
-                        "isRead": false,
-                        "isViewed": false,
-                        "timestamps": [1700000000001_i64, 1700000000002_i64]
-                    }
+    #[rstest]
+    #[case(true, false, false, "DELIVERY", 2)]
+    #[case(false, true, false, "READ", 1)]
+    fn parse_receipt_event(
+        #[case] is_delivery: bool,
+        #[case] is_read: bool,
+        #[case] is_viewed: bool,
+        #[case] expected_type: &str,
+        #[case] expected_count: usize,
+    ) {
+        let mut timestamps = vec![json!(1700000000001_i64)];
+        if expected_count == 2 {
+            timestamps.push(json!(1700000000002_i64));
+        }
+        let resp = make_resp(json!({
+            "envelope": {
+                "sourceNumber": "+15551234567",
+                "timestamp": 1700000000000_i64,
+                "receiptMessage": {
+                    "when": 1700000000000_i64,
+                    "isDelivery": is_delivery,
+                    "isRead": is_read,
+                    "isViewed": is_viewed,
+                    "timestamps": timestamps
                 }
-            })),
-        };
+            }
+        }));
         let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
         match event {
             SignalEvent::ReceiptReceived { sender, receipt_type, timestamps } => {
                 assert_eq!(sender, "+15551234567");
-                assert_eq!(receipt_type, "DELIVERY");
-                assert_eq!(timestamps, vec![1700000000001, 1700000000002]);
-            }
-            _ => panic!("Expected ReceiptReceived, got {:?}", event),
-        }
-    }
-
-    #[test]
-    fn parse_receipt_event_read() {
-        let resp = JsonRpcResponse {
-            jsonrpc: "2.0".to_string(),
-            id: None,
-            result: None,
-            error: None,
-            method: Some("receive".to_string()),
-            params: Some(json!({
-                "envelope": {
-                    "sourceNumber": "+15551234567",
-                    "timestamp": 1700000000000_i64,
-                    "receiptMessage": {
-                        "when": 1700000000000_i64,
-                        "isDelivery": false,
-                        "isRead": true,
-                        "isViewed": false,
-                        "timestamps": [1700000000001_i64]
-                    }
+                assert_eq!(receipt_type, expected_type);
+                assert_eq!(timestamps.len(), expected_count);
+                assert_eq!(timestamps[0], 1700000000001);
+                if expected_count == 2 {
+                    assert_eq!(timestamps[1], 1700000000002);
                 }
-            })),
-        };
-        let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
-        match event {
-            SignalEvent::ReceiptReceived { receipt_type, .. } => {
-                assert_eq!(receipt_type, "READ");
             }
             _ => panic!("Expected ReceiptReceived, got {:?}", event),
         }
@@ -2483,63 +2472,28 @@ mod tests {
 
     // --- System message tests ---
 
-    #[test]
-    fn parse_call_message_voice() {
-        let resp = JsonRpcResponse {
-            jsonrpc: "2.0".to_string(),
-            id: None,
-            result: None,
-            error: None,
-            method: Some("receive".to_string()),
-            params: Some(json!({
-                "envelope": {
-                    "sourceNumber": "+15551234567",
-                    "sourceName": "Alice",
-                    "timestamp": 1700000000000_i64,
-                    "callMessage": {
-                        "offerMessage": {
-                            "type": "AUDIO_CALL",
-                            "id": 12345
-                        }
+    #[rstest]
+    #[case("AUDIO_CALL", "Missed voice call")]
+    #[case("VIDEO_CALL", "Missed video call")]
+    fn parse_call_message(#[case] call_type: &str, #[case] expected_body: &str) {
+        let resp = make_resp(json!({
+            "envelope": {
+                "sourceNumber": "+15551234567",
+                "sourceName": "Alice",
+                "timestamp": 1700000000000_i64,
+                "callMessage": {
+                    "offerMessage": {
+                        "type": call_type,
+                        "id": 12345
                     }
                 }
-            })),
-        };
+            }
+        }));
         let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
         match event {
             SignalEvent::SystemMessage { conv_id, body, .. } => {
                 assert_eq!(conv_id, "+15551234567");
-                assert_eq!(body, "Missed voice call");
-            }
-            _ => panic!("Expected SystemMessage, got {:?}", event),
-        }
-    }
-
-    #[test]
-    fn parse_call_message_video() {
-        let resp = JsonRpcResponse {
-            jsonrpc: "2.0".to_string(),
-            id: None,
-            result: None,
-            error: None,
-            method: Some("receive".to_string()),
-            params: Some(json!({
-                "envelope": {
-                    "sourceNumber": "+15551234567",
-                    "timestamp": 1700000000000_i64,
-                    "callMessage": {
-                        "offerMessage": {
-                            "type": "VIDEO_CALL",
-                            "id": 12345
-                        }
-                    }
-                }
-            })),
-        };
-        let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
-        match event {
-            SignalEvent::SystemMessage { body, .. } => {
-                assert_eq!(body, "Missed video call");
+                assert_eq!(body, expected_body);
             }
             _ => panic!("Expected SystemMessage, got {:?}", event),
         }
@@ -2630,62 +2584,27 @@ mod tests {
         }
     }
 
-    #[test]
-    fn parse_expiration_update() {
-        let resp = JsonRpcResponse {
-            jsonrpc: "2.0".to_string(),
-            id: None,
-            result: None,
-            error: None,
-            method: Some("receive".to_string()),
-            params: Some(json!({
-                "envelope": {
-                    "sourceNumber": "+15551234567",
+    #[rstest]
+    #[case(604800, "Disappearing messages set to 1 week")]
+    #[case(0, "Disappearing messages disabled")]
+    fn parse_expiration(#[case] expire_seconds: i64, #[case] expected_body: &str) {
+        let resp = make_resp(json!({
+            "envelope": {
+                "sourceNumber": "+15551234567",
+                "timestamp": 1700000000000_i64,
+                "dataMessage": {
                     "timestamp": 1700000000000_i64,
-                    "dataMessage": {
-                        "timestamp": 1700000000000_i64,
-                        "isExpirationUpdate": true,
-                        "expiresInSeconds": 604800
-                    }
+                    "isExpirationUpdate": true,
+                    "expiresInSeconds": expire_seconds
                 }
-            })),
-        };
+            }
+        }));
         let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
         match event {
             SignalEvent::ExpirationTimerChanged { conv_id, seconds, body, .. } => {
                 assert_eq!(conv_id, "+15551234567");
-                assert_eq!(seconds, 604800);
-                assert_eq!(body, "Disappearing messages set to 1 week");
-            }
-            _ => panic!("Expected ExpirationTimerChanged, got {:?}", event),
-        }
-    }
-
-    #[test]
-    fn parse_expiration_disabled() {
-        let resp = JsonRpcResponse {
-            jsonrpc: "2.0".to_string(),
-            id: None,
-            result: None,
-            error: None,
-            method: Some("receive".to_string()),
-            params: Some(json!({
-                "envelope": {
-                    "sourceNumber": "+15551234567",
-                    "timestamp": 1700000000000_i64,
-                    "dataMessage": {
-                        "timestamp": 1700000000000_i64,
-                        "isExpirationUpdate": true,
-                        "expiresInSeconds": 0
-                    }
-                }
-            })),
-        };
-        let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
-        match event {
-            SignalEvent::ExpirationTimerChanged { seconds, body, .. } => {
-                assert_eq!(seconds, 0);
-                assert_eq!(body, "Disappearing messages disabled");
+                assert_eq!(seconds, expire_seconds);
+                assert_eq!(body, expected_body);
             }
             _ => panic!("Expected ExpirationTimerChanged, got {:?}", event),
         }
@@ -2747,82 +2666,25 @@ mod tests {
 
     // --- Sticker message tests ---
 
-    #[test]
-    fn parse_sticker_message_with_emoji() {
-        let resp = JsonRpcResponse {
-            jsonrpc: "2.0".to_string(),
-            id: None,
-            result: None,
-            error: None,
-            method: Some("receive".to_string()),
-            params: Some(json!({
-                "envelope": {
-                    "sourceNumber": "+15551234567",
-                    "sourceName": "Alice",
-                    "timestamp": 1700000000000_i64,
-                    "dataMessage": {
-                        "timestamp": 1700000000000_i64,
-                        "sticker": {
-                            "packId": "abc123",
-                            "stickerId": 5,
-                            "emoji": "\u{1F602}"
-                        }
-                    }
-                }
-            })),
-        };
-        let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
-        match event {
-            SignalEvent::MessageReceived(msg) => {
-                assert_eq!(msg.body.as_deref(), Some("[Sticker: \u{1F602}]"));
-                assert!(!msg.is_outgoing);
-            }
-            _ => panic!("Expected MessageReceived, got {:?}", event),
+    #[rstest]
+    #[case(Some("\u{1F602}"), false, "[Sticker: \u{1F602}]", false)]
+    #[case(None, false, "[Sticker]", false)]
+    #[case(Some("\u{1F602}"), true, "[Sticker: \u{1F602}]", true)]
+    fn parse_sticker_message(
+        #[case] emoji: Option<&str>,
+        #[case] is_sync: bool,
+        #[case] expected_body: &str,
+        #[case] expected_outgoing: bool,
+    ) {
+        let mut sticker = json!({
+            "packId": "abc123",
+            "stickerId": 5
+        });
+        if let Some(e) = emoji {
+            sticker["emoji"] = json!(e);
         }
-    }
-
-    #[test]
-    fn parse_sticker_message_without_emoji() {
-        let resp = JsonRpcResponse {
-            jsonrpc: "2.0".to_string(),
-            id: None,
-            result: None,
-            error: None,
-            method: Some("receive".to_string()),
-            params: Some(json!({
-                "envelope": {
-                    "sourceNumber": "+15551234567",
-                    "sourceName": "Alice",
-                    "timestamp": 1700000000000_i64,
-                    "dataMessage": {
-                        "timestamp": 1700000000000_i64,
-                        "sticker": {
-                            "packId": "abc123",
-                            "stickerId": 5
-                        }
-                    }
-                }
-            })),
-        };
-        let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
-        match event {
-            SignalEvent::MessageReceived(msg) => {
-                assert_eq!(msg.body.as_deref(), Some("[Sticker]"));
-                assert!(!msg.is_outgoing);
-            }
-            _ => panic!("Expected MessageReceived, got {:?}", event),
-        }
-    }
-
-    #[test]
-    fn parse_sticker_sync() {
-        let resp = JsonRpcResponse {
-            jsonrpc: "2.0".to_string(),
-            id: None,
-            result: None,
-            error: None,
-            method: Some("receive".to_string()),
-            params: Some(json!({
+        let resp = if is_sync {
+            make_resp(json!({
                 "envelope": {
                     "sourceNumber": "+15551234567",
                     "timestamp": 1700000000000_i64,
@@ -2830,22 +2692,32 @@ mod tests {
                         "sentMessage": {
                             "timestamp": 1700000000000_i64,
                             "destinationNumber": "+15559876543",
-                            "sticker": {
-                                "packId": "abc123",
-                                "stickerId": 5,
-                                "emoji": "\u{1F602}"
-                            }
+                            "sticker": sticker
                         }
                     }
                 }
-            })),
+            }))
+        } else {
+            make_resp(json!({
+                "envelope": {
+                    "sourceNumber": "+15551234567",
+                    "sourceName": "Alice",
+                    "timestamp": 1700000000000_i64,
+                    "dataMessage": {
+                        "timestamp": 1700000000000_i64,
+                        "sticker": sticker
+                    }
+                }
+            }))
         };
         let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
         match event {
             SignalEvent::MessageReceived(msg) => {
-                assert_eq!(msg.body.as_deref(), Some("[Sticker: \u{1F602}]"));
-                assert!(msg.is_outgoing);
-                assert_eq!(msg.destination.as_deref(), Some("+15559876543"));
+                assert_eq!(msg.body.as_deref(), Some(expected_body));
+                assert_eq!(msg.is_outgoing, expected_outgoing);
+                if is_sync {
+                    assert_eq!(msg.destination.as_deref(), Some("+15559876543"));
+                }
             }
             _ => panic!("Expected MessageReceived, got {:?}", event),
         }
@@ -2853,15 +2725,35 @@ mod tests {
 
     // --- View-once message tests ---
 
-    #[test]
-    fn parse_view_once_message() {
-        let resp = JsonRpcResponse {
-            jsonrpc: "2.0".to_string(),
-            id: None,
-            result: None,
-            error: None,
-            method: Some("receive".to_string()),
-            params: Some(json!({
+    #[rstest]
+    #[case(true, false, "[View-once message]")]
+    #[case(false, false, "normal text")]
+    #[case(true, true, "[View-once message]")]
+    fn parse_view_once(
+        #[case] view_once: bool,
+        #[case] is_sync: bool,
+        #[case] expected_body: &str,
+    ) {
+        let resp = if is_sync {
+            make_resp(json!({
+                "envelope": {
+                    "sourceNumber": "+15551234567",
+                    "timestamp": 1700000000000_i64,
+                    "syncMessage": {
+                        "sentMessage": {
+                            "timestamp": 1700000000000_i64,
+                            "destinationNumber": "+15559876543",
+                            "message": "secret outgoing",
+                            "viewOnce": view_once,
+                            "attachments": [
+                                {"contentType": "image/png", "filename": "secret.png", "size": 999}
+                            ]
+                        }
+                    }
+                }
+            }))
+        } else if view_once {
+            make_resp(json!({
                 "envelope": {
                     "sourceNumber": "+15551234567",
                     "sourceName": "Alice",
@@ -2875,27 +2767,9 @@ mod tests {
                         ]
                     }
                 }
-            })),
-        };
-        let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
-        match event {
-            SignalEvent::MessageReceived(msg) => {
-                assert_eq!(msg.body.as_deref(), Some("[View-once message]"));
-                assert!(msg.attachments.is_empty());
-            }
-            _ => panic!("Expected MessageReceived, got {:?}", event),
-        }
-    }
-
-    #[test]
-    fn parse_view_once_false_passes_through() {
-        let resp = JsonRpcResponse {
-            jsonrpc: "2.0".to_string(),
-            id: None,
-            result: None,
-            error: None,
-            method: Some("receive".to_string()),
-            params: Some(json!({
+            }))
+        } else {
+            make_resp(json!({
                 "envelope": {
                     "sourceNumber": "+15551234567",
                     "sourceName": "Alice",
@@ -2906,49 +2780,18 @@ mod tests {
                         "viewOnce": false
                     }
                 }
-            })),
+            }))
         };
         let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
         match event {
             SignalEvent::MessageReceived(msg) => {
-                assert_eq!(msg.body.as_deref(), Some("normal text"));
-            }
-            _ => panic!("Expected MessageReceived, got {:?}", event),
-        }
-    }
-
-    #[test]
-    fn parse_view_once_sync() {
-        let resp = JsonRpcResponse {
-            jsonrpc: "2.0".to_string(),
-            id: None,
-            result: None,
-            error: None,
-            method: Some("receive".to_string()),
-            params: Some(json!({
-                "envelope": {
-                    "sourceNumber": "+15551234567",
-                    "timestamp": 1700000000000_i64,
-                    "syncMessage": {
-                        "sentMessage": {
-                            "timestamp": 1700000000000_i64,
-                            "destinationNumber": "+15559876543",
-                            "message": "secret outgoing",
-                            "viewOnce": true,
-                            "attachments": [
-                                {"contentType": "image/png", "filename": "secret.png", "size": 999}
-                            ]
-                        }
-                    }
+                assert_eq!(msg.body.as_deref(), Some(expected_body));
+                if view_once {
+                    assert!(msg.attachments.is_empty());
                 }
-            })),
-        };
-        let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
-        match event {
-            SignalEvent::MessageReceived(msg) => {
-                assert!(msg.is_outgoing);
-                assert_eq!(msg.body.as_deref(), Some("[View-once message]"));
-                assert!(msg.attachments.is_empty());
+                if is_sync {
+                    assert!(msg.is_outgoing);
+                }
             }
             _ => panic!("Expected MessageReceived, got {:?}", event),
         }

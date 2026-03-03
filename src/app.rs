@@ -4476,7 +4476,6 @@ impl App {
         self.update_status();
     }
 
-
     fn update_status(&mut self) {
         if let Some(ref id) = self.active_conversation {
             if let Some(conv) = self.conversations.get(id) {
@@ -4747,8 +4746,10 @@ mod tests {
     use super::*;
     use crate::db::Database;
     use crate::signal::types::{Contact, Group, Mention, SignalEvent, SignalMessage, StyleType, TextStyle};
+    use rstest::{fixture, rstest};
 
-    fn test_app() -> App {
+    #[fixture]
+    fn app() -> App {
         let db = Database::open_in_memory().unwrap();
         let mut app = App::new("+10000000000".to_string(), db);
         app.set_connected();
@@ -4757,9 +4758,8 @@ mod tests {
 
     // --- Contacts/groups only populate the name lookup, not the sidebar ---
 
-    #[test]
-    fn contact_list_does_not_create_conversations() {
-        let mut app = test_app();
+    #[rstest]
+    fn contact_list_does_not_create_conversations(mut app: App) {
         assert!(app.conversations.is_empty());
 
         app.handle_signal_event(SignalEvent::ContactList(vec![
@@ -4774,9 +4774,8 @@ mod tests {
         assert_eq!(app.contact_names["+2"], "Bob");
     }
 
-    #[test]
-    fn group_list_creates_conversations() {
-        let mut app = test_app();
+    #[rstest]
+    fn group_list_creates_conversations(mut app: App) {
 
         app.handle_signal_event(SignalEvent::GroupList(vec![
             Group { id: "g1".to_string(), name: "Family".to_string(), members: vec![], member_uuids: vec![] },
@@ -4793,9 +4792,8 @@ mod tests {
 
     // --- Contact names enrich existing conversations ---
 
-    #[test]
-    fn contact_name_updates_existing_conversation() {
-        let mut app = test_app();
+    #[rstest]
+    fn contact_name_updates_existing_conversation(mut app: App) {
 
         // A message arrives first with just a phone number
         let msg = SignalMessage {
@@ -4824,9 +4822,8 @@ mod tests {
         assert_eq!(app.conversations["+15551234567"].name, "Alice");
     }
 
-    #[test]
-    fn contact_without_name_does_not_overwrite_existing_name() {
-        let mut app = test_app();
+    #[rstest]
+    fn contact_without_name_does_not_overwrite_existing_name(mut app: App) {
 
         // Create conversation with a name already
         let msg = SignalMessage {
@@ -4857,9 +4854,8 @@ mod tests {
 
     // --- Name lookup used when creating conversations from messages ---
 
-    #[test]
-    fn message_uses_contact_name_lookup() {
-        let mut app = test_app();
+    #[rstest]
+    fn message_uses_contact_name_lookup(mut app: App) {
 
         // Contacts loaded first (no conversations created)
         app.handle_signal_event(SignalEvent::ContactList(vec![
@@ -4890,9 +4886,8 @@ mod tests {
         assert_eq!(app.conversations["+1"].messages[0].sender, "Alice");
     }
 
-    #[test]
-    fn message_in_known_group_uses_name_lookup() {
-        let mut app = test_app();
+    #[rstest]
+    fn message_in_known_group_uses_name_lookup(mut app: App) {
 
         // Groups loaded — conversation created
         app.handle_signal_event(SignalEvent::GroupList(vec![
@@ -4926,9 +4921,8 @@ mod tests {
 
     // --- No duplicate conversations ---
 
-    #[test]
-    fn no_duplicate_on_repeated_messages() {
-        let mut app = test_app();
+    #[rstest]
+    fn no_duplicate_on_repeated_messages(mut app: App) {
 
         app.handle_signal_event(SignalEvent::ContactList(vec![
             Contact { number: "+1".to_string(), name: Some("Alice".to_string()), uuid: None },
@@ -4960,55 +4954,28 @@ mod tests {
 
     // --- Autocomplete tests ---
 
-    #[test]
-    fn autocomplete_slash_prefix() {
-        let mut app = test_app();
-        app.input_buffer = "/".to_string();
+    #[rstest]
+    #[case("/", true, None)]
+    #[case("/jo", true, Some(1))]
+    #[case("hello", false, Some(0))]
+    #[case("/join ", false, None)]
+    #[case("/zzz", false, Some(0))]
+    fn autocomplete_visibility(
+        mut app: App,
+        #[case] input: &str,
+        #[case] expected_visible: bool,
+        #[case] expected_count: Option<usize>,
+    ) {
+        app.input_buffer = input.to_string();
         app.update_autocomplete();
-        assert!(app.autocomplete_visible);
-        assert!(!app.autocomplete_candidates.is_empty());
+        assert_eq!(app.autocomplete_visible, expected_visible, "visibility for {input:?}");
+        if let Some(count) = expected_count {
+            assert_eq!(app.autocomplete_candidates.len(), count, "count for {input:?}");
+        }
     }
 
-    #[test]
-    fn autocomplete_prefix_filtering() {
-        let mut app = test_app();
-        app.input_buffer = "/jo".to_string();
-        app.update_autocomplete();
-        assert!(app.autocomplete_visible);
-        // Only /join should match
-        assert_eq!(app.autocomplete_candidates.len(), 1);
-        assert_eq!(COMMANDS[app.autocomplete_candidates[0]].name, "/join");
-    }
-
-    #[test]
-    fn autocomplete_non_slash_hidden() {
-        let mut app = test_app();
-        app.input_buffer = "hello".to_string();
-        app.update_autocomplete();
-        assert!(!app.autocomplete_visible);
-        assert!(app.autocomplete_candidates.is_empty());
-    }
-
-    #[test]
-    fn autocomplete_space_hides() {
-        let mut app = test_app();
-        app.input_buffer = "/join ".to_string();
-        app.update_autocomplete();
-        assert!(!app.autocomplete_visible);
-    }
-
-    #[test]
-    fn autocomplete_no_match() {
-        let mut app = test_app();
-        app.input_buffer = "/zzz".to_string();
-        app.update_autocomplete();
-        assert!(!app.autocomplete_visible);
-        assert!(app.autocomplete_candidates.is_empty());
-    }
-
-    #[test]
-    fn apply_autocomplete_trailing_space_for_arg_command() {
-        let mut app = test_app();
+    #[rstest]
+    fn apply_autocomplete_trailing_space_for_arg_command(mut app: App) {
         app.input_buffer = "/jo".to_string();
         app.update_autocomplete();
         app.apply_autocomplete();
@@ -5017,9 +4984,8 @@ mod tests {
         assert_eq!(app.input_cursor, 6);
     }
 
-    #[test]
-    fn apply_autocomplete_no_space_for_no_arg_command() {
-        let mut app = test_app();
+    #[rstest]
+    fn apply_autocomplete_no_space_for_no_arg_command(mut app: App) {
         app.input_buffer = "/pa".to_string();
         app.update_autocomplete();
         app.apply_autocomplete();
@@ -5028,9 +4994,8 @@ mod tests {
         assert_eq!(app.input_cursor, 5);
     }
 
-    #[test]
-    fn apply_autocomplete_index_clamped() {
-        let mut app = test_app();
+    #[rstest]
+    fn apply_autocomplete_index_clamped(mut app: App) {
         app.input_buffer = "/".to_string();
         app.update_autocomplete();
         let len = app.autocomplete_candidates.len();
@@ -5041,9 +5006,8 @@ mod tests {
 
     // --- Join autocomplete tests ---
 
-    #[test]
-    fn join_autocomplete_shows_contacts() {
-        let mut app = test_app();
+    #[rstest]
+    fn join_autocomplete_shows_contacts(mut app: App) {
         app.contact_names.insert("+1".to_string(), "Alice".to_string());
         app.contact_names.insert("+2".to_string(), "Bob".to_string());
         app.input_buffer = "/join ".to_string();
@@ -5053,9 +5017,8 @@ mod tests {
         assert_eq!(app.join_candidates.len(), 2);
     }
 
-    #[test]
-    fn join_autocomplete_shows_groups() {
-        let mut app = test_app();
+    #[rstest]
+    fn join_autocomplete_shows_groups(mut app: App) {
         app.groups.insert("g1".to_string(), Group {
             id: "g1".to_string(),
             name: "Family".to_string(),
@@ -5070,9 +5033,8 @@ mod tests {
         assert!(app.join_candidates[0].0.starts_with('#'));
     }
 
-    #[test]
-    fn join_autocomplete_filters_by_name() {
-        let mut app = test_app();
+    #[rstest]
+    fn join_autocomplete_filters_by_name(mut app: App) {
         app.contact_names.insert("+1".to_string(), "Alice".to_string());
         app.contact_names.insert("+2".to_string(), "Bob".to_string());
         app.input_buffer = "/join al".to_string();
@@ -5082,9 +5044,8 @@ mod tests {
         assert!(app.join_candidates[0].0.contains("Alice"));
     }
 
-    #[test]
-    fn join_autocomplete_filters_by_phone() {
-        let mut app = test_app();
+    #[rstest]
+    fn join_autocomplete_filters_by_phone(mut app: App) {
         app.contact_names.insert("+1234".to_string(), "Alice".to_string());
         app.contact_names.insert("+5678".to_string(), "Bob".to_string());
         app.input_buffer = "/join +123".to_string();
@@ -5094,9 +5055,8 @@ mod tests {
         assert!(app.join_candidates[0].1 == "+1234");
     }
 
-    #[test]
-    fn join_autocomplete_alias() {
-        let mut app = test_app();
+    #[rstest]
+    fn join_autocomplete_alias(mut app: App) {
         app.contact_names.insert("+1".to_string(), "Alice".to_string());
         app.input_buffer = "/j ".to_string();
         app.update_autocomplete();
@@ -5105,18 +5065,16 @@ mod tests {
         assert_eq!(app.join_candidates.len(), 1);
     }
 
-    #[test]
-    fn join_autocomplete_no_match_hides() {
-        let mut app = test_app();
+    #[rstest]
+    fn join_autocomplete_no_match_hides(mut app: App) {
         app.contact_names.insert("+1".to_string(), "Alice".to_string());
         app.input_buffer = "/join zzz".to_string();
         app.update_autocomplete();
         assert!(!app.autocomplete_visible);
     }
 
-    #[test]
-    fn apply_join_autocomplete() {
-        let mut app = test_app();
+    #[rstest]
+    fn apply_join_autocomplete(mut app: App) {
         app.contact_names.insert("+1".to_string(), "Alice".to_string());
         app.input_buffer = "/join al".to_string();
         app.update_autocomplete();
@@ -5127,9 +5085,8 @@ mod tests {
         assert!(!app.autocomplete_visible);
     }
 
-    #[test]
-    fn apply_join_autocomplete_group() {
-        let mut app = test_app();
+    #[rstest]
+    fn apply_join_autocomplete_group(mut app: App) {
         app.groups.insert("g1".to_string(), Group {
             id: "g1".to_string(),
             name: "Family".to_string(),
@@ -5144,9 +5101,8 @@ mod tests {
         assert_eq!(app.input_cursor, 8);
     }
 
-    #[test]
-    fn join_autocomplete_includes_conversations() {
-        let mut app = test_app();
+    #[rstest]
+    fn join_autocomplete_includes_conversations(mut app: App) {
         // Create a conversation that isn't in contact_names
         app.get_or_create_conversation("+9999", "+9999", false);
         app.input_buffer = "/join +999".to_string();
@@ -5155,9 +5111,8 @@ mod tests {
         assert_eq!(app.join_candidates.len(), 1);
     }
 
-    #[test]
-    fn join_autocomplete_skips_group_ids_in_contacts() {
-        let mut app = test_app();
+    #[rstest]
+    fn join_autocomplete_skips_group_ids_in_contacts(mut app: App) {
         // group IDs in contact_names don't start with '+'
         app.contact_names.insert("g1".to_string(), "Family".to_string());
         app.contact_names.insert("+1".to_string(), "Alice".to_string());
@@ -5171,9 +5126,8 @@ mod tests {
         assert_eq!(contact_entries.len(), 1);
     }
 
-    #[test]
-    fn join_autocomplete_index_clamped() {
-        let mut app = test_app();
+    #[rstest]
+    fn join_autocomplete_index_clamped(mut app: App) {
         app.contact_names.insert("+1".to_string(), "Alice".to_string());
         app.input_buffer = "/join ".to_string();
         app.update_autocomplete();
@@ -5184,18 +5138,16 @@ mod tests {
 
     // --- apply_input_edit tests ---
 
-    #[test]
-    fn input_edit_char_insert() {
-        let mut app = test_app();
+    #[rstest]
+    fn input_edit_char_insert(mut app: App) {
         assert!(app.apply_input_edit(KeyCode::Char('a')));
         assert!(app.apply_input_edit(KeyCode::Char('b')));
         assert_eq!(app.input_buffer, "ab");
         assert_eq!(app.input_cursor, 2);
     }
 
-    #[test]
-    fn input_edit_backspace() {
-        let mut app = test_app();
+    #[rstest]
+    fn input_edit_backspace(mut app: App) {
         app.input_buffer = "abc".to_string();
         app.input_cursor = 3;
         assert!(app.apply_input_edit(KeyCode::Backspace));
@@ -5203,9 +5155,8 @@ mod tests {
         assert_eq!(app.input_cursor, 2);
     }
 
-    #[test]
-    fn input_edit_delete() {
-        let mut app = test_app();
+    #[rstest]
+    fn input_edit_delete(mut app: App) {
         app.input_buffer = "abc".to_string();
         app.input_cursor = 1;
         assert!(app.apply_input_edit(KeyCode::Delete));
@@ -5213,9 +5164,8 @@ mod tests {
         assert_eq!(app.input_cursor, 1);
     }
 
-    #[test]
-    fn input_edit_left_right() {
-        let mut app = test_app();
+    #[rstest]
+    fn input_edit_left_right(mut app: App) {
         app.input_buffer = "abc".to_string();
         app.input_cursor = 2;
         assert!(app.apply_input_edit(KeyCode::Left));
@@ -5224,9 +5174,8 @@ mod tests {
         assert_eq!(app.input_cursor, 2);
     }
 
-    #[test]
-    fn input_edit_home_end() {
-        let mut app = test_app();
+    #[rstest]
+    fn input_edit_home_end(mut app: App) {
         app.input_buffer = "abc".to_string();
         app.input_cursor = 1;
         assert!(app.apply_input_edit(KeyCode::Home));
@@ -5235,35 +5184,33 @@ mod tests {
         assert_eq!(app.input_cursor, 3);
     }
 
-    #[test]
-    fn input_edit_unhandled_key() {
-        let mut app = test_app();
+    #[rstest]
+    fn input_edit_unhandled_key(mut app: App) {
         assert!(!app.apply_input_edit(KeyCode::F(1)));
     }
 
     // --- Input history tests ---
 
-    #[test]
-    fn history_up_empty_is_noop() {
-        let mut app = test_app();
+    #[rstest]
+    fn history_up_empty_is_noop(mut app: App) {
         app.input_buffer = "draft".to_string();
         app.history_up();
         assert_eq!(app.input_buffer, "draft");
         assert_eq!(app.history_index, None);
     }
 
-    #[test]
-    fn history_down_without_browsing_is_noop() {
-        let mut app = test_app();
+    #[rstest]
+    fn history_down_without_browsing_is_noop(mut app: App) {
+
         app.input_buffer = "draft".to_string();
         app.history_down();
         assert_eq!(app.input_buffer, "draft");
         assert_eq!(app.history_index, None);
     }
 
-    #[test]
-    fn history_up_recalls_last_entry() {
-        let mut app = test_app();
+    #[rstest]
+    fn history_up_recalls_last_entry(mut app: App) {
+
         app.input_history = vec!["hello".to_string(), "world".to_string()];
         app.input_buffer = "draft".to_string();
         app.input_cursor = 5;
@@ -5275,9 +5222,9 @@ mod tests {
         assert_eq!(app.input_cursor, 5); // cursor at end of "world"
     }
 
-    #[test]
-    fn history_up_walks_to_oldest() {
-        let mut app = test_app();
+    #[rstest]
+    fn history_up_walks_to_oldest(mut app: App) {
+
         app.input_history = vec!["first".to_string(), "second".to_string(), "third".to_string()];
         app.input_buffer = String::new();
 
@@ -5299,9 +5246,9 @@ mod tests {
         assert_eq!(app.history_index, Some(0));
     }
 
-    #[test]
-    fn history_down_walks_forward_and_restores_draft() {
-        let mut app = test_app();
+    #[rstest]
+    fn history_down_walks_forward_and_restores_draft(mut app: App) {
+
         app.input_history = vec!["aaa".to_string(), "bbb".to_string()];
         app.input_buffer = "my draft".to_string();
 
@@ -5322,9 +5269,9 @@ mod tests {
         assert_eq!(app.history_index, None);
     }
 
-    #[test]
-    fn history_cursor_moves_to_end() {
-        let mut app = test_app();
+    #[rstest]
+    fn history_cursor_moves_to_end(mut app: App) {
+
         app.input_history = vec!["short".to_string(), "a longer entry".to_string()];
         app.input_buffer = String::new();
         app.input_cursor = 0;
@@ -5342,9 +5289,9 @@ mod tests {
         assert_eq!(app.input_cursor, 0);
     }
 
-    #[test]
-    fn handle_input_saves_to_history() {
-        let mut app = test_app();
+    #[rstest]
+    fn handle_input_saves_to_history(mut app: App) {
+
         // Need an active conversation for SendText to work
         app.get_or_create_conversation("+1", "Alice", false);
         app.active_conversation = Some("+1".to_string());
@@ -5361,9 +5308,9 @@ mod tests {
         assert_eq!(app.input_history, vec!["hello".to_string(), "world".to_string()]);
     }
 
-    #[test]
-    fn handle_input_trims_and_skips_empty() {
-        let mut app = test_app();
+    #[rstest]
+    fn handle_input_trims_and_skips_empty(mut app: App) {
+
         app.get_or_create_conversation("+1", "Alice", false);
         app.active_conversation = Some("+1".to_string());
 
@@ -5379,9 +5326,9 @@ mod tests {
         assert_eq!(app.input_history, vec!["hello".to_string()]);
     }
 
-    #[test]
-    fn handle_input_resets_history_index() {
-        let mut app = test_app();
+    #[rstest]
+    fn handle_input_resets_history_index(mut app: App) {
+
         app.get_or_create_conversation("+1", "Alice", false);
         app.active_conversation = Some("+1".to_string());
 
@@ -5394,9 +5341,9 @@ mod tests {
         assert_eq!(app.history_index, None);
     }
 
-    #[test]
-    fn apply_input_edit_up_down_routes_to_history() {
-        let mut app = test_app();
+    #[rstest]
+    fn apply_input_edit_up_down_routes_to_history(mut app: App) {
+
         app.input_history = vec!["recalled".to_string()];
         app.input_buffer = "draft".to_string();
 
@@ -5409,9 +5356,8 @@ mod tests {
 
     // --- Receipt handling tests ---
 
-    #[test]
-    fn receipt_upgrades_outgoing_message_status() {
-        let mut app = test_app();
+    #[rstest]
+    fn receipt_upgrades_outgoing_message_status(mut app: App) {
 
         // Create a conversation with an outgoing message
         let conv_id = "+1";
@@ -5463,9 +5409,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn receipt_does_not_downgrade_status() {
-        let mut app = test_app();
+    #[rstest]
+    fn receipt_does_not_downgrade_status(mut app: App) {
 
         let conv_id = "+1";
         app.get_or_create_conversation(conv_id, "Alice", false);
@@ -5505,9 +5450,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn send_timestamp_upgrades_sending_to_sent() {
-        let mut app = test_app();
+    #[rstest]
+    fn send_timestamp_upgrades_sending_to_sent(mut app: App) {
 
         let conv_id = "+1";
         app.get_or_create_conversation(conv_id, "Alice", false);
@@ -5550,9 +5494,8 @@ mod tests {
         assert_eq!(msg.timestamp_ms, server_ts);
     }
 
-    #[test]
-    fn send_failed_sets_failed_status() {
-        let mut app = test_app();
+    #[rstest]
+    fn send_failed_sets_failed_status(mut app: App) {
 
         let conv_id = "+1";
         app.get_or_create_conversation(conv_id, "Alice", false);
@@ -5593,9 +5536,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn incoming_messages_have_no_status() {
-        let mut app = test_app();
+    #[rstest]
+    fn incoming_messages_have_no_status(mut app: App) {
 
         let msg = SignalMessage {
             source: "+1".to_string(),
@@ -5617,9 +5559,8 @@ mod tests {
         assert_eq!(app.conversations["+1"].messages[0].status, None);
     }
 
-    #[test]
-    fn receipt_before_send_timestamp_is_buffered_and_replayed() {
-        let mut app = test_app();
+    #[rstest]
+    fn receipt_before_send_timestamp_is_buffered_and_replayed(mut app: App) {
 
         let conv_id = "+1";
         app.get_or_create_conversation(conv_id, "Alice", false);
@@ -5682,9 +5623,9 @@ mod tests {
 
     // --- Reaction tests ---
 
-    #[test]
-    fn handle_reaction_adds_to_message() {
-        let mut app = test_app();
+    #[rstest]
+    fn handle_reaction_adds_to_message(mut app: App) {
+
         let msg = SignalMessage {
             source: "+1".to_string(),
             source_name: Some("Alice".to_string()),
@@ -5721,9 +5662,9 @@ mod tests {
         assert_eq!(reactions[0].sender, "Bob");
     }
 
-    #[test]
-    fn handle_reaction_replaces_existing_from_same_sender() {
-        let mut app = test_app();
+    #[rstest]
+    fn handle_reaction_replaces_existing_from_same_sender(mut app: App) {
+
         let msg = SignalMessage {
             source: "+1".to_string(),
             source_name: Some("Alice".to_string()),
@@ -5768,9 +5709,9 @@ mod tests {
         assert_eq!(reactions[0].emoji, "\u{2764}\u{fe0f}");
     }
 
-    #[test]
-    fn handle_reaction_remove() {
-        let mut app = test_app();
+    #[rstest]
+    fn handle_reaction_remove(mut app: App) {
+
         let msg = SignalMessage {
             source: "+1".to_string(),
             source_name: Some("Alice".to_string()),
@@ -5814,9 +5755,9 @@ mod tests {
         assert_eq!(app.conversations["+1"].messages[0].reactions.len(), 0);
     }
 
-    #[test]
-    fn handle_reaction_on_own_message() {
-        let mut app = test_app();
+    #[rstest]
+    fn handle_reaction_on_own_message(mut app: App) {
+
         // Send a message (outgoing) — simulate by creating conversation and pushing directly
         let conv_id = "+1";
         app.get_or_create_conversation(conv_id, "Alice", false);
@@ -5860,9 +5801,9 @@ mod tests {
         assert_eq!(reactions[0].sender, "Alice");
     }
 
-    #[test]
-    fn handle_reaction_unknown_message_persists_to_db() {
-        let mut app = test_app();
+    #[rstest]
+    fn handle_reaction_unknown_message_persists_to_db(mut app: App) {
+
         app.get_or_create_conversation("+1", "Alice", false);
 
         // Reaction for a message not in memory (timestamp doesn't match any)
@@ -5883,9 +5824,9 @@ mod tests {
         assert_eq!(db_reactions.len(), 1);
     }
 
-    #[test]
-    fn contact_list_resolves_reactions_and_quotes() {
-        let mut app = test_app();
+    #[rstest]
+    fn contact_list_resolves_reactions_and_quotes(mut app: App) {
+
         app.get_or_create_conversation("+1", "+1", false);
 
         // Simulate DB-loaded messages: one from a contact (+2=Bob), one from
@@ -5978,62 +5919,41 @@ mod tests {
 
     // --- @Mention tests ---
 
-    #[test]
-    fn resolve_mentions_basic() {
-        let mut app = test_app();
-        app.uuid_to_name.insert("uuid-alice".to_string(), "Alice".to_string());
-
-        let body = "\u{FFFC} check this out";
-        let mentions = vec![Mention { start: 0, length: 1, uuid: "uuid-alice".to_string() }];
+    #[rstest]
+    #[case("basic", &[("uuid-alice", "Alice")], "\u{FFFC} check this out",
+        &[(0, 1, "uuid-alice")], "@Alice check this out", &["@Alice"])]
+    #[case("multiple", &[("uuid-alice", "Alice"), ("uuid-bob", "Bob")],
+        "\u{FFFC} and \u{FFFC} should join",
+        &[(0, 1, "uuid-alice"), (6, 1, "uuid-bob")],
+        "@Alice and @Bob should join", &["@Alice", "@Bob"])]
+    #[case("unknown_uuid", &[], "\u{FFFC} said hi",
+        &[(0, 1, "abcdef12-3456")], "@abcdef12 said hi", &["@abcdef12"])]
+    #[case("empty", &[], "no mentions here", &[], "no mentions here", &[])]
+    fn resolve_mentions_variants(
+        mut app: App,
+        #[case] _label: &str,
+        #[case] uuid_names: &[(&str, &str)],
+        #[case] body: &str,
+        #[case] mention_data: &[(usize, usize, &str)],
+        #[case] expected_body: &str,
+        #[case] expected_tags: &[&str],
+    ) {
+        for (uuid, name) in uuid_names {
+            app.uuid_to_name.insert(uuid.to_string(), name.to_string());
+        }
+        let mentions: Vec<Mention> = mention_data.iter()
+            .map(|(start, length, uuid)| Mention { start: *start, length: *length, uuid: uuid.to_string() })
+            .collect();
         let (resolved, ranges) = app.resolve_mentions(body, &mentions);
-
-        assert_eq!(resolved, "@Alice check this out");
-        assert_eq!(ranges.len(), 1);
-        assert_eq!(&resolved[ranges[0].0..ranges[0].1], "@Alice");
+        assert_eq!(resolved, expected_body);
+        assert_eq!(ranges.len(), expected_tags.len());
+        for (range, tag) in ranges.iter().zip(expected_tags.iter()) {
+            assert_eq!(&resolved[range.0..range.1], *tag);
+        }
     }
 
-    #[test]
-    fn resolve_mentions_multiple() {
-        let mut app = test_app();
-        app.uuid_to_name.insert("uuid-alice".to_string(), "Alice".to_string());
-        app.uuid_to_name.insert("uuid-bob".to_string(), "Bob".to_string());
-
-        let body = "\u{FFFC} and \u{FFFC} should join";
-        let mentions = vec![
-            Mention { start: 0, length: 1, uuid: "uuid-alice".to_string() },
-            Mention { start: 6, length: 1, uuid: "uuid-bob".to_string() },
-        ];
-        let (resolved, ranges) = app.resolve_mentions(body, &mentions);
-
-        assert_eq!(resolved, "@Alice and @Bob should join");
-        assert_eq!(ranges.len(), 2);
-        assert_eq!(&resolved[ranges[0].0..ranges[0].1], "@Alice");
-        assert_eq!(&resolved[ranges[1].0..ranges[1].1], "@Bob");
-    }
-
-    #[test]
-    fn resolve_mentions_unknown_uuid_fallback() {
-        let app = test_app();
-        let body = "\u{FFFC} said hi";
-        let mentions = vec![Mention { start: 0, length: 1, uuid: "abcdef12-3456".to_string() }];
-        let (resolved, _ranges) = app.resolve_mentions(body, &mentions);
-
-        // Falls back to truncated UUID
-        assert_eq!(resolved, "@abcdef12 said hi");
-    }
-
-    #[test]
-    fn resolve_mentions_empty() {
-        let app = test_app();
-        let body = "no mentions here";
-        let (resolved, ranges) = app.resolve_mentions(body, &[]);
-        assert_eq!(resolved, body);
-        assert!(ranges.is_empty());
-    }
-
-    #[test]
-    fn mention_autocomplete_in_direct_chat() {
-        let mut app = test_app();
+    #[rstest]
+    fn mention_autocomplete_in_direct_chat(mut app: App) {
 
         // Create a 1:1 conversation with a known contact
         app.get_or_create_conversation("+1", "Alice", false);
@@ -6050,9 +5970,8 @@ mod tests {
         assert_eq!(app.mention_candidates[0].1, "Alice");
     }
 
-    #[test]
-    fn mention_autocomplete_in_group() {
-        let mut app = test_app();
+    #[rstest]
+    fn mention_autocomplete_in_group(mut app: App) {
 
         // Set up group with members
         app.groups.insert("g1".to_string(), Group {
@@ -6076,9 +5995,8 @@ mod tests {
         assert_eq!(app.mention_candidates[0].1, "Alice");
     }
 
-    #[test]
-    fn apply_mention_autocomplete() {
-        let mut app = test_app();
+    #[rstest]
+    fn apply_mention_autocomplete(mut app: App) {
 
         // Set up group with members
         app.groups.insert("g1".to_string(), Group {
@@ -6104,9 +6022,9 @@ mod tests {
         assert_eq!(app.pending_mentions[0].1.as_deref(), Some("uuid-alice"));
     }
 
-    #[test]
-    fn prepare_outgoing_mentions() {
-        let mut app = test_app();
+    #[rstest]
+    fn prepare_outgoing_mentions(mut app: App) {
+
         app.pending_mentions = vec![
             ("Alice".to_string(), Some("uuid-alice".to_string())),
         ];
@@ -6118,17 +6036,17 @@ mod tests {
         assert_eq!(mentions[0].1, "uuid-alice");
     }
 
-    #[test]
-    fn prepare_outgoing_no_pending_mentions() {
-        let app = test_app();
+    #[rstest]
+    fn prepare_outgoing_no_pending_mentions(app: App) {
+
         let (wire, mentions) = app.prepare_outgoing_mentions("Hello world");
         assert_eq!(wire, "Hello world");
         assert!(mentions.is_empty());
     }
 
-    #[test]
-    fn contact_list_builds_uuid_maps() {
-        let mut app = test_app();
+    #[rstest]
+    fn contact_list_builds_uuid_maps(mut app: App) {
+
         app.handle_signal_event(SignalEvent::ContactList(vec![
             Contact {
                 number: "+1".to_string(),
@@ -6141,9 +6059,9 @@ mod tests {
         assert_eq!(app.number_to_uuid.get("+1").unwrap(), "uuid-alice");
     }
 
-    #[test]
-    fn group_list_stores_groups() {
-        let mut app = test_app();
+    #[rstest]
+    fn group_list_stores_groups(mut app: App) {
+
         app.handle_signal_event(SignalEvent::GroupList(vec![
             Group {
                 id: "g1".to_string(),
@@ -6157,9 +6075,9 @@ mod tests {
         assert_eq!(app.groups["g1"].members.len(), 2);
     }
 
-    #[test]
-    fn incoming_message_resolves_mentions() {
-        let mut app = test_app();
+    #[rstest]
+    fn incoming_message_resolves_mentions(mut app: App) {
+
         app.uuid_to_name.insert("uuid-bob".to_string(), "Bob".to_string());
 
         let msg = SignalMessage {
@@ -6184,9 +6102,9 @@ mod tests {
         assert_eq!(conv.messages[0].mention_ranges.len(), 1);
     }
 
-    #[test]
-    fn backspace_at_zero_clears_pending_attachment() {
-        let mut app = test_app();
+    #[rstest]
+    fn backspace_at_zero_clears_pending_attachment(mut app: App) {
+
         app.pending_attachment = Some(std::path::PathBuf::from("/tmp/photo.jpg"));
         app.input_cursor = 0;
         app.input_buffer.clear();
@@ -6195,9 +6113,9 @@ mod tests {
         assert!(app.pending_attachment.is_none());
     }
 
-    #[test]
-    fn empty_text_with_attachment_sends() {
-        let mut app = test_app();
+    #[rstest]
+    fn empty_text_with_attachment_sends(mut app: App) {
+
         app.get_or_create_conversation("+1", "Alice", false);
         app.active_conversation = Some("+1".to_string());
         app.pending_attachment = Some(std::path::PathBuf::from("/tmp/photo.jpg"));
@@ -6210,43 +6128,39 @@ mod tests {
         assert!(app.pending_attachment.is_none());
     }
 
-    #[test]
-    fn attach_no_conversation_shows_error() {
-        let mut app = test_app();
+    #[rstest]
+    fn attach_no_conversation_shows_error(mut app: App) {
+
         app.active_conversation = None;
         app.open_file_browser();
         assert!(!app.show_file_browser);
         assert!(app.status_message.contains("No active conversation"));
     }
 
-    #[test]
-    fn next_conversation_clears_attachment() {
-        let mut app = test_app();
+    #[rstest]
+    fn clears_attachment_on_next_conversation(mut app: App) {
         app.get_or_create_conversation("+1", "Alice", false);
-        app.get_or_create_conversation("+2", "Bob", false);
         app.active_conversation = Some("+1".to_string());
         app.pending_attachment = Some(std::path::PathBuf::from("/tmp/photo.jpg"));
-
+        app.get_or_create_conversation("+2", "Bob", false);
         app.next_conversation();
         assert!(app.pending_attachment.is_none());
     }
 
-    #[test]
-    fn part_clears_attachment() {
-        let mut app = test_app();
+    #[rstest]
+    fn clears_attachment_on_part_command(mut app: App) {
         app.get_or_create_conversation("+1", "Alice", false);
         app.active_conversation = Some("+1".to_string());
         app.pending_attachment = Some(std::path::PathBuf::from("/tmp/photo.jpg"));
         app.input_buffer = "/part".to_string();
         app.input_cursor = 5;
-
         app.handle_input();
         assert!(app.pending_attachment.is_none());
     }
 
-    #[test]
-    fn search_opens_overlay() {
-        let mut app = test_app();
+    #[rstest]
+    fn search_opens_overlay(mut app: App) {
+
         app.get_or_create_conversation("+1", "Alice", false);
         app.active_conversation = Some("+1".to_string());
 
@@ -6263,9 +6177,9 @@ mod tests {
         assert_eq!(app.search_results[0].body, "hello world");
     }
 
-    #[test]
-    fn search_without_query_shows_error() {
-        let mut app = test_app();
+    #[rstest]
+    fn search_without_query_shows_error(mut app: App) {
+
         app.input_buffer = "/search".to_string();
         app.input_cursor = 7;
         app.handle_input();
@@ -6274,9 +6188,9 @@ mod tests {
         assert!(app.status_message.contains("requires"));
     }
 
-    #[test]
-    fn search_overlay_esc_closes() {
-        let mut app = test_app();
+    #[rstest]
+    fn search_overlay_esc_closes(mut app: App) {
+
         app.show_search = true;
         app.search_query = "test".to_string();
 
@@ -6286,9 +6200,9 @@ mod tests {
         assert!(app.search_query.is_empty());
     }
 
-    #[test]
-    fn search_overlay_typing_refines() {
-        let mut app = test_app();
+    #[rstest]
+    fn search_overlay_typing_refines(mut app: App) {
+
         app.get_or_create_conversation("+1", "Alice", false);
         app.active_conversation = Some("+1".to_string());
         app.db.insert_message("+1", "Alice", "2025-01-01T00:00:00Z", "hello world", false, None, 1000).unwrap();
@@ -6305,9 +6219,9 @@ mod tests {
         assert_eq!(app.search_results.len(), 2);
     }
 
-    #[test]
-    fn system_message_inserted_with_is_system_true() {
-        let mut app = test_app();
+    #[rstest]
+    fn system_message_inserted_with_is_system_true(mut app: App) {
+
         let ts = chrono::Utc::now();
         let ts_ms = ts.timestamp_millis();
         app.handle_signal_event(SignalEvent::SystemMessage {
@@ -6325,9 +6239,8 @@ mod tests {
         assert!(conv.messages[0].sender.is_empty());
     }
 
-    #[test]
-    fn unread_bar_clears_on_active_incoming_message() {
-        let mut app = test_app();
+    #[rstest]
+    fn unread_bar_clears_on_active_incoming_message(mut app: App) {
 
         // Deliver a message while conversation is NOT active → creates unread
         let msg1 = SignalMessage {
@@ -6380,9 +6293,8 @@ mod tests {
         assert_eq!(read_idx, total);
     }
 
-    #[test]
-    fn read_sync_advances_read_marker_and_clears_unread() {
-        let mut app = test_app();
+    #[rstest]
+    fn read_sync_advances_read_marker_and_clears_unread(mut app: App) {
 
         // Create a conversation with 3 messages (all incoming, unread)
         let msg = |body: &str, ts_ms: i64| SignalMessage {
@@ -6418,9 +6330,8 @@ mod tests {
         assert_eq!(app.conversations["+15551234567"].unread, 1);
     }
 
-    #[test]
-    fn read_sync_does_not_retreat_read_marker() {
-        let mut app = test_app();
+    #[rstest]
+    fn read_sync_does_not_retreat_read_marker(mut app: App) {
 
         let msg = |body: &str, ts_ms: i64| SignalMessage {
             source: "+15551234567".to_string(),
@@ -6458,9 +6369,8 @@ mod tests {
 
     // --- Text style resolution tests ---
 
-    #[test]
-    fn text_style_ranges_resolved_to_byte_offsets() {
-        let app = test_app();
+    #[rstest]
+    fn text_style_ranges_resolved_to_byte_offsets(app: App) {
 
         // ASCII body: "hello bold world"
         // "bold" is at UTF-16 offset 6, length 4
@@ -6477,9 +6387,8 @@ mod tests {
         assert_eq!(resolved[1], (11, 16, StyleType::Italic));    // "world"
     }
 
-    #[test]
-    fn text_style_ranges_with_multibyte_chars() {
-        let app = test_app();
+    #[rstest]
+    fn text_style_ranges_with_multibyte_chars(app: App) {
 
         // Body with multi-byte chars: "Hi \u{1F600} bold" (emoji is 4 bytes UTF-8, 2 units UTF-16)
         // UTF-16: H(1) i(1) ' '(1) \u{1F600}(2) ' '(1) b(1) o(1) l(1) d(1) = offsets
@@ -6497,9 +6406,9 @@ mod tests {
         assert_eq!(resolved[0].2, StyleType::Bold);
     }
 
-    #[test]
-    fn text_style_ranges_with_mentions() {
-        let mut app = test_app();
+    #[rstest]
+    fn text_style_ranges_with_mentions(mut app: App) {
+
         app.uuid_to_name.insert("uuid-bob".to_string(), "Bob".to_string());
 
         // Original body: "\u{FFFC} is bold"
@@ -6521,9 +6430,9 @@ mod tests {
         assert_eq!(resolved[0].2, StyleType::Strikethrough);
     }
 
-    #[test]
-    fn text_style_ranges_empty_styles() {
-        let app = test_app();
+    #[rstest]
+    fn text_style_ranges_empty_styles(app: App) {
+
         let resolved = app.resolve_text_styles("hello world", &[], &[]);
         assert!(resolved.is_empty());
     }
@@ -6536,20 +6445,18 @@ mod tests {
         assert!(matches!(crate::input::parse_input("/g"), crate::input::InputAction::Group));
     }
 
-    #[test]
-    fn group_menu_items_in_group_context() {
-        let mut app = test_app();
+    #[rstest]
+    fn group_menu_items_in_group(mut app: App) {
         app.get_or_create_conversation("g1", "Family", true);
         app.active_conversation = Some("g1".to_string());
         let items = app.group_menu_items();
         assert_eq!(items.len(), 5);
         assert_eq!(items[0].label, "Members");
-        assert_eq!(items[4].label, "Leave");
+        assert_eq!(items[items.len() - 1].label, "Leave");
     }
 
-    #[test]
-    fn group_menu_items_not_in_group() {
-        let mut app = test_app();
+    #[rstest]
+    fn group_menu_items_not_in_group(mut app: App) {
         app.get_or_create_conversation("+1", "Alice", false);
         app.active_conversation = Some("+1".to_string());
         let items = app.group_menu_items();
@@ -6557,17 +6464,16 @@ mod tests {
         assert_eq!(items[0].label, "Create group");
     }
 
-    #[test]
-    fn group_menu_items_no_conversation() {
-        let app = test_app();
+    #[rstest]
+    fn group_menu_items_no_conversation(app: App) {
         let items = app.group_menu_items();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].label, "Create group");
     }
 
-    #[test]
-    fn group_add_filter_excludes_existing_members() {
-        let mut app = test_app();
+    #[rstest]
+    fn group_add_filter_excludes_existing_members(mut app: App) {
+
         app.get_or_create_conversation("g1", "Family", true);
         app.active_conversation = Some("g1".to_string());
         app.groups.insert("g1".to_string(), Group {
@@ -6587,9 +6493,9 @@ mod tests {
         assert_eq!(app.group_menu_filtered[0].0, "+3");
     }
 
-    #[test]
-    fn group_remove_filter_excludes_self() {
-        let mut app = test_app();
+    #[rstest]
+    fn group_remove_filter_excludes_self(mut app: App) {
+
         app.get_or_create_conversation("g1", "Family", true);
         app.active_conversation = Some("g1".to_string());
         app.groups.insert("g1".to_string(), Group {
@@ -6611,9 +6517,9 @@ mod tests {
         assert!(phones.contains(&"+2"));
     }
 
-    #[test]
-    fn group_menu_state_transitions() {
-        let mut app = test_app();
+    #[rstest]
+    fn group_menu_state_transitions(mut app: App) {
+
         app.get_or_create_conversation("g1", "Family", true);
         app.active_conversation = Some("g1".to_string());
         app.groups.insert("g1".to_string(), Group {
@@ -6650,9 +6556,9 @@ mod tests {
         assert_eq!(app.group_menu_state, None);
     }
 
-    #[test]
-    fn group_leave_produces_send_request() {
-        let mut app = test_app();
+    #[rstest]
+    fn group_leave_produces_send_request(mut app: App) {
+
         app.get_or_create_conversation("g1", "Family", true);
         app.active_conversation = Some("g1".to_string());
         app.groups.insert("g1".to_string(), Group {
@@ -6669,9 +6575,9 @@ mod tests {
         assert_eq!(app.group_menu_state, None);
     }
 
-    #[test]
-    fn group_create_produces_send_request() {
-        let mut app = test_app();
+    #[rstest]
+    fn group_create_produces_send_request(mut app: App) {
+
         app.group_menu_state = Some(GroupMenuState::Create);
         app.group_menu_input = "New Group".to_string();
         let req = app.handle_group_menu_key(KeyCode::Enter);
@@ -6680,9 +6586,9 @@ mod tests {
         assert_eq!(app.group_menu_state, None);
     }
 
-    #[test]
-    fn group_rename_produces_send_request() {
-        let mut app = test_app();
+    #[rstest]
+    fn group_rename_produces_send_request(mut app: App) {
+
         app.get_or_create_conversation("g1", "Old Name", true);
         app.active_conversation = Some("g1".to_string());
         app.group_menu_state = Some(GroupMenuState::Rename);
@@ -6713,16 +6619,21 @@ mod tests {
         }
     }
 
-    #[test]
-    fn unknown_sender_creates_unaccepted_conversation() {
-        let mut app = test_app();
+    #[rstest]
+    fn unknown_sender_creates_unaccepted_conversation(mut app: App) {
         app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
         assert!(!app.conversations["+1"].accepted);
     }
 
-    #[test]
-    fn outgoing_sync_creates_accepted_conversation() {
-        let mut app = test_app();
+    #[rstest]
+    fn known_contact_creates_accepted_conversation(mut app: App) {
+        app.contact_names.insert("+1".to_string(), "Alice".to_string());
+        app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
+        assert!(app.conversations["+1"].accepted);
+    }
+
+    #[rstest]
+    fn outgoing_sync_creates_accepted_conversation(mut app: App) {
         let msg = SignalMessage {
             source: "+10000000000".to_string(),
             source_name: None,
@@ -6742,17 +6653,9 @@ mod tests {
         assert!(app.conversations["+1"].accepted);
     }
 
-    #[test]
-    fn known_contact_creates_accepted_conversation() {
-        let mut app = test_app();
-        app.contact_names.insert("+1".to_string(), "Alice".to_string());
-        app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
-        assert!(app.conversations["+1"].accepted);
-    }
+    #[rstest]
+    fn contact_sync_auto_accepts_matching_conversations(mut app: App) {
 
-    #[test]
-    fn contact_sync_auto_accepts_matching_conversations() {
-        let mut app = test_app();
         // Message from unknown creates unaccepted
         app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
         assert!(!app.conversations["+1"].accepted);
@@ -6764,9 +6667,9 @@ mod tests {
         assert!(app.conversations["+1"].accepted);
     }
 
-    #[test]
-    fn accept_key_returns_send_request_and_marks_accepted() {
-        let mut app = test_app();
+    #[rstest]
+    fn accept_key_returns_send_request_and_marks_accepted(mut app: App) {
+
         app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
         app.active_conversation = Some("+1".to_string());
         app.show_message_request = true;
@@ -6781,9 +6684,9 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn delete_key_removes_conversation() {
-        let mut app = test_app();
+    #[rstest]
+    fn delete_key_removes_conversation(mut app: App) {
+
         app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
         app.active_conversation = Some("+1".to_string());
         app.show_message_request = true;
@@ -6800,9 +6703,9 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn esc_closes_message_request_overlay() {
-        let mut app = test_app();
+    #[rstest]
+    fn esc_closes_message_request_overlay(mut app: App) {
+
         app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
         app.active_conversation = Some("+1".to_string());
         app.show_message_request = true;
@@ -6813,33 +6716,49 @@ mod tests {
         assert!(app.active_conversation.is_none());
     }
 
-    #[test]
-    fn bell_skipped_for_unaccepted_conversations() {
-        let mut app = test_app();
-        // First message creates the conversation (unaccepted)
+    #[rstest]
+    fn bell_skipped_for_unaccepted_conversation(mut app: App) {
         app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
-        // Bell should NOT have been set
         assert!(!app.pending_bell);
     }
 
-    #[test]
-    fn read_receipts_not_sent_for_unaccepted_conversations() {
-        let mut app = test_app();
-        app.send_read_receipts = true;
-        // Create unaccepted conversation and switch to it
+    #[rstest]
+    fn bell_skipped_for_blocked_conversation(mut app: App) {
+        app.get_or_create_conversation("+1", "Alice", false);
+        if let Some(conv) = app.conversations.get_mut("+1") {
+            conv.accepted = true;
+        }
+        app.blocked_conversations.insert("+1".to_string());
         app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
-        assert!(!app.conversations["+1"].accepted);
+        assert!(!app.pending_bell);
+    }
 
-        // Try to queue read receipts — should be empty since conv is unaccepted
+    #[rstest]
+    fn read_receipts_not_sent_for_unaccepted(mut app: App) {
+        app.send_read_receipts = true;
+        app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
+        app.queue_read_receipts_for_conv("+1", 0);
+        assert!(app.pending_read_receipts.is_empty());
+    }
+
+    #[rstest]
+    fn read_receipts_not_sent_for_blocked(mut app: App) {
+        app.send_read_receipts = true;
+        app.get_or_create_conversation("+1", "Alice", false);
+        if let Some(conv) = app.conversations.get_mut("+1") {
+            conv.accepted = true;
+        }
+        app.blocked_conversations.insert("+1".to_string());
+        app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
         app.queue_read_receipts_for_conv("+1", 0);
         assert!(app.pending_read_receipts.is_empty());
     }
 
     // --- Block / Unblock tests ---
 
-    #[test]
-    fn block_adds_to_set_and_returns_send_request() {
-        let mut app = test_app();
+    #[rstest]
+    fn block_adds_to_set_and_returns_send_request(mut app: App) {
+
         app.get_or_create_conversation("+1", "Alice", false);
         app.active_conversation = Some("+1".to_string());
         app.input_buffer = "/block".to_string();
@@ -6849,9 +6768,9 @@ mod tests {
         assert!(app.status_message.contains("blocked"));
     }
 
-    #[test]
-    fn unblock_removes_from_set_and_returns_send_request() {
-        let mut app = test_app();
+    #[rstest]
+    fn unblock_removes_from_set_and_returns_send_request(mut app: App) {
+
         app.get_or_create_conversation("+1", "Alice", false);
         app.active_conversation = Some("+1".to_string());
         app.blocked_conversations.insert("+1".to_string());
@@ -6862,77 +6781,36 @@ mod tests {
         assert!(app.status_message.contains("unblocked"));
     }
 
-    #[test]
-    fn block_already_blocked_shows_status() {
-        let mut app = test_app();
+    #[rstest]
+    #[case("/block", true, "already blocked")]
+    #[case("/unblock", false, "not blocked")]
+    fn block_unblock_already_in_state(
+        mut app: App,
+        #[case] cmd: &str,
+        #[case] pre_blocked: bool,
+        #[case] expected_msg: &str,
+    ) {
         app.get_or_create_conversation("+1", "Alice", false);
         app.active_conversation = Some("+1".to_string());
-        app.blocked_conversations.insert("+1".to_string());
-        app.input_buffer = "/block".to_string();
-        let req = app.handle_input();
-        assert!(req.is_none());
-        assert!(app.status_message.contains("already blocked"));
-    }
-
-    #[test]
-    fn unblock_not_blocked_shows_status() {
-        let mut app = test_app();
-        app.get_or_create_conversation("+1", "Alice", false);
-        app.active_conversation = Some("+1".to_string());
-        app.input_buffer = "/unblock".to_string();
-        let req = app.handle_input();
-        assert!(req.is_none());
-        assert!(app.status_message.contains("not blocked"));
-    }
-
-    #[test]
-    fn block_no_active_conversation() {
-        let mut app = test_app();
-        app.input_buffer = "/block".to_string();
-        let req = app.handle_input();
-        assert!(req.is_none());
-        assert!(app.status_message.contains("no active conversation"));
-    }
-
-    #[test]
-    fn unblock_no_active_conversation() {
-        let mut app = test_app();
-        app.input_buffer = "/unblock".to_string();
-        let req = app.handle_input();
-        assert!(req.is_none());
-        assert!(app.status_message.contains("no active conversation"));
-    }
-
-    #[test]
-    fn bell_skipped_for_blocked_conversations() {
-        let mut app = test_app();
-        // Create accepted conversation first, then block it
-        app.get_or_create_conversation("+1", "Alice", false);
-        if let Some(conv) = app.conversations.get_mut("+1") {
-            conv.accepted = true;
+        if pre_blocked {
+            app.blocked_conversations.insert("+1".to_string());
         }
-        app.blocked_conversations.insert("+1".to_string());
-        // Receive a message — bell should NOT fire
-        app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
-        assert!(!app.pending_bell);
+        app.input_buffer = cmd.to_string();
+        let req = app.handle_input();
+        assert!(req.is_none());
+        assert!(app.status_message.contains(expected_msg));
     }
 
-    #[test]
-    fn read_receipts_not_sent_for_blocked_conversations() {
-        let mut app = test_app();
-        app.send_read_receipts = true;
-        // Create accepted conversation, block it, add a message
-        app.get_or_create_conversation("+1", "Alice", false);
-        if let Some(conv) = app.conversations.get_mut("+1") {
-            conv.accepted = true;
-        }
-        app.blocked_conversations.insert("+1".to_string());
-        app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
-
-        // Try to queue read receipts — should be empty since conv is blocked
-        app.queue_read_receipts_for_conv("+1", 0);
-        assert!(app.pending_read_receipts.is_empty());
+    #[rstest]
+    #[case("/block", "no active conversation")]
+    #[case("/unblock", "no active conversation")]
+    fn block_unblock_no_active_conversation(mut app: App, #[case] cmd: &str, #[case] expected_msg: &str) {
+        app.input_buffer = cmd.to_string();
+        let req = app.handle_input();
+        assert!(req.is_none());
+        assert!(app.status_message.contains(expected_msg));
     }
+
 
     // --- Mouse support tests ---
 
@@ -6963,9 +6841,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn mouse_disabled_ignores_events() {
-        let mut app = test_app();
+    #[rstest]
+    fn mouse_disabled_ignores_events(mut app: App) {
+
         app.mouse_enabled = false;
         app.mouse_messages_area = Rect::new(0, 0, 80, 20);
         let result = app.handle_mouse_event(mouse_scroll_up(10, 10));
@@ -6973,9 +6851,9 @@ mod tests {
         assert_eq!(app.scroll_offset, 0);
     }
 
-    #[test]
-    fn mouse_overlay_scroll_navigates_list() {
-        let mut app = test_app();
+    #[rstest]
+    fn mouse_overlay_scroll_navigates_list(mut app: App) {
+
         app.show_settings = true;
         app.settings_index = 0;
         app.mouse_messages_area = Rect::new(0, 0, 80, 20);
@@ -6985,35 +6863,30 @@ mod tests {
         assert_eq!(app.scroll_offset, 0); // messages not scrolled
     }
 
-    #[test]
-    fn mouse_scroll_up_increases_offset() {
-        let mut app = test_app();
+    #[rstest]
+    #[case(0, true, 3)]
+    #[case(10, false, 7)]
+    #[case(1, false, 0)]
+    fn mouse_scroll_behavior(
+        mut app: App,
+        #[case] initial_offset: usize,
+        #[case] scroll_up: bool,
+        #[case] expected_offset: usize,
+    ) {
         app.mouse_messages_area = Rect::new(0, 0, 80, 20);
-        app.handle_mouse_event(mouse_scroll_up(10, 10));
-        assert_eq!(app.scroll_offset, 3);
+        app.scroll_offset = initial_offset;
+        let event = if scroll_up {
+            mouse_scroll_up(10, 10)
+        } else {
+            mouse_scroll_down(10, 10)
+        };
+        app.handle_mouse_event(event);
+        assert_eq!(app.scroll_offset, expected_offset);
     }
 
-    #[test]
-    fn mouse_scroll_down_decreases_offset() {
-        let mut app = test_app();
-        app.mouse_messages_area = Rect::new(0, 0, 80, 20);
-        app.scroll_offset = 10;
-        app.handle_mouse_event(mouse_scroll_down(10, 10));
-        assert_eq!(app.scroll_offset, 7);
-    }
+    #[rstest]
+    fn mouse_sidebar_click_switches_conversation(mut app: App) {
 
-    #[test]
-    fn mouse_scroll_down_saturates_at_zero() {
-        let mut app = test_app();
-        app.mouse_messages_area = Rect::new(0, 0, 80, 20);
-        app.scroll_offset = 1;
-        app.handle_mouse_event(mouse_scroll_down(10, 10));
-        assert_eq!(app.scroll_offset, 0);
-    }
-
-    #[test]
-    fn mouse_sidebar_click_switches_conversation() {
-        let mut app = test_app();
         // Create two conversations
         app.get_or_create_conversation("+1", "Alice", false);
         app.get_or_create_conversation("+2", "Bob", false);
@@ -7025,9 +6898,9 @@ mod tests {
         assert_eq!(app.active_conversation.as_deref(), Some("+2"));
     }
 
-    #[test]
-    fn mouse_input_click_positions_cursor() {
-        let mut app = test_app();
+    #[rstest]
+    fn mouse_input_click_positions_cursor(mut app: App) {
+
         app.mode = InputMode::Normal;
         app.input_buffer = "hello world".to_string();
         app.input_cursor = 0;
@@ -7042,9 +6915,9 @@ mod tests {
         assert_eq!(app.input_cursor, 5);
     }
 
-    #[test]
-    fn mouse_input_click_handles_multibyte() {
-        let mut app = test_app();
+    #[rstest]
+    fn mouse_input_click_handles_multibyte(mut app: App) {
+
         app.mode = InputMode::Normal;
         app.input_buffer = "caf\u{e9} ok".to_string(); // "café ok" — é is 2 bytes
         app.input_cursor = 0;
@@ -7057,9 +6930,9 @@ mod tests {
         assert_eq!(app.input_cursor, 5); // byte offset of space after "café"
     }
 
-    #[test]
-    fn has_overlay_detects_all_overlays() {
-        let mut app = test_app();
+    #[rstest]
+    fn has_overlay_detects_all_overlays(mut app: App) {
+
         assert!(!app.has_overlay());
 
         app.show_settings = true;

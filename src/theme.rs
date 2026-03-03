@@ -625,6 +625,7 @@ fn string_to_color(s: &str) -> Result<Color, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     #[test]
     fn default_theme_has_correct_name() {
@@ -647,28 +648,15 @@ mod tests {
         assert_eq!(t.name, "Default");
     }
 
-    #[test]
-    fn color_serde_roundtrip_hex() {
-        let s = color_to_string(&Color::Rgb(205, 214, 244));
-        assert_eq!(s, "#cdd6f4");
+    #[rstest]
+    #[case(Color::Rgb(205, 214, 244), "#cdd6f4")]
+    #[case(Color::Cyan, "cyan")]
+    #[case(Color::Indexed(236), "indexed(236)")]
+    fn color_serde_roundtrip(#[case] color: Color, #[case] expected_str: &str) {
+        let s = color_to_string(&color);
+        assert_eq!(s, expected_str);
         let c = string_to_color(&s).unwrap();
-        assert_eq!(c, Color::Rgb(205, 214, 244));
-    }
-
-    #[test]
-    fn color_serde_roundtrip_named() {
-        let s = color_to_string(&Color::Cyan);
-        assert_eq!(s, "cyan");
-        let c = string_to_color(&s).unwrap();
-        assert_eq!(c, Color::Cyan);
-    }
-
-    #[test]
-    fn color_serde_roundtrip_indexed() {
-        let s = color_to_string(&Color::Indexed(236));
-        assert_eq!(s, "indexed(236)");
-        let c = string_to_color(&s).unwrap();
-        assert_eq!(c, Color::Indexed(236));
+        assert_eq!(c, color);
     }
 
     #[test]

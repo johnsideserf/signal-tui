@@ -26,7 +26,7 @@ pub const COMMANDS: &[CommandInfo] = &[
 ];
 
 /// Parsed user input — either a command or plain text to send
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum InputAction {
     /// Send text to the current conversation
     SendText(String),
@@ -172,153 +172,77 @@ pub fn parse_duration_to_seconds(s: &str) -> Result<i64, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn plain_text() {
-        let InputAction::SendText(s) = parse_input("hello world") else { panic!("expected SendText") };
-        assert_eq!(s, "hello world");
+    // --- No-arg commands: 19 cases → 1 parameterized test ---
+
+    #[rstest]
+    #[case("/part", InputAction::Part)]
+    #[case("/p", InputAction::Part)]
+    #[case("/quit", InputAction::Quit)]
+    #[case("/q", InputAction::Quit)]
+    #[case("/sidebar", InputAction::ToggleSidebar)]
+    #[case("/sb", InputAction::ToggleSidebar)]
+    #[case("/mute", InputAction::ToggleMute)]
+    #[case("/settings", InputAction::Settings)]
+    #[case("/attach", InputAction::Attach)]
+    #[case("/a", InputAction::Attach)]
+    #[case("/contacts", InputAction::Contacts)]
+    #[case("/c", InputAction::Contacts)]
+    #[case("/help", InputAction::Help)]
+    #[case("/h", InputAction::Help)]
+    #[case("/block", InputAction::Block)]
+    #[case("/unblock", InputAction::Unblock)]
+    #[case("/group", InputAction::Group)]
+    #[case("/g", InputAction::Group)]
+    #[case("/bell", InputAction::ToggleBell(None))]
+    fn command_returns_expected_action(#[case] input: &str, #[case] expected: InputAction) {
+        assert_eq!(parse_input(input), expected);
     }
 
-    #[test]
-    fn empty_input() {
-        let InputAction::SendText(s) = parse_input("") else { panic!("expected SendText") };
-        assert!(s.is_empty());
+    // --- Commands with arguments ---
+
+    #[rstest]
+    #[case("/join Alice", InputAction::Join("Alice".to_string()))]
+    #[case("/j +1234567890", InputAction::Join("+1234567890".to_string()))]
+    #[case("/search hello", InputAction::Search("hello".to_string()))]
+    #[case("/s world", InputAction::Search("world".to_string()))]
+    #[case("/disappearing 30s", InputAction::SetDisappearing("30s".to_string()))]
+    #[case("/dm off", InputAction::SetDisappearing("off".to_string()))]
+    #[case("/bell direct", InputAction::ToggleBell(Some("direct".to_string())))]
+    #[case("/notify group", InputAction::ToggleBell(Some("group".to_string())))]
+    fn command_with_argument(#[case] input: &str, #[case] expected: InputAction) {
+        assert_eq!(parse_input(input), expected);
     }
 
-    #[test]
-    fn whitespace_only() {
-        let InputAction::SendText(s) = parse_input("   ") else { panic!("expected SendText") };
-        assert!(s.is_empty());
+    // --- Commands that require an argument but didn't get one ---
+
+    #[rstest]
+    #[case("/join")]
+    #[case("/search")]
+    #[case("/disappearing")]
+    fn command_without_required_arg_returns_unknown(#[case] input: &str) {
+        let InputAction::Unknown(s) = parse_input(input) else {
+            panic!("expected Unknown for {input}");
+        };
+        assert!(s.contains("requires"), "error for {input} should mention 'requires': {s}");
     }
 
-    #[test]
-    fn trimmed_text() {
-        let InputAction::SendText(s) = parse_input("  hello  ") else { panic!("expected SendText") };
-        assert_eq!(s, "hello");
+    // --- SendText variants ---
+
+    #[rstest]
+    #[case("hello world", "hello world")]
+    #[case("", "")]
+    #[case("   ", "")]
+    #[case("  hello  ", "hello")]
+    fn send_text_variants(#[case] input: &str, #[case] expected: &str) {
+        let InputAction::SendText(s) = parse_input(input) else {
+            panic!("expected SendText for {input:?}");
+        };
+        assert_eq!(s, expected);
     }
 
-    #[test]
-    fn join_with_arg() {
-        let InputAction::Join(s) = parse_input("/join Alice") else { panic!("expected Join") };
-        assert_eq!(s, "Alice");
-    }
-
-    #[test]
-    fn join_alias() {
-        let InputAction::Join(s) = parse_input("/j +1234567890") else { panic!("expected Join") };
-        assert_eq!(s, "+1234567890");
-    }
-
-    #[test]
-    fn join_without_arg() {
-        let InputAction::Unknown(s) = parse_input("/join") else { panic!("expected Unknown") };
-        assert!(s.contains("requires"));
-    }
-
-    #[test]
-    fn part_command() {
-        assert!(matches!(parse_input("/part"), InputAction::Part));
-    }
-
-    #[test]
-    fn part_alias() {
-        assert!(matches!(parse_input("/p"), InputAction::Part));
-    }
-
-    #[test]
-    fn quit_command() {
-        assert!(matches!(parse_input("/quit"), InputAction::Quit));
-    }
-
-    #[test]
-    fn quit_alias() {
-        assert!(matches!(parse_input("/q"), InputAction::Quit));
-    }
-
-    #[test]
-    fn sidebar_command() {
-        assert!(matches!(parse_input("/sidebar"), InputAction::ToggleSidebar));
-    }
-
-    #[test]
-    fn sidebar_alias() {
-        assert!(matches!(parse_input("/sb"), InputAction::ToggleSidebar));
-    }
-
-    #[test]
-    fn bell_no_arg() {
-        let InputAction::ToggleBell(None) = parse_input("/bell") else { panic!("expected ToggleBell(None)") };
-    }
-
-    #[test]
-    fn bell_with_arg() {
-        let InputAction::ToggleBell(Some(s)) = parse_input("/bell direct") else { panic!("expected ToggleBell(Some)") };
-        assert_eq!(s, "direct");
-    }
-
-    #[test]
-    fn notify_alias() {
-        let InputAction::ToggleBell(Some(s)) = parse_input("/notify group") else { panic!("expected ToggleBell(Some)") };
-        assert_eq!(s, "group");
-    }
-
-    #[test]
-    fn mute_command() {
-        assert!(matches!(parse_input("/mute"), InputAction::ToggleMute));
-    }
-
-    #[test]
-    fn settings_command() {
-        assert!(matches!(parse_input("/settings"), InputAction::Settings));
-    }
-
-    #[test]
-    fn attach_command() {
-        assert!(matches!(parse_input("/attach"), InputAction::Attach));
-    }
-
-    #[test]
-    fn attach_alias() {
-        assert!(matches!(parse_input("/a"), InputAction::Attach));
-    }
-
-    #[test]
-    fn contacts_command() {
-        assert!(matches!(parse_input("/contacts"), InputAction::Contacts));
-    }
-
-    #[test]
-    fn contacts_alias() {
-        assert!(matches!(parse_input("/c"), InputAction::Contacts));
-    }
-
-    #[test]
-    fn help_command() {
-        assert!(matches!(parse_input("/help"), InputAction::Help));
-    }
-
-    #[test]
-    fn help_alias() {
-        assert!(matches!(parse_input("/h"), InputAction::Help));
-    }
-
-    #[test]
-    fn search_with_query() {
-        let InputAction::Search(s) = parse_input("/search hello") else { panic!("expected Search") };
-        assert_eq!(s, "hello");
-    }
-
-    #[test]
-    fn search_alias() {
-        let InputAction::Search(s) = parse_input("/s world") else { panic!("expected Search") };
-        assert_eq!(s, "world");
-    }
-
-    #[test]
-    fn search_without_query() {
-        let InputAction::Unknown(s) = parse_input("/search") else { panic!("expected Unknown") };
-        assert!(s.contains("requires"));
-    }
+    // --- Unknown command ---
 
     #[test]
     fn unknown_command() {
@@ -326,82 +250,30 @@ mod tests {
         assert!(s.contains("/foo"));
     }
 
-    #[test]
-    fn disappearing_command() {
-        let InputAction::SetDisappearing(s) = parse_input("/disappearing 30s") else { panic!("expected SetDisappearing") };
-        assert_eq!(s, "30s");
+    // --- Duration parser: valid cases ---
+
+    #[rstest]
+    #[case("off", 0)]
+    #[case("0", 0)]
+    #[case("30s", 30)]
+    #[case("5m", 300)]
+    #[case("1h", 3600)]
+    #[case("8h", 28800)]
+    #[case("1d", 86400)]
+    #[case("1w", 604800)]
+    #[case("4w", 2419200)]
+    fn duration_parser_valid(#[case] input: &str, #[case] expected: i64) {
+        assert_eq!(parse_duration_to_seconds(input).unwrap(), expected);
     }
 
-    #[test]
-    fn disappearing_alias() {
-        let InputAction::SetDisappearing(s) = parse_input("/dm off") else { panic!("expected SetDisappearing") };
-        assert_eq!(s, "off");
-    }
+    // --- Duration parser: invalid cases ---
 
-    #[test]
-    fn disappearing_without_arg() {
-        let InputAction::Unknown(s) = parse_input("/disappearing") else { panic!("expected Unknown") };
-        assert!(s.contains("requires"));
-    }
-
-    #[test]
-    fn duration_parser_off() {
-        assert_eq!(parse_duration_to_seconds("off").unwrap(), 0);
-        assert_eq!(parse_duration_to_seconds("0").unwrap(), 0);
-    }
-
-    #[test]
-    fn duration_parser_seconds() {
-        assert_eq!(parse_duration_to_seconds("30s").unwrap(), 30);
-    }
-
-    #[test]
-    fn duration_parser_minutes() {
-        assert_eq!(parse_duration_to_seconds("5m").unwrap(), 300);
-    }
-
-    #[test]
-    fn duration_parser_hours() {
-        assert_eq!(parse_duration_to_seconds("1h").unwrap(), 3600);
-        assert_eq!(parse_duration_to_seconds("8h").unwrap(), 28800);
-    }
-
-    #[test]
-    fn duration_parser_days() {
-        assert_eq!(parse_duration_to_seconds("1d").unwrap(), 86400);
-    }
-
-    #[test]
-    fn duration_parser_weeks() {
-        assert_eq!(parse_duration_to_seconds("1w").unwrap(), 604800);
-        assert_eq!(parse_duration_to_seconds("4w").unwrap(), 2419200);
-    }
-
-    #[test]
-    fn duration_parser_invalid() {
-        assert!(parse_duration_to_seconds("abc").is_err());
-        assert!(parse_duration_to_seconds("").is_err());
-        assert!(parse_duration_to_seconds("0s").is_err());
-        assert!(parse_duration_to_seconds("-1h").is_err());
-    }
-
-    #[test]
-    fn block_command() {
-        assert!(matches!(parse_input("/block"), InputAction::Block));
-    }
-
-    #[test]
-    fn unblock_command() {
-        assert!(matches!(parse_input("/unblock"), InputAction::Unblock));
-    }
-
-    #[test]
-    fn group_command() {
-        assert!(matches!(parse_input("/group"), InputAction::Group));
-    }
-
-    #[test]
-    fn group_alias() {
-        assert!(matches!(parse_input("/g"), InputAction::Group));
+    #[rstest]
+    #[case("abc")]
+    #[case("")]
+    #[case("0s")]
+    #[case("-1h")]
+    fn duration_parser_invalid(#[case] input: &str) {
+        assert!(parse_duration_to_seconds(input).is_err(), "expected error for {input:?}");
     }
 }
