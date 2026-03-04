@@ -665,6 +665,10 @@ async fn run_app(
     app.available_themes = theme::all_themes();
     app.theme = theme::find_theme(&config.theme);
     app.load_from_db()?;
+    app.expiring_msg_count = app.conversations.values()
+        .flat_map(|c| &c.messages)
+        .filter(|m| m.expires_in_seconds > 0)
+        .count();
     app.set_connected();
 
     // Purge messages that expired while the app was closed
