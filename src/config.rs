@@ -64,6 +64,10 @@ pub struct Config {
     #[serde(default = "default_true")]
     pub mouse_enabled: bool,
 
+    /// Display sidebar on the right side instead of left
+    #[serde(default)]
+    pub sidebar_on_right: bool,
+
     /// Color theme name (matches a built-in or custom theme)
     #[serde(default = "default_theme")]
     pub theme: String,
@@ -105,6 +109,7 @@ impl Default for Config {
             reaction_verbose: false,
             send_read_receipts: true,
             mouse_enabled: true,
+            sidebar_on_right: false,
             theme: default_theme(),
         }
     }

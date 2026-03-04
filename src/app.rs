@@ -232,6 +232,8 @@ pub struct App {
     pub account: String,
     /// Resizable sidebar width (min 14, max 40)
     pub sidebar_width: u16,
+    /// Display sidebar on the right side instead of left
+    pub sidebar_on_right: bool,
     /// Per-conversation typing indicators with expiry timestamp
     pub typing_indicators: HashMap<String, Instant>,
     /// Last-read message index per conversation (for unread marker)
@@ -684,6 +686,13 @@ pub const SETTINGS: &[SettingDef] = &[
         set: |a, v| a.mouse_enabled = v,
         save: Some(|c, v| c.mouse_enabled = v),
         on_toggle: Some(|a| { a.pending_mouse_toggle = Some(a.mouse_enabled); }),
+    },
+    SettingDef {
+        label: "Sidebar on right",
+        get: |a| a.sidebar_on_right,
+        set: |a, v| a.sidebar_on_right = v,
+        save: Some(|c, v| c.sidebar_on_right = v),
+        on_toggle: None,
     },
 ];
 
@@ -2007,6 +2016,7 @@ impl App {
             should_quit: false,
             account,
             sidebar_width: 22,
+            sidebar_on_right: false,
             typing_indicators: HashMap::new(),
             last_read_index: HashMap::new(),
             connected: false,

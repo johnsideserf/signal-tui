@@ -428,16 +428,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let show_sidebar = app.sidebar_visible && !sidebar_auto_hidden;
 
     let input_area = if show_sidebar {
+        let (sidebar_idx, chat_idx, constraints) = if app.sidebar_on_right {
+            (1, 0, [Constraint::Min(MIN_CHAT_WIDTH), Constraint::Length(app.sidebar_width)])
+        } else {
+            (0, 1, [Constraint::Length(app.sidebar_width), Constraint::Min(MIN_CHAT_WIDTH)])
+        };
         let horizontal = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(app.sidebar_width),
-                Constraint::Min(MIN_CHAT_WIDTH),
-            ])
+            .constraints(constraints)
             .split(body_area);
 
-        draw_sidebar(frame, app, horizontal[0]);
-        draw_chat_area(frame, app, horizontal[1])
+        draw_sidebar(frame, app, horizontal[sidebar_idx]);
+        draw_chat_area(frame, app, horizontal[chat_idx])
     } else {
         app.mouse_sidebar_inner = None;
         draw_chat_area(frame, app, body_area)
@@ -614,8 +616,9 @@ fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
+    let border_side = if app.sidebar_on_right { Borders::LEFT } else { Borders::RIGHT };
     let block = Block::default()
-        .borders(Borders::RIGHT)
+        .borders(border_side)
         .border_type(BorderType::Rounded)
         .title(" Chats ")
         .title_style(Style::default().fg(theme.accent).add_modifier(Modifier::BOLD));

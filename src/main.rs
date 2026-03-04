@@ -679,6 +679,7 @@ async fn run_app(
     app.reaction_verbose = config.reaction_verbose;
     app.send_read_receipts = config.send_read_receipts;
     app.mouse_enabled = config.mouse_enabled;
+    app.sidebar_on_right = config.sidebar_on_right;
     app.available_themes = theme::all_themes();
     app.theme = theme::find_theme(&config.theme);
     app.load_from_db()?;
