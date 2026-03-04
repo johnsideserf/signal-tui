@@ -184,6 +184,18 @@ pub struct Conversation {
     pub accepted: bool,
 }
 
+impl Conversation {
+    /// Binary-search for a message by timestamp (messages are sorted by `timestamp_ms`).
+    fn find_msg_idx(&self, ts: i64) -> Option<usize> {
+        let end = self.messages.partition_point(|m| m.timestamp_ms <= ts);
+        if end > 0 && self.messages[end - 1].timestamp_ms == ts {
+            Some(end - 1)
+        } else {
+            None
+        }
+    }
+}
+
 /// Application state
 pub struct App {
     pub conversations: HashMap<String, Conversation>,
@@ -1489,8 +1501,8 @@ impl App {
                         let poll_timestamp = msg.timestamp_ms;
                         // Optimistic close
                         if let Some(conv) = self.conversations.get_mut(&conv_id) {
-                            if let Some(m) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == poll_timestamp) {
-                                if let Some(ref mut poll) = m.poll_data {
+                            if let Some(idx) = conv.find_msg_idx(poll_timestamp) {
+                                if let Some(ref mut poll) = conv.messages[idx].poll_data {
                                     poll.closed = true;
                                 }
                             }
@@ -1647,7 +1659,7 @@ impl App {
         }
 
         // Find the message index matching this timestamp
-        let idx = conv.messages.iter().position(|m| m.timestamp_ms == target_ts);
+        let idx = conv.find_msg_idx(target_ts);
         if let Some(i) = idx {
             // Set scroll_offset so the message is visible (roughly centered)
             let from_bottom = total.saturating_sub(i + 1);
@@ -3052,18 +3064,17 @@ impl App {
                 .unwrap_or_else(|| sender.to_string())
         };
         if let Some(conv) = self.conversations.get_mut(conv_id) {
-            let found = conv.messages.iter_mut().rev().find(|m| {
-                if m.timestamp_ms != target_timestamp {
-                    return false;
-                }
-                if m.sender == "you" {
+            let found = conv.find_msg_idx(target_timestamp).and_then(|idx| {
+                let m = &conv.messages[idx];
+                let matches = if m.sender == "you" {
                     target_author == account.as_str()
                 } else {
                     m.sender == target_author
                         || target_display.as_deref() == Some(m.sender.as_str())
-                }
+                };
+                if matches { Some(idx) } else { None }
             });
-            if let Some(msg) = found {
+            if let Some(msg) = found.map(|idx| &mut conv.messages[idx]) {
                 if is_remove {
                     // Match by display name or "you" (for own reactions from other devices)
                     msg.reactions.retain(|r| r.sender != sender_display);
@@ -3164,9 +3175,9 @@ impl App {
 
     fn handle_edit_received(&mut self, conv_id: &str, target_timestamp: i64, new_body: &str) {
         if let Some(conv) = self.conversations.get_mut(conv_id) {
-            if let Some(msg) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == target_timestamp) {
-                msg.body = new_body.to_string();
-                msg.is_edited = true;
+            if let Some(idx) = conv.find_msg_idx(target_timestamp) {
+                conv.messages[idx].body = new_body.to_string();
+                conv.messages[idx].is_edited = true;
             }
         }
         self.db_warn_visible(
@@ -3177,10 +3188,10 @@ impl App {
 
     fn handle_remote_delete(&mut self, conv_id: &str, target_timestamp: i64) {
         if let Some(conv) = self.conversations.get_mut(conv_id) {
-            if let Some(msg) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == target_timestamp) {
-                msg.is_deleted = true;
-                msg.body = "[deleted]".to_string();
-                msg.reactions.clear();
+            if let Some(idx) = conv.find_msg_idx(target_timestamp) {
+                conv.messages[idx].is_deleted = true;
+                conv.messages[idx].body = "[deleted]".to_string();
+                conv.messages[idx].reactions.clear();
             }
         }
         self.db_warn_visible(
@@ -3191,8 +3202,8 @@ impl App {
 
     fn handle_pin_received(&mut self, conv_id: &str, sender: &str, target_timestamp: i64, pinned: bool) {
         if let Some(conv) = self.conversations.get_mut(conv_id) {
-            if let Some(msg) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == target_timestamp) {
-                msg.is_pinned = pinned;
+            if let Some(idx) = conv.find_msg_idx(target_timestamp) {
+                conv.messages[idx].is_pinned = pinned;
             }
         }
         self.db_warn_visible(
@@ -3217,8 +3228,8 @@ impl App {
         // If the message hasn't arrived yet (race), buffer the poll data so
         // handle_message can attach it when the message arrives.
         if let Some(conv) = self.conversations.get_mut(conv_id) {
-            if let Some(msg) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == timestamp) {
-                msg.poll_data = Some(poll_data.clone());
+            if let Some(idx) = conv.find_msg_idx(timestamp) {
+                conv.messages[idx].poll_data = Some(poll_data.clone());
             } else {
                 self.pending_polls.insert((conv_id.to_string(), timestamp), poll_data.clone());
             }
@@ -3239,7 +3250,8 @@ impl App {
         vote_count: i64,
     ) {
         if let Some(conv) = self.conversations.get_mut(conv_id) {
-            if let Some(msg) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == target_timestamp) {
+            if let Some(idx) = conv.find_msg_idx(target_timestamp) {
+                let msg = &mut conv.messages[idx];
                 // Upsert vote in memory
                 if let Some(existing) = msg.poll_votes.iter_mut().find(|v| v.voter == voter) {
                     existing.option_indexes = option_indexes.to_vec();
@@ -3263,8 +3275,8 @@ impl App {
 
     fn handle_poll_terminated(&mut self, conv_id: &str, target_timestamp: i64) {
         if let Some(conv) = self.conversations.get_mut(conv_id) {
-            if let Some(msg) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == target_timestamp) {
-                if let Some(ref mut poll) = msg.poll_data {
+            if let Some(idx) = conv.find_msg_idx(target_timestamp) {
+                if let Some(ref mut poll) = conv.messages[idx].poll_data {
                     poll.closed = true;
                 }
             }
@@ -3295,8 +3307,8 @@ impl App {
         if was_pinned {
             // Unpin immediately — no duration needed
             if let Some(conv) = self.conversations.get_mut(&conv_id) {
-                if let Some(m) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == target_timestamp) {
-                    m.is_pinned = false;
+                if let Some(idx) = conv.find_msg_idx(target_timestamp) {
+                    conv.messages[idx].is_pinned = false;
                 }
             }
             self.db_warn_visible(
@@ -3349,8 +3361,8 @@ impl App {
 
                 // Optimistically pin
                 if let Some(conv) = self.conversations.get_mut(&pending.conv_id) {
-                    if let Some(m) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == pending.target_timestamp) {
-                        m.is_pinned = true;
+                    if let Some(idx) = conv.find_msg_idx(pending.target_timestamp) {
+                        conv.messages[idx].is_pinned = true;
                     }
                 }
                 self.db_warn_visible(
@@ -3849,13 +3861,10 @@ impl App {
             let mut found = false;
             if let Some(conv) = self.conversations.get_mut(&conv_id) {
                 // Find the outgoing message with matching local timestamp
-                for msg in conv.messages.iter_mut().rev() {
-                    if msg.sender == "you" && msg.timestamp_ms == local_ts {
-                        msg.timestamp_ms = effective_ts;
-                        msg.status = Some(MessageStatus::Sent);
-                        found = true;
-                        break;
-                    }
+                if let Some(idx) = conv.find_msg_idx(local_ts).filter(|&idx| conv.messages[idx].sender == "you") {
+                    conv.messages[idx].timestamp_ms = effective_ts;
+                    conv.messages[idx].status = Some(MessageStatus::Sent);
+                    found = true;
                 }
             }
             if found {
@@ -3882,12 +3891,9 @@ impl App {
         if let Some((conv_id, local_ts)) = self.pending_sends.remove(rpc_id) {
             let mut found = false;
             if let Some(conv) = self.conversations.get_mut(&conv_id) {
-                for msg in conv.messages.iter_mut().rev() {
-                    if msg.sender == "you" && msg.timestamp_ms == local_ts {
-                        msg.status = Some(MessageStatus::Failed);
-                        found = true;
-                        break;
-                    }
+                if let Some(idx) = conv.find_msg_idx(local_ts).filter(|&idx| conv.messages[idx].sender == "you") {
+                    conv.messages[idx].status = Some(MessageStatus::Failed);
+                    found = true;
                 }
             }
             if found {
@@ -3909,19 +3915,17 @@ impl App {
         ts: i64,
         new_status: MessageStatus,
     ) -> bool {
-        for msg in conv.messages.iter_mut().rev() {
-            if msg.sender == "you" && msg.timestamp_ms == ts {
-                if let Some(current) = msg.status {
-                    if new_status > current {
-                        msg.status = Some(new_status);
-                        db_warn(
-                            db.update_message_status(conv_id, ts, new_status.to_i32()),
-                            "update_message_status",
-                        );
-                    }
+        if let Some(idx) = conv.find_msg_idx(ts).filter(|&idx| conv.messages[idx].sender == "you") {
+            if let Some(current) = conv.messages[idx].status {
+                if new_status > current {
+                    conv.messages[idx].status = Some(new_status);
+                    db_warn(
+                        db.update_message_status(conv_id, ts, new_status.to_i32()),
+                        "update_message_status",
+                    );
                 }
-                return true;
             }
+            return true;
         }
         false
     }
@@ -4036,13 +4040,14 @@ impl App {
                     if !text.is_empty() {
                         // Extract original quote fields (immutable borrow) before mutating
                         let original_quote = self.conversations.get(&edit_conv_id)
-                            .and_then(|conv| conv.messages.iter().rev().find(|m| m.timestamp_ms == edit_ts && m.sender == "you"))
+                            .and_then(|conv| conv.find_msg_idx(edit_ts).map(|idx| &conv.messages[idx]))
+                            .filter(|msg| msg.sender == "you")
                             .and_then(|msg| msg.quote.as_ref())
                             .map(|q| (q.timestamp_ms, q.author_id.clone(), q.body.clone()));
                         if let Some(conv) = self.conversations.get_mut(&edit_conv_id) {
-                            if let Some(msg) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == edit_ts && m.sender == "you") {
-                                msg.body = text.clone();
-                                msg.is_edited = true;
+                            if let Some(idx) = conv.find_msg_idx(edit_ts).filter(|&idx| conv.messages[idx].sender == "you") {
+                                conv.messages[idx].body = text.clone();
+                                conv.messages[idx].is_edited = true;
                             }
                             let is_group = conv.is_group;
                             let (wire_body, wire_mentions) = self.prepare_outgoing_mentions(&text);
