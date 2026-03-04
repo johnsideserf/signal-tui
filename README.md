@@ -1,9 +1,13 @@
-# siggy
+<p align="center">
+  <img src="siggy-banner.png" alt="siggy" width="600">
+</p>
 
-[![CI](https://github.com/johnsideserf/siggy/actions/workflows/ci.yml/badge.svg)](https://github.com/johnsideserf/siggy/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/johnsideserf/siggy)](https://github.com/johnsideserf/siggy/releases/latest)
-[![License: GPL-3.0](https://img.shields.io/github/license/johnsideserf/siggy)](LICENSE)
-[![Docs](https://img.shields.io/badge/docs-signal--tui-blue)](https://johnsideserf.github.io/siggy/)
+<p align="center">
+  <a href="https://github.com/johnsideserf/siggy/actions/workflows/ci.yml"><img src="https://github.com/johnsideserf/siggy/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/johnsideserf/siggy/releases/latest"><img src="https://img.shields.io/github/v/release/johnsideserf/siggy" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/johnsideserf/siggy" alt="License: GPL-3.0"></a>
+  <a href="https://johnsideserf.github.io/siggy/"><img src="https://img.shields.io/badge/docs-siggy-blue" alt="Docs"></a>
+</p>
 
 A terminal-based Signal messenger client with an IRC aesthetic. Wraps [signal-cli](https://github.com/AsamK/signal-cli) via JSON-RPC for the messaging backend.
 
