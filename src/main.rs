@@ -654,6 +654,7 @@ async fn run_app(
     app.notify_group = config.notify_group;
     app.desktop_notifications = config.desktop_notifications;
     app.inline_images = config.inline_images;
+    app.show_link_previews = config.show_link_previews;
     app.native_images = config.native_images;
     app.incognito = incognito;
     app.show_receipts = config.show_receipts;
@@ -922,6 +923,9 @@ fn populate_demo_data(app: &mut App) {
             expiration_start_ms: 0,
             poll_data: None,
             poll_votes: Vec::new(),
+            preview: None,
+            preview_image_lines: None,
+            preview_image_path: None,
         }
     };
 

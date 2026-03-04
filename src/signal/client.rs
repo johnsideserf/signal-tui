@@ -1520,10 +1520,13 @@ fn parse_data_message(
         })
         .unwrap_or_default();
 
+    let mut previews = parse_link_previews(data, download_dir);
+
     // View-once messages: replace content with placeholder
     if data.get("viewOnce").and_then(|v| v.as_bool()).unwrap_or(false) {
         body = Some("[View-once message]".to_string());
         attachments = Vec::new();
+        previews = Vec::new();
     }
 
     let mentions = parse_mentions(data);
@@ -1555,6 +1558,7 @@ fn parse_data_message(
         text_styles,
         quote,
         expires_in_seconds,
+        previews,
     }))
 }
 
@@ -1877,10 +1881,13 @@ fn parse_sent_sync(
         })
         .unwrap_or_default();
 
+    let mut previews = parse_link_previews(sent, download_dir);
+
     // View-once messages: replace content with placeholder
     if sent.get("viewOnce").and_then(|v| v.as_bool()).unwrap_or(false) {
         body = Some("[View-once message]".to_string());
         attachments = Vec::new();
+        previews = Vec::new();
     }
 
     let mentions = parse_mentions(sent);
@@ -1912,6 +1919,7 @@ fn parse_sent_sync(
         text_styles,
         quote,
         expires_in_seconds,
+        previews,
     }))
 }
 
@@ -2105,6 +2113,30 @@ fn parse_attachment(
         filename: Some(effective_name),
         local_path,
     })
+}
+
+/// Parse link previews from a dataMessage / sentMessage object.
+fn parse_link_previews(
+    data: &serde_json::Value,
+    download_dir: &std::path::Path,
+) -> Vec<LinkPreview> {
+    // signal-cli uses "previews" (plural) in some versions, "preview" in others
+    let arr = data
+        .get("previews")
+        .or_else(|| data.get("preview"))
+        .and_then(|v| v.as_array());
+    let Some(arr) = arr else { return Vec::new() };
+    arr.iter()
+        .filter_map(|p| {
+            let url = p.get("url").and_then(|v| v.as_str())?.to_string();
+            let title = p.get("title").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string());
+            let description = p.get("description").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string());
+            let image_path = p.get("image")
+                .and_then(|img| parse_attachment(img, download_dir))
+                .and_then(|att| att.local_path);
+            Some(LinkPreview { url, title, description, image_path })
+        })
+        .collect()
 }
 
 /// Look for an attachment file in signal-cli's data directory by attachment ID.
@@ -3260,5 +3292,51 @@ mod tests {
             }
             _ => panic!("Expected PollTerminated, got {event:?}"),
         }
+    }
+
+    // --- Link preview parsing ---
+
+    #[test]
+    fn parse_link_preview_basic() {
+        let data = json!({
+            "previews": [{
+                "url": "https://example.com/article",
+                "title": "Example Article",
+                "description": "An interesting article",
+                "image": {
+                    "id": "abc123",
+                    "contentType": "image/jpeg"
+                }
+            }]
+        });
+        let previews = parse_link_previews(&data, std::path::Path::new("/tmp"));
+        assert_eq!(previews.len(), 1);
+        assert_eq!(previews[0].url, "https://example.com/article");
+        assert_eq!(previews[0].title.as_deref(), Some("Example Article"));
+        assert_eq!(previews[0].description.as_deref(), Some("An interesting article"));
+    }
+
+    #[test]
+    fn parse_link_preview_missing() {
+        let data = json!({"body": "hello"});
+        let previews = parse_link_previews(&data, std::path::Path::new("/tmp"));
+        assert!(previews.is_empty());
+    }
+
+    #[test]
+    fn parse_link_preview_singular_key() {
+        // signal-cli may use "preview" (singular) instead of "previews"
+        let data = json!({
+            "preview": [{
+                "url": "https://example.com",
+                "title": "Test"
+            }]
+        });
+        let previews = parse_link_previews(&data, std::path::Path::new("/tmp"));
+        assert_eq!(previews.len(), 1);
+        assert_eq!(previews[0].url, "https://example.com");
+        assert_eq!(previews[0].title.as_deref(), Some("Test"));
+        assert!(previews[0].description.is_none());
+        assert!(previews[0].image_path.is_none());
     }
 }

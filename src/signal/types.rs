@@ -196,6 +196,17 @@ pub struct SignalMessage {
     pub quote: Option<(i64, String, String)>,
     /// Disappearing message timer (seconds, 0 = no expiration)
     pub expires_in_seconds: i64,
+    /// Link previews attached to this message
+    pub previews: Vec<LinkPreview>,
+}
+
+/// Link preview metadata attached to a message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkPreview {
+    pub url: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub image_path: Option<String>,
 }
 
 /// An attachment on a message

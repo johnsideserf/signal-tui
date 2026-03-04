@@ -11,7 +11,7 @@ use crate::image_render;
 use crate::image_render::ImageProtocol;
 use crate::input::{self, InputAction, COMMANDS};
 use crate::theme::{self, Theme};
-use crate::signal::types::{Contact, Group, Mention, MessageStatus, PollData, PollOption, PollVote, Reaction, SignalEvent, SignalMessage, StyleType, TextStyle};
+use crate::signal::types::{Contact, Group, LinkPreview, Mention, MessageStatus, PollData, PollOption, PollVote, Reaction, SignalEvent, SignalMessage, StyleType, TextStyle};
 
 /// Log a database error via debug_log (no-op when --debug is off).
 fn db_warn<T>(result: Result<T, impl std::fmt::Display>, context: &str) {
@@ -159,6 +159,12 @@ pub struct DisplayMessage {
     pub poll_data: Option<PollData>,
     /// Votes received for this poll
     pub poll_votes: Vec<PollVote>,
+    /// Link preview metadata
+    pub preview: Option<LinkPreview>,
+    /// Pre-rendered halfblock image lines for link preview thumbnail
+    pub preview_image_lines: Option<Vec<Line<'static>>>,
+    /// Local filesystem path for native protocol link preview thumbnail
+    pub preview_image_path: Option<String>,
 }
 
 impl DisplayMessage {
@@ -276,6 +282,8 @@ pub struct App {
     pub contacts_filtered: Vec<(String, String)>,
     /// Show inline halfblock image previews in chat
     pub inline_images: bool,
+    /// Show link previews (title, description, thumbnail) for URLs
+    pub show_link_previews: bool,
     /// Link regions detected in the last rendered frame (for OSC 8 injection)
     pub link_regions: Vec<crate::ui::LinkRegion>,
     /// Maps display text → hidden URL for attachment links (cleared each frame)
@@ -608,6 +616,13 @@ pub const SETTINGS: &[SettingDef] = &[
         on_toggle: Some(|a| a.refresh_image_previews()),
     },
     SettingDef {
+        label: "Link previews",
+        get: |a| a.show_link_previews,
+        set: |a, v| a.show_link_previews = v,
+        save: Some(|c, v| c.show_link_previews = v),
+        on_toggle: Some(|a| a.refresh_link_preview_images()),
+    },
+    SettingDef {
         label: "Native images (experimental)",
         get: |a| a.native_images,
         set: |a, v| a.native_images = v,
@@ -697,12 +712,40 @@ impl App {
             for msg in &mut conv.messages {
                 if msg.body.starts_with("[image:") {
                     if self.inline_images {
-                        // Re-render from stored path
                         if let Some(ref p) = msg.image_path {
                             msg.image_lines = image_render::render_image(Path::new(p), 40);
                         }
                     } else {
                         msg.image_lines = None;
+                    }
+                }
+                // Also refresh link preview thumbnails
+                if let Some(ref preview) = msg.preview {
+                    if self.inline_images && self.show_link_previews {
+                        if let Some(ref p) = preview.image_path {
+                            msg.preview_image_lines = image_render::render_image(Path::new(p), 30);
+                            msg.preview_image_path = Some(p.clone());
+                        }
+                    } else {
+                        msg.preview_image_lines = None;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Re-render or clear link preview thumbnails (after toggling show_link_previews).
+    fn refresh_link_preview_images(&mut self) {
+        for conv in self.conversations.values_mut() {
+            for msg in &mut conv.messages {
+                if let Some(ref preview) = msg.preview {
+                    if self.show_link_previews && self.inline_images {
+                        if let Some(ref p) = preview.image_path {
+                            msg.preview_image_lines = image_render::render_image(Path::new(p), 30);
+                            msg.preview_image_path = Some(p.clone());
+                        }
+                    } else {
+                        msg.preview_image_lines = None;
                     }
                 }
             }
@@ -1944,6 +1987,7 @@ impl App {
             contacts_filter: String::new(),
             contacts_filtered: Vec::new(),
             inline_images: true,
+            show_link_previews: true,
             link_regions: Vec::new(),
             link_url_map: HashMap::new(),
             image_protocol: image_render::detect_protocol(),
@@ -2056,6 +2100,19 @@ impl App {
                             msg.image_path = Some(p.clone());
                             if self.inline_images {
                                 msg.image_lines = image_render::render_image(path, 40);
+                            }
+                        }
+                    }
+                }
+
+                // Re-render link preview thumbnails from stored paths
+                if let Some(ref preview) = msg.preview {
+                    if self.show_link_previews && self.inline_images {
+                        if let Some(ref p) = preview.image_path {
+                            let path = Path::new(p);
+                            if path.exists() {
+                                msg.preview_image_lines = image_render::render_image(path, 30);
+                                msg.preview_image_path = Some(p.clone());
                             }
                         }
                     }
@@ -2859,6 +2916,9 @@ impl App {
                     expiration_start_ms: msg_expiration_start,
                     poll_data: deferred_poll,
                     poll_votes: Vec::new(),
+                    preview: None,
+                    preview_image_lines: None,
+                    preview_image_path: None,
                 });
                 // Bump last_read_index if we inserted before the read marker
                 if let Some(read_idx) = self.last_read_index.get_mut(&conv_id) {
@@ -2922,6 +2982,29 @@ impl App {
             } else {
                 push_msg(format!("[attachment: {label}]{path_info}"), None, None, Vec::new(), Vec::new(), None);
             }
+        }
+
+        // Attach first link preview to the body message (not attachment messages)
+        if let Some(preview) = msg.previews.into_iter().next() {
+            if let Some(conv) = self.conversations.get_mut(&conv_id) {
+                if let Some(dm) = conv.messages.iter_mut().rev()
+                    .find(|m| m.timestamp_ms == msg_ts_ms && !m.body.starts_with('['))
+                {
+                    let (img_lines, img_path) = if self.show_link_previews && self.inline_images {
+                        if let Some(ref p) = preview.image_path {
+                            (image_render::render_image(Path::new(p), 30), Some(p.clone()))
+                        } else {
+                            (None, None)
+                        }
+                    } else {
+                        (None, None)
+                    };
+                    dm.preview = Some(preview.clone());
+                    dm.preview_image_lines = img_lines;
+                    dm.preview_image_path = img_path;
+                }
+            }
+            db_warn(self.db.upsert_link_preview(&conv_id, msg_ts_ms, &preview), "upsert_link_preview");
         }
 
         let is_active = self
@@ -3006,6 +3089,9 @@ impl App {
                 expiration_start_ms: 0,
                 poll_data: None,
                 poll_votes: Vec::new(),
+                preview: None,
+                preview_image_lines: None,
+                preview_image_path: None,
             });
             // Bump last_read_index if we inserted before the read marker
             if let Some(read_idx) = self.last_read_index.get_mut(conv_id) {
@@ -4167,6 +4253,9 @@ impl App {
                             expiration_start_ms: out_expiry_start,
                             poll_data: None,
                             poll_votes: Vec::new(),
+                            preview: None,
+                            preview_image_lines: None,
+                            preview_image_path: None,
                         });
                         if out_expires > 0 {
                             self.expiring_msg_count += 1;
@@ -4407,6 +4496,9 @@ impl App {
                             expiration_start_ms: 0,
                             poll_data: Some(poll_data),
                             poll_votes: Vec::new(),
+                            preview: None,
+                            preview_image_lines: None,
+                            preview_image_path: None,
                         });
                     }
                     self.db_warn_visible(self.db.insert_message_full(
@@ -5199,6 +5291,7 @@ mod tests {
             text_styles: vec![],
             quote: None,
             expires_in_seconds: 0,
+            previews: Vec::new(),
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         assert_eq!(app.conversations["+15551234567"].name, "+15551234567");
@@ -5229,6 +5322,7 @@ mod tests {
             text_styles: vec![],
             quote: None,
             expires_in_seconds: 0,
+            previews: Vec::new(),
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         assert_eq!(app.conversations["+1"].name, "Alice");
@@ -5267,6 +5361,7 @@ mod tests {
             text_styles: vec![],
             quote: None,
             expires_in_seconds: 0,
+            previews: Vec::new(),
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
 
@@ -5299,6 +5394,7 @@ mod tests {
             text_styles: vec![],
             quote: None,
             expires_in_seconds: 0,
+            previews: Vec::new(),
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
 
@@ -5332,6 +5428,7 @@ mod tests {
                 text_styles: vec![],
                 quote: None,
                 expires_in_seconds: 0,
+                previews: Vec::new(),
             };
             app.handle_signal_event(SignalEvent::MessageReceived(msg));
         }
@@ -5774,6 +5871,9 @@ mod tests {
                 expiration_start_ms: 0,
                 poll_data: None,
                 poll_votes: Vec::new(),
+                preview: None,
+                preview_image_lines: None,
+                preview_image_path: None,
             });
         }
 
@@ -5828,6 +5928,9 @@ mod tests {
                 expiration_start_ms: 0,
                 poll_data: None,
                 poll_votes: Vec::new(),
+                preview: None,
+                preview_image_lines: None,
+                preview_image_path: None,
             });
         }
 
@@ -5873,6 +5976,9 @@ mod tests {
                 expiration_start_ms: 0,
                 poll_data: None,
                 poll_votes: Vec::new(),
+                preview: None,
+                preview_image_lines: None,
+                preview_image_path: None,
             });
         }
 
@@ -5918,6 +6024,9 @@ mod tests {
                 expiration_start_ms: 0,
                 poll_data: None,
                 poll_votes: Vec::new(),
+                preview: None,
+                preview_image_lines: None,
+                preview_image_path: None,
             });
         }
 
@@ -5950,6 +6059,7 @@ mod tests {
             text_styles: vec![],
             quote: None,
             expires_in_seconds: 0,
+            previews: Vec::new(),
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
 
@@ -5987,6 +6097,9 @@ mod tests {
                 expiration_start_ms: 0,
                 poll_data: None,
                 poll_votes: Vec::new(),
+                preview: None,
+                preview_image_lines: None,
+                preview_image_path: None,
             });
         }
 
@@ -6039,6 +6152,7 @@ mod tests {
             text_styles: vec![],
             quote: None,
             expires_in_seconds: 0,
+            previews: Vec::new(),
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         let ts_ms = app.conversations["+1"].messages[0].timestamp_ms;
@@ -6078,6 +6192,7 @@ mod tests {
             text_styles: vec![],
             quote: None,
             expires_in_seconds: 0,
+            previews: Vec::new(),
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         let ts_ms = app.conversations["+1"].messages[0].timestamp_ms;
@@ -6125,6 +6240,7 @@ mod tests {
             text_styles: vec![],
             quote: None,
             expires_in_seconds: 0,
+            previews: Vec::new(),
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         let ts_ms = app.conversations["+1"].messages[0].timestamp_ms;
@@ -6183,6 +6299,9 @@ mod tests {
                 expiration_start_ms: 0,
                 poll_data: None,
                 poll_votes: Vec::new(),
+                preview: None,
+                preview_image_lines: None,
+                preview_image_path: None,
             });
         }
 
@@ -6254,6 +6373,9 @@ mod tests {
             expiration_start_ms: 0,
             poll_data: None,
             poll_votes: Vec::new(),
+            preview: None,
+            preview_image_lines: None,
+            preview_image_path: None,
         });
         conv.messages.push(DisplayMessage {
             sender: "Alice".to_string(),
@@ -6281,6 +6403,9 @@ mod tests {
             expiration_start_ms: 0,
             poll_data: None,
             poll_votes: Vec::new(),
+            preview: None,
+            preview_image_lines: None,
+            preview_image_path: None,
         });
         // A message with a quote from a non-contact
         conv.messages.push(DisplayMessage {
@@ -6304,6 +6429,9 @@ mod tests {
             expiration_start_ms: 0,
             poll_data: None,
             poll_votes: Vec::new(),
+            preview: None,
+            preview_image_lines: None,
+            preview_image_path: None,
         });
 
         // Contact list arrives — only +2 is a formal contact
@@ -6501,6 +6629,7 @@ mod tests {
             text_styles: vec![],
             quote: None,
             expires_in_seconds: 0,
+            previews: Vec::new(),
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
 
@@ -6664,6 +6793,7 @@ mod tests {
             text_styles: vec![],
             quote: None,
             expires_in_seconds: 0,
+            previews: Vec::new(),
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg1));
 
@@ -6690,6 +6820,7 @@ mod tests {
             text_styles: vec![],
             quote: None,
             expires_in_seconds: 0,
+            previews: Vec::new(),
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg2));
 
@@ -6718,6 +6849,7 @@ mod tests {
             text_styles: vec![],
             quote: None,
             expires_in_seconds: 0,
+            previews: Vec::new(),
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg("one", 1000)));
         app.handle_signal_event(SignalEvent::MessageReceived(msg("two", 2000)));
@@ -6754,6 +6886,7 @@ mod tests {
             text_styles: vec![],
             quote: None,
             expires_in_seconds: 0,
+            previews: Vec::new(),
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg("one", 1000)));
         app.handle_signal_event(SignalEvent::MessageReceived(msg("two", 2000)));
@@ -7023,6 +7156,7 @@ mod tests {
             text_styles: vec![],
             quote: None,
             expires_in_seconds: 0,
+            previews: Vec::new(),
         }
     }
 
@@ -7055,6 +7189,7 @@ mod tests {
             text_styles: vec![],
             quote: None,
             expires_in_seconds: 0,
+            previews: Vec::new(),
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         assert!(app.conversations["+1"].accepted);
@@ -7414,6 +7549,7 @@ mod tests {
             text_styles: vec![],
             quote: None,
             expires_in_seconds: 0,
+            previews: Vec::new(),
         }
     }
 
