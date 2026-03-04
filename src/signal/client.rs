@@ -462,6 +462,42 @@ impl SignalClient {
         Ok(())
     }
 
+    pub async fn list_identities(&self) -> Result<()> {
+        let id = Uuid::new_v4().to_string();
+        if let Ok(mut map) = self.pending_requests.lock() {
+            map.insert(id.clone(), ("listIdentities".to_string(), Instant::now()));
+        }
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "listIdentities".to_string(),
+            id,
+            params: Some(serde_json::json!({ "account": self.account })),
+        };
+        let json = serde_json::to_string(&request)?;
+        self.stdin_tx.send(json).await.context("Failed to send")?;
+        Ok(())
+    }
+
+    pub async fn trust_identity(&self, recipient: &str) -> Result<()> {
+        let id = Uuid::new_v4().to_string();
+        if let Ok(mut map) = self.pending_requests.lock() {
+            map.insert(id.clone(), ("trust".to_string(), Instant::now()));
+        }
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "trust".to_string(),
+            id,
+            params: Some(serde_json::json!({
+                "recipient": [recipient],
+                "trustAllKnownKeys": true,
+                "account": self.account,
+            })),
+        };
+        let json = serde_json::to_string(&request)?;
+        self.stdin_tx.send(json).await.context("Failed to send")?;
+        Ok(())
+    }
+
     pub async fn send_sync_request(&self) -> Result<()> {
         let id = Uuid::new_v4().to_string();
         let request = JsonRpcRequest {
@@ -1106,6 +1142,31 @@ fn parse_rpc_result(method: &str, result: &serde_json::Value, rpc_id: Option<&st
                 .collect();
             Some(SignalEvent::GroupList(groups))
         }
+        "listIdentities" => {
+            let arr = result.as_array()?;
+            let identities: Vec<IdentityInfo> = arr
+                .iter()
+                .map(|obj| {
+                    let number = obj.get("number").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let uuid = obj.get("uuid").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let fingerprint = obj.get("fingerprint").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let safety_number = obj.get("safetyNumber").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let trust_level = obj.get("trustLevel").and_then(|v| v.as_str())
+                        .map(TrustLevel::from_str)
+                        .unwrap_or(TrustLevel::TrustedUnverified);
+                    let added_timestamp = obj.get("addedTimestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+                    IdentityInfo {
+                        number,
+                        uuid,
+                        fingerprint,
+                        safety_number,
+                        trust_level,
+                        added_timestamp,
+                    }
+                })
+                .collect();
+            Some(SignalEvent::IdentityList(identities))
+        }
         "sendPollCreate" => {
             let id = rpc_id?.to_string();
             let server_ts = result.get("timestamp").and_then(|v| v.as_i64())
@@ -1113,7 +1174,7 @@ fn parse_rpc_result(method: &str, result: &serde_json::Value, rpc_id: Option<&st
                 .unwrap_or(0);
             Some(SignalEvent::SendTimestamp { rpc_id: id, server_ts })
         }
-        "sendReaction" | "remoteDelete" | "sendTypingIndicator" | "sendReceipt" | "updateContact" | "updateGroup" | "quitGroup" | "sendMessageRequestResponse" | "block" | "unblock" | "sendPinMessage" | "sendUnpinMessage" | "sendPollVote" | "sendPollTerminate" => None, // fire-and-forget, no action needed
+        "sendReaction" | "remoteDelete" | "sendTypingIndicator" | "sendReceipt" | "updateContact" | "updateGroup" | "quitGroup" | "sendMessageRequestResponse" | "block" | "unblock" | "sendPinMessage" | "sendUnpinMessage" | "sendPollVote" | "sendPollTerminate" | "trust" => None, // fire-and-forget, no action needed
         _ => None,
     }
 }
@@ -3338,5 +3399,46 @@ mod tests {
         assert_eq!(previews[0].title.as_deref(), Some("Test"));
         assert!(previews[0].description.is_none());
         assert!(previews[0].image_path.is_none());
+    }
+
+    #[test]
+    fn parse_identity_list() {
+        let result = json!([
+            {
+                "number": "+15551234567",
+                "uuid": "uuid-alice",
+                "fingerprint": "05ab12cd",
+                "safetyNumber": "123456789012345678901234567890123456789012345678901234567890",
+                "trustLevel": "TRUSTED_VERIFIED",
+                "addedTimestamp": 1700000000000_i64
+            },
+            {
+                "number": "+15559876543",
+                "uuid": "uuid-bob",
+                "fingerprint": "05ef34ab",
+                "safetyNumber": "098765432109876543210987654321098765432109876543210987654321",
+                "trustLevel": "UNTRUSTED",
+                "addedTimestamp": 1700000001000_i64
+            },
+            {
+                "number": "+15550001111",
+                "trustLevel": "TRUSTED_UNVERIFIED"
+            }
+        ]);
+        let event = parse_rpc_result("listIdentities", &result, None).unwrap();
+        match event {
+            SignalEvent::IdentityList(identities) => {
+                assert_eq!(identities.len(), 3);
+                assert_eq!(identities[0].number.as_deref(), Some("+15551234567"));
+                assert_eq!(identities[0].uuid.as_deref(), Some("uuid-alice"));
+                assert_eq!(identities[0].trust_level, TrustLevel::TrustedVerified);
+                assert_eq!(identities[0].fingerprint, "05ab12cd");
+                assert_eq!(identities[1].trust_level, TrustLevel::Untrusted);
+                assert_eq!(identities[2].trust_level, TrustLevel::TrustedUnverified);
+                assert_eq!(identities[2].fingerprint, "");
+                assert_eq!(identities[2].safety_number, "");
+            }
+            _ => panic!("Expected IdentityList"),
+        }
     }
 }

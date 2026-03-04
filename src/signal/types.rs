@@ -40,6 +40,36 @@ impl MessageStatus {
     }
 }
 
+/// Trust level for a contact's identity key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustLevel {
+    Untrusted,
+    TrustedUnverified,
+    TrustedVerified,
+}
+
+impl TrustLevel {
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "UNTRUSTED" => TrustLevel::Untrusted,
+            "TRUSTED_VERIFIED" => TrustLevel::TrustedVerified,
+            _ => TrustLevel::TrustedUnverified,
+        }
+    }
+}
+
+/// Identity key information for a contact.
+#[derive(Debug, Clone)]
+pub struct IdentityInfo {
+    pub number: Option<String>,
+    pub uuid: Option<String>,
+    pub fingerprint: String,
+    pub safety_number: String,
+    pub trust_level: TrustLevel,
+    #[allow(dead_code)]
+    pub added_timestamp: i64,
+}
+
 /// A single emoji reaction on a message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reaction {
@@ -172,6 +202,7 @@ pub enum SignalEvent {
     },
     ContactList(Vec<Contact>),
     GroupList(Vec<Group>),
+    IdentityList(Vec<IdentityInfo>),
     Error(String),
 }
 

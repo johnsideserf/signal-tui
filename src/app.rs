@@ -11,7 +11,7 @@ use crate::image_render;
 use crate::image_render::ImageProtocol;
 use crate::input::{self, InputAction, COMMANDS};
 use crate::theme::{self, Theme};
-use crate::signal::types::{Contact, Group, LinkPreview, Mention, MessageStatus, PollData, PollOption, PollVote, Reaction, SignalEvent, SignalMessage, StyleType, TextStyle};
+use crate::signal::types::{Contact, Group, IdentityInfo, LinkPreview, Mention, MessageStatus, PollData, PollOption, PollVote, Reaction, SignalEvent, SignalMessage, StyleType, TextStyle, TrustLevel};
 
 /// Log a database error via debug_log (no-op when --debug is off).
 fn db_warn<T>(result: Result<T, impl std::fmt::Display>, context: &str) {
@@ -280,6 +280,14 @@ pub struct App {
     pub contacts_filter: String,
     /// Filtered list of (phone_number, display_name) for contacts overlay
     pub contacts_filtered: Vec<(String, String)>,
+    /// Verify identity overlay visible
+    pub show_verify: bool,
+    /// Cursor position in verify overlay (for group member list)
+    pub verify_index: usize,
+    /// Identity info entries filtered for the current overlay
+    pub verify_identities: Vec<IdentityInfo>,
+    /// Cached trust levels keyed by phone number
+    pub identity_trust: HashMap<String, TrustLevel>,
     /// Show inline halfblock image previews in chat
     pub inline_images: bool,
     /// Show link previews (title, description, thumbnail) for URLs
@@ -567,6 +575,10 @@ pub enum SendRequest {
         recipient: String,
         is_group: bool,
         poll_timestamp: i64,
+    },
+    ListIdentities,
+    TrustIdentity {
+        recipient: String,
     },
 }
 
@@ -1567,6 +1579,37 @@ impl App {
     }
 
     /// Handle a key press while the contacts overlay is open.
+    pub fn handle_verify_key(&mut self, code: KeyCode) -> Option<SendRequest> {
+        match code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                if !self.verify_identities.is_empty()
+                    && self.verify_index < self.verify_identities.len() - 1
+                {
+                    self.verify_index += 1;
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if self.verify_index > 0 {
+                    self.verify_index -= 1;
+                }
+            }
+            KeyCode::Char('v') | KeyCode::Enter => {
+                // Trust the selected identity
+                if let Some(id) = self.verify_identities.get(self.verify_index) {
+                    if let Some(ref number) = id.number {
+                        let recipient = number.clone();
+                        return Some(SendRequest::TrustIdentity { recipient });
+                    }
+                }
+            }
+            KeyCode::Esc => {
+                self.show_verify = false;
+            }
+            _ => {}
+        }
+        None
+    }
+
     pub fn handle_contacts_key(&mut self, code: KeyCode) {
         match code {
             KeyCode::Char('j') | KeyCode::Down => {
@@ -1986,6 +2029,10 @@ impl App {
             contacts_index: 0,
             contacts_filter: String::new(),
             contacts_filtered: Vec::new(),
+            show_verify: false,
+            verify_index: 0,
+            verify_identities: Vec::new(),
+            identity_trust: HashMap::new(),
             inline_images: true,
             show_link_previews: true,
             link_regions: Vec::new(),
@@ -2350,6 +2397,10 @@ impl App {
         if self.show_help {
             self.show_help = false;
             return (true, None);
+        }
+        if self.show_verify {
+            let send = self.handle_verify_key(code);
+            return (true, send);
         }
         if self.show_contacts {
             self.handle_contacts_key(code);
@@ -2776,6 +2827,7 @@ impl App {
             }
             SignalEvent::ContactList(contacts) => self.handle_contact_list(contacts),
             SignalEvent::GroupList(groups) => self.handle_group_list(groups),
+            SignalEvent::IdentityList(identities) => self.handle_identity_list(identities),
             SignalEvent::Error(ref err) => {
                 crate::debug_log::logf(format_args!("signal event error: {err}"));
                 self.status_message = format!("error: {err}");
@@ -3697,6 +3749,41 @@ impl App {
         self.resolve_stored_names();
     }
 
+    fn handle_identity_list(&mut self, identities: Vec<IdentityInfo>) {
+        // Populate the trust level cache
+        self.identity_trust.clear();
+        for id in &identities {
+            if let Some(ref number) = id.number {
+                self.identity_trust.insert(number.clone(), id.trust_level);
+            }
+        }
+        // If verify overlay is open, refresh the displayed identities
+        if self.show_verify {
+            if let Some(ref conv_id) = self.active_conversation {
+                let conv_id = conv_id.clone();
+                let is_group = self.conversations.get(&conv_id).map(|c| c.is_group).unwrap_or(false);
+                if is_group {
+                    if let Some(group) = self.groups.get(&conv_id) {
+                        let members: HashSet<&str> = group.members.iter().map(|s| s.as_str()).collect();
+                        self.verify_identities = identities.iter()
+                            .filter(|id| id.number.as_ref().is_some_and(|n| members.contains(n.as_str())))
+                            .cloned()
+                            .collect();
+                    }
+                } else {
+                    self.verify_identities = identities.iter()
+                        .filter(|id| id.number.as_deref() == Some(conv_id.as_str()))
+                        .cloned()
+                        .collect();
+                }
+                // Clamp index
+                if !self.verify_identities.is_empty() && self.verify_index >= self.verify_identities.len() {
+                    self.verify_index = self.verify_identities.len() - 1;
+                }
+            }
+        }
+    }
+
     /// Re-resolve reaction senders and quote authors across all conversations.
     /// Uses contact_names first, then falls back to sender_id→sender mappings
     /// from the messages themselves (covers people not in formal contacts but
@@ -4425,6 +4512,54 @@ impl App {
                 self.group_menu_index = 0;
                 self.group_menu_filter.clear();
                 self.group_menu_input.clear();
+            }
+            InputAction::Verify => {
+                if let Some(ref conv_id) = self.active_conversation {
+                    let conv_id = conv_id.clone();
+                    let conv = &self.conversations[&conv_id];
+                    // Filter identities for this conversation
+                    if conv.is_group {
+                        // For groups, show identities for all members
+                        if let Some(group) = self.groups.get(&conv_id) {
+                            let members: HashSet<&str> = group.members.iter().map(|s| s.as_str()).collect();
+                            self.verify_identities = self.identity_trust.keys()
+                                .filter(|num| members.contains(num.as_str()))
+                                .filter_map(|num| {
+                                    // Find matching identity info from cached data
+                                    // We rebuild from identity_trust + contact_names
+                                    Some(IdentityInfo {
+                                        number: Some(num.clone()),
+                                        uuid: None,
+                                        fingerprint: String::new(),
+                                        safety_number: String::new(),
+                                        trust_level: *self.identity_trust.get(num)?,
+                                        added_timestamp: 0,
+                                    })
+                                })
+                                .collect();
+                        } else {
+                            self.verify_identities.clear();
+                        }
+                    } else {
+                        // 1:1 — show single identity
+                        self.verify_identities = self.identity_trust.get(&conv_id)
+                            .map(|tl| vec![IdentityInfo {
+                                number: Some(conv_id.clone()),
+                                uuid: None,
+                                fingerprint: String::new(),
+                                safety_number: String::new(),
+                                trust_level: *tl,
+                                added_timestamp: 0,
+                            }])
+                            .unwrap_or_default();
+                    }
+                    self.show_verify = true;
+                    self.verify_index = 0;
+                    // Request fresh identity data
+                    return Some(SendRequest::ListIdentities);
+                } else {
+                    self.status_message = "no active conversation".to_string();
+                }
             }
             InputAction::Help => {
                 self.show_help = true;
