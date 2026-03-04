@@ -1,5 +1,72 @@
 # Changelog
 
+## v0.9.0
+
+### Pinned messages
+
+- **Pin and unpin messages** -- press `p` in Normal mode or use the action menu
+  to pin a message. Choose a pin duration (forever, 24h, 7d, 30d). Pinned
+  messages show a banner at the top of the chat area. Unpin by pressing `p`
+  again. Pin state syncs across devices (closes #65)
+
+### Link previews
+
+- **URL preview display** -- messages containing URLs now show link preview
+  cards with title, description, and thumbnail image (when available). Toggle
+  via `/settings` > "Link previews" (closes #63)
+
+### Polls
+
+- **Create polls** -- use `/poll "question" "opt1" "opt2"` to create a poll.
+  Add `--single` to restrict to single-select. Polls display as inline bar
+  charts showing vote counts and percentages
+- **Vote in polls** -- press Enter on a poll message to open the vote overlay.
+  Select options with Space, confirm with Enter. Multi-select polls allow
+  toggling multiple options (closes #64)
+
+### Identity verification
+
+- **`/verify` command** -- verify the identity keys of your contacts. In 1:1
+  chats, shows the safety number and trust level. In groups, browse members
+  and verify individually. Trust/untrust identity keys directly from the
+  overlay (closes #70)
+
+### Profile editor
+
+- **`/profile` command** -- edit your Signal profile directly from the TUI.
+  Change your given name, family name, about text, and about emoji. Navigate
+  with j/k, Enter to edit fields inline, and Save to push changes via
+  `updateProfile` RPC (closes #69)
+
+### About overlay
+
+- **`/about` command** -- shows app version, description, author, license,
+  and repository link. Press any key to close
+
+### Sidebar position
+
+- **Left/right sidebar** -- new setting to place the sidebar on the right
+  side instead of the default left. Toggle via `/settings` > "Sidebar on
+  right" (closes #125)
+
+### Bug fixes
+
+- **Mouse selection** -- fixed mouse click positioning in the input bar,
+  right-click paste, and slow Ctrl+V behavior (#124)
+- **Poll vote counting** -- votes now correctly use `vote_count` as a
+  multiplier instead of always counting as 1 (#122)
+- **Mention parsing** -- fixed mention field names to match signal-cli's
+  actual protocol (#108)
+
+### Internal
+
+- **Test coverage** -- added unit tests for UI helpers and event handlers,
+  migrated to rstest parameterized tests (#109, #113, #120)
+- **Robustness** -- removed unsafe unwraps, surfaced DB errors in status bar,
+  used binary search for message insertion (#118, #119)
+
+---
+
 ## v0.8.0
 
 ### Disappearing messages

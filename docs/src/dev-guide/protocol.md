@@ -100,6 +100,10 @@ outbound request). They have a `method` field but no `id`:
 | `block` | Block a contact or group |
 | `unblock` | Unblock a contact or group |
 | `setExpiration` | Set disappearing message timer |
+| `updateProfile` | Update own Signal profile (name, about, emoji) |
+| `listIdentities` | List known identity keys for contacts |
+| `trust` | Trust a contact's identity key |
+| `sendMessageRequestResponse` | Accept or delete a message request |
 
 ### Inbound notifications (signal-cli -> signal-tui)
 

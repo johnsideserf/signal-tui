@@ -52,21 +52,23 @@
 - [x] Mouse support (click sidebar, scroll messages, click input bar, overlay scroll)
 - [x] Color themes (selectable themes via `/theme` or `/settings`)
 - [x] Desktop notifications (OS-native via `notify-rust`, configurable toggle)
+- [x] Link previews (URL preview cards with title, description, thumbnail)
+- [x] Polls (create with `/poll`, vote overlay, inline bar charts)
+- [x] Pinned messages (pin/unpin with `p`, duration picker, banner display)
+- [x] Identity key verification (`/verify` overlay with trust management)
+- [x] Profile editor (`/profile` overlay for Signal profile fields)
+- [x] About overlay (`/about` command showing app info)
+- [x] Sidebar position setting (left or right placement)
 
 ## Future
 
 ### Medium priority
 
-- [ ] Link previews -- display URL previews for shared links (#63)
-- [ ] Polls -- create and vote in Signal polls (#64)
-- [ ] Pinned messages -- view and manage pinned messages (#65)
+- [ ] Publish to crates.io (#11)
+- [ ] Multi-line message input (Shift+Enter for newlines)
 
 ### Low priority
 
-- [ ] Publish to crates.io (#11)
-- [ ] Update profile from TUI (#69)
-- [ ] Identity key verification (#70)
-- [ ] Multi-line message input (Shift+Enter for newlines)
 - [ ] Message history pagination (scroll-up to load older messages)
 - [ ] Scroll position memory per conversation
 - [ ] Configurable keybindings

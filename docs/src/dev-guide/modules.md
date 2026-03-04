@@ -83,7 +83,8 @@ Fields: `account`, `signal_cli_path`, `download_dir`, `notify_direct`,
 Input parsing. Converts text input into an `InputAction` enum. Handles all
 slash commands (`/join`, `/part`, `/quit`, `/sidebar`, `/bell`, `/mute`,
 `/block`, `/unblock`, `/attach`, `/search`, `/contacts`, `/settings`,
-`/disappearing`, `/group`, `/theme`, `/help`) and their aliases.
+`/disappearing`, `/group`, `/theme`, `/poll`, `/verify`, `/profile`,
+`/about`, `/help`) and their aliases.
 
 Also defines `CommandInfo` and the `COMMANDS` constant used for autocomplete.
 

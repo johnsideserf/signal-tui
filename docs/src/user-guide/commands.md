@@ -18,6 +18,10 @@ All commands start with `/`. Type `/` in Insert mode to open the autocomplete po
 | `/disappearing` | `/dm` | `<duration>` | Set disappearing message timer (`off`, `30s`, `5m`, `1h`, `1d`, `1w`) |
 | `/group` | `/g` | | Open group management menu |
 | `/theme` | `/t` | | Open theme picker |
+| `/poll` | | `"q" "a" "b" [--single]` | Create a poll |
+| `/verify` | `/v` | | Verify contact identity keys |
+| `/profile` | | | Edit your Signal profile |
+| `/about` | | | Show app info (version, license, etc.) |
 | `/contacts` | `/c` | | Browse synced contacts |
 | `/settings` | | | Open settings overlay |
 | `/help` | `/h` | | Show help overlay |
@@ -106,6 +110,34 @@ group, create a new group, or leave. Only available in group conversations
 **Switch color theme:**
 ```
 /theme
+```
+
+**Create a poll:**
+```
+/poll "Lunch?" "Pizza" "Sushi" "Tacos"
+```
+
+**Create a single-select poll:**
+```
+/poll "Best editor?" "Vim" "Emacs" --single
+```
+
+**Verify a contact's identity:**
+```
+/verify
+```
+
+**Edit your Signal profile:**
+```
+/profile
+```
+
+Navigate fields with `j`/`k`, press Enter to edit a field inline, Enter again
+to confirm (or Esc to cancel). Move to Save and press Enter to push changes.
+
+**Show app info:**
+```
+/about
 ```
 
 ## Messaging a new contact

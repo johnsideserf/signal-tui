@@ -37,6 +37,7 @@ changes in the status bar.
 | `q` | Reply to focused message (quote reply) |
 | `e` | Edit own outgoing message |
 | `d` | Delete focused message |
+| `p` | Pin / unpin focused message |
 | `n` | Jump to next search result |
 | `N` | Jump to previous search result |
 | `@` | Mention autocomplete (in Insert mode) |

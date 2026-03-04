@@ -241,6 +241,53 @@ Open the theme picker with `/theme` (alias `/t`) or from `/settings` > Theme.
 Choose from built-in themes with customizable sidebar, chat, status bar, and
 accent colors.
 
+## Pinned messages
+
+Pin important messages to the top of a conversation. Press `p` in Normal mode
+on a focused message (or use the action menu) to pin it. Choose a duration:
+forever, 24 hours, 7 days, or 30 days. Pinned messages show as a banner at the
+top of the chat area. Press `p` on an already-pinned message to unpin it. Pin
+state syncs across all linked devices.
+
+## Link previews
+
+Messages containing URLs display link preview cards with the page title,
+description, and thumbnail image (when available). Toggle via `/settings` >
+"Link previews" (enabled by default).
+
+## Polls
+
+Create polls with `/poll "question" "option1" "option2"`. Add `--single` to
+restrict voting to one option. Polls display inline as bar charts showing vote
+counts and percentages.
+
+Press Enter on a poll message in Normal mode to open the vote overlay. Select
+options with Space (multi-select) or Enter (single-select), then confirm. Your
+votes sync across devices.
+
+## Identity verification
+
+Use `/verify` to verify the identity keys of your contacts. In 1:1 chats, the
+overlay shows the contact's safety number and current trust level. In group
+chats, browse members and verify individually. You can trust or untrust
+identity keys directly from the overlay.
+
+## Profile editor
+
+Use `/profile` to edit your Signal profile. Change your given name, family
+name, about text, and about emoji. Navigate fields with `j`/`k`, press Enter
+to edit inline, and Save to push changes to Signal's servers.
+
+## About
+
+Use `/about` to see the app version, description, author, license, and
+repository link.
+
+## Sidebar position
+
+The sidebar can be placed on the left (default) or right side of the screen.
+Toggle via `/settings` > "Sidebar on right".
+
 ## Demo mode
 
 ```sh
