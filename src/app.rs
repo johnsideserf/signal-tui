@@ -421,6 +421,8 @@ pub struct App {
     /// Buffered poll data for polls whose message hasn't arrived yet (race condition)
     /// Key: (conv_id, timestamp_ms)
     pub pending_polls: HashMap<(String, i64), PollData>,
+    /// Number of in-memory messages with expiration > 0 (skip sweeps when zero)
+    pub expiring_msg_count: usize,
 }
 
 /// A search result entry.
@@ -2014,6 +2016,7 @@ impl App {
             poll_vote_selections: Vec::new(),
             poll_vote_pending: None,
             pending_polls: HashMap::new(),
+            expiring_msg_count: 0,
         }
     }
 
@@ -2314,11 +2317,28 @@ impl App {
         (false, None)
     }
 
-    /// Handle Normal mode key. Returns true if consumed.
+    /// Handle Normal mode key. Dispatches to scroll, edit, or action sub-handlers.
     pub fn handle_normal_key(&mut self, modifiers: KeyModifiers, code: KeyCode) -> Option<SendRequest> {
         match (modifiers, code) {
-            // Scrolling (line-by-line: clear focused_msg_index so the draw
-            // function re-derives it from the viewport position each frame)
+            (_, KeyCode::Char('j' | 'k' | 'J' | 'K' | 'g' | 'G'))
+            | (KeyModifiers::CONTROL, KeyCode::Char('d' | 'u')) => {
+                self.handle_normal_scroll_key(modifiers, code)
+            }
+            (_, KeyCode::Char('i' | 'a' | 'I' | 'A' | 'o' | 'h' | 'l' | '0' | '$' | 'w' | 'b' | 'x' | 'D' | '/'))
+            | (_, KeyCode::Esc) => {
+                self.handle_normal_edit_key(code)
+            }
+            (_, KeyCode::Char('y' | 'Y' | 'r' | 'q' | 'e' | 'd' | 'n' | 'N' | 'p'))
+            | (_, KeyCode::Enter) => {
+                self.handle_normal_action_key(code)
+            }
+            _ => None,
+        }
+    }
+
+    /// Scroll and viewport navigation keys (j/k/J/K/g/G/Ctrl-d/Ctrl-u).
+    fn handle_normal_scroll_key(&mut self, modifiers: KeyModifiers, code: KeyCode) -> Option<SendRequest> {
+        match (modifiers, code) {
             (_, KeyCode::Char('j')) => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(1);
                 self.focused_msg_index = None;
@@ -2327,7 +2347,6 @@ impl App {
                 self.scroll_offset = self.scroll_offset.saturating_add(1);
                 self.focused_msg_index = None;
             }
-            // Message-level navigation (skip separators and system messages)
             (_, KeyCode::Char('J')) => {
                 self.jump_to_adjacent_message(false);
             }
@@ -2354,47 +2373,51 @@ impl App {
                 self.scroll_offset = 0;
                 self.focused_msg_index = None;
             }
+            _ => {}
+        }
+        None
+    }
 
-            // Switch to Insert mode
-            (_, KeyCode::Char('i')) => {
+    /// Input buffer and mode-switch keys (i/a/I/A/o/h/l/0/$/w/b/x/D///Esc).
+    fn handle_normal_edit_key(&mut self, code: KeyCode) -> Option<SendRequest> {
+        match code {
+            KeyCode::Char('i') => {
                 self.mode = InputMode::Insert;
             }
-            (_, KeyCode::Char('a')) => {
+            KeyCode::Char('a') => {
                 if self.input_cursor < self.input_buffer.len() {
                     self.input_cursor += 1;
                 }
                 self.mode = InputMode::Insert;
             }
-            (_, KeyCode::Char('I')) => {
+            KeyCode::Char('I') => {
                 self.input_cursor = 0;
                 self.mode = InputMode::Insert;
             }
-            (_, KeyCode::Char('A')) => {
+            KeyCode::Char('A') => {
                 self.input_cursor = self.input_buffer.len();
                 self.mode = InputMode::Insert;
             }
-            (_, KeyCode::Char('o')) => {
+            KeyCode::Char('o') => {
                 self.input_buffer.clear();
                 self.input_cursor = 0;
                 self.mode = InputMode::Insert;
             }
-
-            // Cursor movement
-            (_, KeyCode::Char('h')) => {
+            KeyCode::Char('h') => {
                 self.input_cursor = self.input_cursor.saturating_sub(1);
             }
-            (_, KeyCode::Char('l')) => {
+            KeyCode::Char('l') => {
                 if self.input_cursor < self.input_buffer.len() {
                     self.input_cursor += 1;
                 }
             }
-            (_, KeyCode::Char('0')) => {
+            KeyCode::Char('0') => {
                 self.input_cursor = 0;
             }
-            (_, KeyCode::Char('$')) => {
+            KeyCode::Char('$') => {
                 self.input_cursor = self.input_buffer.len();
             }
-            (_, KeyCode::Char('w')) => {
+            KeyCode::Char('w') => {
                 let buf = &self.input_buffer;
                 let mut pos = self.input_cursor;
                 while pos < buf.len() {
@@ -2409,7 +2432,7 @@ impl App {
                 }
                 self.input_cursor = pos;
             }
-            (_, KeyCode::Char('b')) => {
+            KeyCode::Char('b') => {
                 let buf = &self.input_buffer;
                 let mut pos = self.input_cursor;
                 while pos > 0 {
@@ -2424,9 +2447,7 @@ impl App {
                 }
                 self.input_cursor = pos;
             }
-
-            // Buffer editing
-            (_, KeyCode::Char('x')) => {
+            KeyCode::Char('x') => {
                 if self.input_cursor < self.input_buffer.len() {
                     self.input_buffer.remove(self.input_cursor);
                     if self.input_cursor > 0
@@ -2436,28 +2457,43 @@ impl App {
                     }
                 }
             }
-            (_, KeyCode::Char('D')) => {
+            KeyCode::Char('D') => {
                 self.input_buffer.truncate(self.input_cursor);
             }
+            KeyCode::Char('/') => {
+                self.input_buffer = "/".to_string();
+                self.input_cursor = 1;
+                self.mode = InputMode::Insert;
+                self.update_autocomplete();
+            }
+            KeyCode::Esc => {
+                if !self.input_buffer.is_empty() {
+                    self.input_buffer.clear();
+                    self.input_cursor = 0;
+                    self.pending_mentions.clear();
+                }
+            }
+            _ => {}
+        }
+        None
+    }
 
-            // Copy message to clipboard
-            (_, KeyCode::Char('y')) => {
+    /// Message action keys (y/Y/r/q/e/d/n/N/p/Enter).
+    fn handle_normal_action_key(&mut self, code: KeyCode) -> Option<SendRequest> {
+        match code {
+            KeyCode::Char('y') => {
                 self.copy_selected_message(false);
             }
-            (_, KeyCode::Char('Y')) => {
+            KeyCode::Char('Y') => {
                 self.copy_selected_message(true);
             }
-
-            // React to focused message
-            (_, KeyCode::Char('r')) => {
+            KeyCode::Char('r') => {
                 if self.selected_message().is_some_and(|m| !m.is_system) {
                     self.show_reaction_picker = true;
                     self.reaction_picker_index = 0;
                 }
             }
-
-            // Reply/quote focused message
-            (_, KeyCode::Char('q')) => {
+            KeyCode::Char('q') => {
                 if let Some(msg) = self.selected_message() {
                     if !msg.is_system && !msg.is_deleted {
                         let author_phone = msg.sender_id.clone();
@@ -2467,7 +2503,6 @@ impl App {
                             msg.body.clone()
                         };
                         let ts = msg.timestamp_ms;
-                        // Resolve sender_id: if empty or "you", use account
                         let phone = if author_phone.is_empty() || author_phone == "you" {
                             self.account.clone()
                         } else {
@@ -2478,9 +2513,7 @@ impl App {
                     }
                 }
             }
-
-            // Edit own message
-            (_, KeyCode::Char('e')) => {
+            KeyCode::Char('e') => {
                 if let Some(msg) = self.selected_message() {
                     if msg.sender == "you" && !msg.is_deleted && !msg.is_system {
                         let ts = msg.timestamp_ms;
@@ -2495,56 +2528,32 @@ impl App {
                     }
                 }
             }
-
-            // Delete message
-            (_, KeyCode::Char('d')) => {
+            KeyCode::Char('d') => {
                 if let Some(msg) = self.selected_message() {
                     if !msg.is_system && !msg.is_deleted {
                         self.show_delete_confirm = true;
                     }
                 }
             }
-
-            // Search navigation: n = next result (older), N = previous (newer)
-            (_, KeyCode::Char('n')) => {
+            KeyCode::Char('n') => {
                 if !self.search_results.is_empty() {
                     self.jump_to_search_result(true);
                 }
             }
-            (_, KeyCode::Char('N')) => {
+            KeyCode::Char('N') => {
                 if !self.search_results.is_empty() {
                     self.jump_to_search_result(false);
                 }
             }
-
-            // Open action menu on focused message
-            (_, KeyCode::Enter) => {
+            KeyCode::Enter => {
                 if self.selected_message().is_some_and(|m| !m.is_system) {
                     self.show_action_menu = true;
                     self.action_menu_index = 0;
                 }
             }
-
-            // Quick actions
-            (_, KeyCode::Char('/')) => {
-                self.input_buffer = "/".to_string();
-                self.input_cursor = 1;
-                self.mode = InputMode::Insert;
-                self.update_autocomplete();
-            }
-            (_, KeyCode::Esc) => {
-                if !self.input_buffer.is_empty() {
-                    self.input_buffer.clear();
-                    self.input_cursor = 0;
-                    self.pending_mentions.clear();
-                }
-            }
-
-            // Pin/Unpin focused message
-            (_, KeyCode::Char('p')) => {
+            KeyCode::Char('p') => {
                 return self.execute_pin_toggle();
             }
-
             _ => {}
         }
         None
@@ -2857,6 +2866,9 @@ impl App {
                         *read_idx += 1;
                     }
                 }
+                if msg_expires_in > 0 {
+                    self.expiring_msg_count += 1;
+                }
             }
             db_warn(
                 self.db.insert_message_full(
@@ -3012,8 +3024,12 @@ impl App {
     /// Remove expired disappearing messages from memory and DB.
     /// Returns true if any messages were removed (caller should re-render).
     pub fn sweep_expired_messages(&mut self) -> bool {
+        if self.expiring_msg_count == 0 {
+            return false;
+        }
+
         let now_ms = Utc::now().timestamp_millis();
-        let mut removed = false;
+        let mut removed_count: usize = 0;
 
         for conv in self.conversations.values_mut() {
             let before = conv.messages.len();
@@ -3025,15 +3041,16 @@ impl App {
                     true
                 }
             });
-            if conv.messages.len() < before {
-                removed = true;
-            }
+            removed_count += before - conv.messages.len();
         }
 
+        self.expiring_msg_count = self.expiring_msg_count.saturating_sub(removed_count);
+
         // Clean up DB
+        let removed = removed_count > 0;
         if let Ok(n) = self.db.delete_expired_messages(now_ms) {
             if n > 0 {
-                removed = true;
+                return true;
             }
         }
 
@@ -4151,6 +4168,9 @@ impl App {
                             poll_data: None,
                             poll_votes: Vec::new(),
                         });
+                        if out_expires > 0 {
+                            self.expiring_msg_count += 1;
+                        }
                     }
                     self.db_warn_visible(self.db.insert_message_full(
                         &conv_id,
