@@ -20,6 +20,16 @@ fn db_warn<T>(result: Result<T, impl std::fmt::Display>, context: &str) {
     }
 }
 
+impl App {
+    /// Like `db_warn` but also surfaces the error in the status bar so the user sees it.
+    fn db_warn_visible<T>(&mut self, result: Result<T, impl std::fmt::Display>, context: &str) {
+        if let Err(e) = result {
+            crate::debug_log::logf(format_args!("db {context}: {e}"));
+            self.status_message = format!("DB error ({context}): {e}");
+        }
+    }
+}
+
 /// Fire an OS-level desktop notification (runs on a blocking thread to avoid stalling async).
 fn show_desktop_notification(sender: &str, body: &str, is_group: bool, group_name: Option<&str>) {
     let title = if is_group {
@@ -1126,7 +1136,7 @@ impl App {
                 if let Some(conv) = self.conversations.get_mut(&conv_id) {
                     conv.accepted = true;
                 }
-                db_warn(self.db.update_accepted(&conv_id, true), "update_accepted");
+                self.db_warn_visible(self.db.update_accepted(&conv_id, true), "update_accepted");
                 self.show_message_request = false;
                 Some(SendRequest::MessageRequestResponse {
                     recipient: conv_id,
@@ -1138,7 +1148,7 @@ impl App {
                 let is_group = self.conversations.get(&conv_id).map(|c| c.is_group).unwrap_or(false);
                 self.conversations.remove(&conv_id);
                 self.conversation_order.retain(|id| id != &conv_id);
-                db_warn(self.db.delete_conversation(&conv_id), "delete_conversation");
+                self.db_warn_visible(self.db.delete_conversation(&conv_id), "delete_conversation");
                 self.show_message_request = false;
                 self.active_conversation = None;
                 Some(SendRequest::MessageRequestResponse {
@@ -1230,7 +1240,7 @@ impl App {
         }
 
         // Persist to DB
-        db_warn(
+        self.db_warn_visible(
             self.db.upsert_reaction(&conv_id, target_timestamp, &target_author, "you", &emoji),
             "upsert_reaction",
         );
@@ -1485,7 +1495,7 @@ impl App {
                                 }
                             }
                         }
-                        db_warn(self.db.close_poll(&conv_id, poll_timestamp), "close_poll");
+                        self.db_warn_visible(self.db.close_poll(&conv_id, poll_timestamp), "close_poll");
                         return Some(SendRequest::PollTerminate {
                             recipient: conv_id,
                             is_group,
@@ -2679,7 +2689,7 @@ impl App {
                 if let Some(conv) = self.conversations.get_mut(&conv_id) {
                     conv.expiration_timer = seconds;
                 }
-                db_warn(self.db.update_expiration_timer(&conv_id, seconds), "update_expiration_timer");
+                self.db_warn_visible(self.db.update_expiration_timer(&conv_id, seconds), "update_expiration_timer");
                 // Insert system message
                 self.handle_system_message(&conv_id, &body, timestamp, timestamp_ms);
             }
@@ -2748,8 +2758,8 @@ impl App {
         if is_new && !msg.is_outgoing && !is_group && !self.contact_names.contains_key(&conv_id) {
             if let Some(conv) = self.conversations.get_mut(&conv_id) {
                 conv.accepted = false;
-                db_warn(self.db.update_accepted(&conv_id, false), "update_accepted");
             }
+            self.db_warn_visible(self.db.update_accepted(&conv_id, false), "update_accepted");
         }
 
         let ts_rfc3339 = msg.timestamp.to_rfc3339();
@@ -2981,7 +2991,7 @@ impl App {
             }
         }
         let ts_rfc3339 = timestamp.to_rfc3339();
-        db_warn(
+        self.db_warn_visible(
             self.db.insert_message(conv_id, "", &ts_rfc3339, body, true, None, timestamp_ms),
             "insert_system_message",
         );
@@ -3073,12 +3083,12 @@ impl App {
 
         // Persist to DB regardless of whether message is in memory
         if is_remove {
-            db_warn(
+            self.db_warn_visible(
                 self.db.remove_reaction(conv_id, target_timestamp, target_author, sender),
                 "remove_reaction",
             );
         } else {
-            db_warn(
+            self.db_warn_visible(
                 self.db.upsert_reaction(conv_id, target_timestamp, target_author, sender, emoji),
                 "upsert_reaction",
             );
@@ -3107,7 +3117,7 @@ impl App {
                 msg.is_deleted = true;
                 msg.body = "[deleted]".to_string();
                 msg.reactions.clear();
-                db_warn(
+                self.db_warn_visible(
                     self.db.mark_message_deleted(&conv_id, target_timestamp),
                     "mark_message_deleted",
                 );
@@ -3138,7 +3148,7 @@ impl App {
                 msg.is_deleted = true;
                 msg.body = "[deleted]".to_string();
                 msg.reactions.clear();
-                db_warn(
+                self.db_warn_visible(
                     self.db.mark_message_deleted(&conv_id, target_timestamp),
                     "mark_message_deleted",
                 );
@@ -3159,7 +3169,7 @@ impl App {
                 msg.is_edited = true;
             }
         }
-        db_warn(
+        self.db_warn_visible(
             self.db.update_message_body(conv_id, target_timestamp, new_body),
             "update_message_body",
         );
@@ -3173,7 +3183,7 @@ impl App {
                 msg.reactions.clear();
             }
         }
-        db_warn(
+        self.db_warn_visible(
             self.db.mark_message_deleted(conv_id, target_timestamp),
             "mark_message_deleted",
         );
@@ -3185,7 +3195,7 @@ impl App {
                 msg.is_pinned = pinned;
             }
         }
-        db_warn(
+        self.db_warn_visible(
             self.db.set_message_pinned(conv_id, target_timestamp, pinned),
             "set_message_pinned",
         );
@@ -3213,7 +3223,7 @@ impl App {
                 self.pending_polls.insert((conv_id.to_string(), timestamp), poll_data.clone());
             }
         }
-        db_warn(
+        self.db_warn_visible(
             self.db.upsert_poll_data(conv_id, timestamp, &poll_data),
             "upsert_poll_data",
         );
@@ -3245,7 +3255,7 @@ impl App {
                 }
             }
         }
-        db_warn(
+        self.db_warn_visible(
             self.db.upsert_poll_vote(conv_id, target_timestamp, voter, voter_name, option_indexes, vote_count),
             "upsert_poll_vote",
         );
@@ -3259,7 +3269,7 @@ impl App {
                 }
             }
         }
-        db_warn(
+        self.db_warn_visible(
             self.db.close_poll(conv_id, target_timestamp),
             "close_poll",
         );
@@ -3289,7 +3299,7 @@ impl App {
                     m.is_pinned = false;
                 }
             }
-            db_warn(
+            self.db_warn_visible(
                 self.db.set_message_pinned(&conv_id, target_timestamp, false),
                 "set_message_pinned",
             );
@@ -3343,7 +3353,7 @@ impl App {
                         m.is_pinned = true;
                     }
                 }
-                db_warn(
+                self.db_warn_visible(
                     self.db.set_message_pinned(&pending.conv_id, pending.target_timestamp, true),
                     "set_message_pinned",
                 );
@@ -3835,23 +3845,27 @@ impl App {
             crate::debug_log::logf(format_args!(
                 "send confirmed: conv={conv_id} local_ts={local_ts} server_ts={server_ts}"
             ));
+            let effective_ts = if server_ts != 0 { server_ts } else { local_ts };
+            let mut found = false;
             if let Some(conv) = self.conversations.get_mut(&conv_id) {
                 // Find the outgoing message with matching local timestamp
                 for msg in conv.messages.iter_mut().rev() {
                     if msg.sender == "you" && msg.timestamp_ms == local_ts {
-                        let effective_ts = if server_ts != 0 { server_ts } else { local_ts };
-                        // Update the DB row's timestamp_ms from local → server
-                        db_warn(self.db.update_message_timestamp_ms(
-                            &conv_id,
-                            local_ts,
-                            effective_ts,
-                            MessageStatus::Sent.to_i32(),
-                        ), "update_message_timestamp_ms");
                         msg.timestamp_ms = effective_ts;
                         msg.status = Some(MessageStatus::Sent);
+                        found = true;
                         break;
                     }
                 }
+            }
+            if found {
+                // Update the DB row's timestamp_ms from local → server
+                self.db_warn_visible(self.db.update_message_timestamp_ms(
+                    &conv_id,
+                    local_ts,
+                    effective_ts,
+                    MessageStatus::Sent.to_i32(),
+                ), "update_message_timestamp_ms");
             }
 
             // Replay any buffered receipts that may have arrived before this SendTimestamp
@@ -3866,18 +3880,22 @@ impl App {
 
     fn handle_send_failed(&mut self, rpc_id: &str) {
         if let Some((conv_id, local_ts)) = self.pending_sends.remove(rpc_id) {
+            let mut found = false;
             if let Some(conv) = self.conversations.get_mut(&conv_id) {
                 for msg in conv.messages.iter_mut().rev() {
                     if msg.sender == "you" && msg.timestamp_ms == local_ts {
                         msg.status = Some(MessageStatus::Failed);
-                        db_warn(self.db.update_message_status(
-                            &conv_id,
-                            local_ts,
-                            MessageStatus::Failed.to_i32(),
-                        ), "update_message_status");
+                        found = true;
                         break;
                     }
                 }
+            }
+            if found {
+                self.db_warn_visible(self.db.update_message_status(
+                    &conv_id,
+                    local_ts,
+                    MessageStatus::Failed.to_i32(),
+                ), "update_message_status");
             }
         }
     }
@@ -4029,7 +4047,7 @@ impl App {
                             let is_group = conv.is_group;
                             let (wire_body, wire_mentions) = self.prepare_outgoing_mentions(&text);
                             self.pending_mentions.clear();
-                            db_warn(
+                            self.db_warn_visible(
                                 self.db.update_message_body(&edit_conv_id, edit_ts, &text),
                                 "update_message_body",
                             );
@@ -4129,7 +4147,7 @@ impl App {
                             poll_votes: Vec::new(),
                         });
                     }
-                    db_warn(self.db.insert_message_full(
+                    self.db_warn_visible(self.db.insert_message_full(
                         &conv_id,
                         "you",
                         &now.to_rfc3339(),
@@ -4307,7 +4325,7 @@ impl App {
                             if let Some(conv) = self.conversations.get_mut(&conv_id) {
                                 conv.expiration_timer = seconds;
                             }
-                            db_warn(self.db.update_expiration_timer(&conv_id, seconds), "update_expiration_timer");
+                            self.db_warn_visible(self.db.update_expiration_timer(&conv_id, seconds), "update_expiration_timer");
                             // Return a SendRequest to trigger the RPC in main.rs
                             return Some(SendRequest::UpdateExpiration {
                                 conv_id,
@@ -4366,13 +4384,13 @@ impl App {
                             poll_votes: Vec::new(),
                         });
                     }
-                    db_warn(self.db.insert_message_full(
+                    self.db_warn_visible(self.db.insert_message_full(
                         &conv_id, "you", &now.to_rfc3339(),
                         &format!("\u{1F4CA} {question}"),
                         false, Some(MessageStatus::Sending), local_ts_ms,
                         &self.account.clone(), None, None, None, 0, 0,
                     ), "insert_poll_msg");
-                    db_warn(self.db.upsert_poll_data(&conv_id, local_ts_ms, &poll_data_for_db), "upsert_poll_data");
+                    self.db_warn_visible(self.db.upsert_poll_data(&conv_id, local_ts_ms, &poll_data_for_db), "upsert_poll_data");
 
                     self.scroll_offset = 0;
                     return Some(SendRequest::PollCreate {
