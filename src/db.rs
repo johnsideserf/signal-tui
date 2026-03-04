@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
@@ -337,18 +338,20 @@ impl Database {
             // Reverse so oldest first
             messages.reverse();
 
-            // Attach reactions from DB to matching messages.
-            // Match on timestamp AND author when possible. Since msg.sender may be
-            // a display name while target_author is a phone number, we accept:
-            // exact match, msg.sender == "you", or fall back to timestamp-only.
+            // Build timestamp → index map for O(1) reaction attachment.
+            // Multiple messages can share a timestamp, so we store all matching
+            // indexes and prefer the one whose sender matches the target_author.
+            let mut ts_to_idx: HashMap<i64, Vec<usize>> = HashMap::new();
+            for (i, m) in messages.iter().enumerate() {
+                ts_to_idx.entry(m.timestamp_ms).or_default().push(i);
+            }
             if let Ok(reactions) = self.load_reactions(&id) {
                 for (target_ts, target_author, emoji, sender) in reactions {
-                    // Find best match: prefer author+timestamp, fall back to timestamp-only
-                    let idx = messages.iter().position(|m| {
-                        m.timestamp_ms == target_ts
-                            && (m.sender == target_author || m.sender == "you")
-                    }).or_else(|| {
-                        messages.iter().position(|m| m.timestamp_ms == target_ts)
+                    let idx = ts_to_idx.get(&target_ts).and_then(|idxs| {
+                        // Prefer author+timestamp match, fall back to first timestamp match
+                        idxs.iter().find(|&&i| {
+                            messages[i].sender == target_author || messages[i].sender == "you"
+                        }).or_else(|| idxs.first()).copied()
                     });
                     if let Some(msg) = idx.and_then(|i| messages.get_mut(i)) {
                         if let Some(existing) = msg.reactions.iter_mut().find(|r| r.sender == sender) {

@@ -197,10 +197,7 @@ impl SignalClient {
                     serde_json::Value::String(format!("{start}:1:{uuid}"))
                 })
                 .collect();
-            params.as_object_mut().unwrap().insert(
-                "mention".to_string(),
-                serde_json::Value::Array(mention_arr),
-            );
+            params["mention"] = serde_json::Value::Array(mention_arr);
         }
 
         if !attachments.is_empty() {
@@ -208,16 +205,13 @@ impl SignalClient {
                 .iter()
                 .map(|p| serde_json::Value::String(p.to_string_lossy().to_string()))
                 .collect();
-            params.as_object_mut().unwrap().insert(
-                "attachment".to_string(),
-                serde_json::Value::Array(att_arr),
-            );
+            params["attachment"] = serde_json::Value::Array(att_arr);
         }
 
         if let Some((author, timestamp, body_text)) = quote {
-            params.as_object_mut().unwrap().insert("quoteTimestamp".to_string(), serde_json::json!(timestamp));
-            params.as_object_mut().unwrap().insert("quoteAuthor".to_string(), serde_json::json!(author));
-            params.as_object_mut().unwrap().insert("quoteMessage".to_string(), serde_json::json!(body_text));
+            params["quoteTimestamp"] = serde_json::json!(timestamp);
+            params["quoteAuthor"] = serde_json::json!(author);
+            params["quoteMessage"] = serde_json::json!(body_text);
         }
 
         let request = JsonRpcRequest {
@@ -271,16 +265,13 @@ impl SignalClient {
                 .iter()
                 .map(|(start, uuid)| serde_json::Value::String(format!("{start}:1:{uuid}")))
                 .collect();
-            params.as_object_mut().unwrap().insert(
-                "mention".to_string(),
-                serde_json::Value::Array(mention_arr),
-            );
+            params["mention"] = serde_json::Value::Array(mention_arr);
         }
 
         if let Some((author, timestamp, body_text)) = quote {
-            params.as_object_mut().unwrap().insert("quoteTimestamp".to_string(), serde_json::json!(timestamp));
-            params.as_object_mut().unwrap().insert("quoteAuthor".to_string(), serde_json::json!(author));
-            params.as_object_mut().unwrap().insert("quoteMessage".to_string(), serde_json::json!(body_text));
+            params["quoteTimestamp"] = serde_json::json!(timestamp);
+            params["quoteAuthor"] = serde_json::json!(author);
+            params["quoteMessage"] = serde_json::json!(body_text);
         }
 
         let request = JsonRpcRequest {
@@ -511,7 +502,7 @@ impl SignalClient {
         };
 
         if remove {
-            params.as_object_mut().unwrap().insert("remove".to_string(), serde_json::json!(true));
+            params["remove"] = serde_json::json!(true);
         }
 
         let request = JsonRpcRequest {
@@ -554,7 +545,7 @@ impl SignalClient {
         };
 
         if stop {
-            params.as_object_mut().unwrap().insert("stop".to_string(), serde_json::json!(true));
+            params["stop"] = serde_json::json!(true);
         }
 
         let request = JsonRpcRequest {
@@ -902,7 +893,7 @@ impl SignalClient {
         };
 
         if !allow_multiple {
-            params.as_object_mut().unwrap().insert("noMulti".to_string(), serde_json::json!(true));
+            params["noMulti"] = serde_json::json!(true);
         }
 
         let request = JsonRpcRequest {
@@ -959,7 +950,7 @@ impl SignalClient {
         };
 
         if vote_count != 1 {
-            params.as_object_mut().unwrap().insert("voteCount".to_string(), serde_json::json!(vote_count));
+            params["voteCount"] = serde_json::json!(vote_count);
         }
 
         let request = JsonRpcRequest {

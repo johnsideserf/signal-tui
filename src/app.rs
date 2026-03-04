@@ -20,6 +20,16 @@ fn db_warn<T>(result: Result<T, impl std::fmt::Display>, context: &str) {
     }
 }
 
+impl App {
+    /// Like `db_warn` but also surfaces the error in the status bar so the user sees it.
+    fn db_warn_visible<T>(&mut self, result: Result<T, impl std::fmt::Display>, context: &str) {
+        if let Err(e) = result {
+            crate::debug_log::logf(format_args!("db {context}: {e}"));
+            self.status_message = format!("DB error ({context}): {e}");
+        }
+    }
+}
+
 /// Fire an OS-level desktop notification (runs on a blocking thread to avoid stalling async).
 fn show_desktop_notification(sender: &str, body: &str, is_group: bool, group_name: Option<&str>) {
     let title = if is_group {
@@ -172,6 +182,18 @@ pub struct Conversation {
     pub expiration_timer: i64,
     /// Whether this conversation has been accepted (message requests are unaccepted)
     pub accepted: bool,
+}
+
+impl Conversation {
+    /// Binary-search for a message by timestamp (messages are sorted by `timestamp_ms`).
+    fn find_msg_idx(&self, ts: i64) -> Option<usize> {
+        let end = self.messages.partition_point(|m| m.timestamp_ms <= ts);
+        if end > 0 && self.messages[end - 1].timestamp_ms == ts {
+            Some(end - 1)
+        } else {
+            None
+        }
+    }
 }
 
 /// Application state
@@ -1126,7 +1148,7 @@ impl App {
                 if let Some(conv) = self.conversations.get_mut(&conv_id) {
                     conv.accepted = true;
                 }
-                db_warn(self.db.update_accepted(&conv_id, true), "update_accepted");
+                self.db_warn_visible(self.db.update_accepted(&conv_id, true), "update_accepted");
                 self.show_message_request = false;
                 Some(SendRequest::MessageRequestResponse {
                     recipient: conv_id,
@@ -1138,7 +1160,7 @@ impl App {
                 let is_group = self.conversations.get(&conv_id).map(|c| c.is_group).unwrap_or(false);
                 self.conversations.remove(&conv_id);
                 self.conversation_order.retain(|id| id != &conv_id);
-                db_warn(self.db.delete_conversation(&conv_id), "delete_conversation");
+                self.db_warn_visible(self.db.delete_conversation(&conv_id), "delete_conversation");
                 self.show_message_request = false;
                 self.active_conversation = None;
                 Some(SendRequest::MessageRequestResponse {
@@ -1230,7 +1252,7 @@ impl App {
         }
 
         // Persist to DB
-        db_warn(
+        self.db_warn_visible(
             self.db.upsert_reaction(&conv_id, target_timestamp, &target_author, "you", &emoji),
             "upsert_reaction",
         );
@@ -1479,13 +1501,13 @@ impl App {
                         let poll_timestamp = msg.timestamp_ms;
                         // Optimistic close
                         if let Some(conv) = self.conversations.get_mut(&conv_id) {
-                            if let Some(m) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == poll_timestamp) {
-                                if let Some(ref mut poll) = m.poll_data {
+                            if let Some(idx) = conv.find_msg_idx(poll_timestamp) {
+                                if let Some(ref mut poll) = conv.messages[idx].poll_data {
                                     poll.closed = true;
                                 }
                             }
                         }
-                        db_warn(self.db.close_poll(&conv_id, poll_timestamp), "close_poll");
+                        self.db_warn_visible(self.db.close_poll(&conv_id, poll_timestamp), "close_poll");
                         return Some(SendRequest::PollTerminate {
                             recipient: conv_id,
                             is_group,
@@ -1637,7 +1659,7 @@ impl App {
         }
 
         // Find the message index matching this timestamp
-        let idx = conv.messages.iter().position(|m| m.timestamp_ms == target_ts);
+        let idx = conv.find_msg_idx(target_ts);
         if let Some(i) = idx {
             // Set scroll_offset so the message is visible (roughly centered)
             let from_bottom = total.saturating_sub(i + 1);
@@ -2679,7 +2701,7 @@ impl App {
                 if let Some(conv) = self.conversations.get_mut(&conv_id) {
                     conv.expiration_timer = seconds;
                 }
-                db_warn(self.db.update_expiration_timer(&conv_id, seconds), "update_expiration_timer");
+                self.db_warn_visible(self.db.update_expiration_timer(&conv_id, seconds), "update_expiration_timer");
                 // Insert system message
                 self.handle_system_message(&conv_id, &body, timestamp, timestamp_ms);
             }
@@ -2748,8 +2770,8 @@ impl App {
         if is_new && !msg.is_outgoing && !is_group && !self.contact_names.contains_key(&conv_id) {
             if let Some(conv) = self.conversations.get_mut(&conv_id) {
                 conv.accepted = false;
-                db_warn(self.db.update_accepted(&conv_id, false), "update_accepted");
             }
+            self.db_warn_visible(self.db.update_accepted(&conv_id, false), "update_accepted");
         }
 
         let ts_rfc3339 = msg.timestamp.to_rfc3339();
@@ -2981,7 +3003,7 @@ impl App {
             }
         }
         let ts_rfc3339 = timestamp.to_rfc3339();
-        db_warn(
+        self.db_warn_visible(
             self.db.insert_message(conv_id, "", &ts_rfc3339, body, true, None, timestamp_ms),
             "insert_system_message",
         );
@@ -3042,18 +3064,17 @@ impl App {
                 .unwrap_or_else(|| sender.to_string())
         };
         if let Some(conv) = self.conversations.get_mut(conv_id) {
-            let found = conv.messages.iter_mut().rev().find(|m| {
-                if m.timestamp_ms != target_timestamp {
-                    return false;
-                }
-                if m.sender == "you" {
+            let found = conv.find_msg_idx(target_timestamp).and_then(|idx| {
+                let m = &conv.messages[idx];
+                let matches = if m.sender == "you" {
                     target_author == account.as_str()
                 } else {
                     m.sender == target_author
                         || target_display.as_deref() == Some(m.sender.as_str())
-                }
+                };
+                if matches { Some(idx) } else { None }
             });
-            if let Some(msg) = found {
+            if let Some(msg) = found.map(|idx| &mut conv.messages[idx]) {
                 if is_remove {
                     // Match by display name or "you" (for own reactions from other devices)
                     msg.reactions.retain(|r| r.sender != sender_display);
@@ -3073,12 +3094,12 @@ impl App {
 
         // Persist to DB regardless of whether message is in memory
         if is_remove {
-            db_warn(
+            self.db_warn_visible(
                 self.db.remove_reaction(conv_id, target_timestamp, target_author, sender),
                 "remove_reaction",
             );
         } else {
-            db_warn(
+            self.db_warn_visible(
                 self.db.upsert_reaction(conv_id, target_timestamp, target_author, sender, emoji),
                 "upsert_reaction",
             );
@@ -3107,7 +3128,7 @@ impl App {
                 msg.is_deleted = true;
                 msg.body = "[deleted]".to_string();
                 msg.reactions.clear();
-                db_warn(
+                self.db_warn_visible(
                     self.db.mark_message_deleted(&conv_id, target_timestamp),
                     "mark_message_deleted",
                 );
@@ -3138,7 +3159,7 @@ impl App {
                 msg.is_deleted = true;
                 msg.body = "[deleted]".to_string();
                 msg.reactions.clear();
-                db_warn(
+                self.db_warn_visible(
                     self.db.mark_message_deleted(&conv_id, target_timestamp),
                     "mark_message_deleted",
                 );
@@ -3154,12 +3175,12 @@ impl App {
 
     fn handle_edit_received(&mut self, conv_id: &str, target_timestamp: i64, new_body: &str) {
         if let Some(conv) = self.conversations.get_mut(conv_id) {
-            if let Some(msg) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == target_timestamp) {
-                msg.body = new_body.to_string();
-                msg.is_edited = true;
+            if let Some(idx) = conv.find_msg_idx(target_timestamp) {
+                conv.messages[idx].body = new_body.to_string();
+                conv.messages[idx].is_edited = true;
             }
         }
-        db_warn(
+        self.db_warn_visible(
             self.db.update_message_body(conv_id, target_timestamp, new_body),
             "update_message_body",
         );
@@ -3167,13 +3188,13 @@ impl App {
 
     fn handle_remote_delete(&mut self, conv_id: &str, target_timestamp: i64) {
         if let Some(conv) = self.conversations.get_mut(conv_id) {
-            if let Some(msg) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == target_timestamp) {
-                msg.is_deleted = true;
-                msg.body = "[deleted]".to_string();
-                msg.reactions.clear();
+            if let Some(idx) = conv.find_msg_idx(target_timestamp) {
+                conv.messages[idx].is_deleted = true;
+                conv.messages[idx].body = "[deleted]".to_string();
+                conv.messages[idx].reactions.clear();
             }
         }
-        db_warn(
+        self.db_warn_visible(
             self.db.mark_message_deleted(conv_id, target_timestamp),
             "mark_message_deleted",
         );
@@ -3181,11 +3202,11 @@ impl App {
 
     fn handle_pin_received(&mut self, conv_id: &str, sender: &str, target_timestamp: i64, pinned: bool) {
         if let Some(conv) = self.conversations.get_mut(conv_id) {
-            if let Some(msg) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == target_timestamp) {
-                msg.is_pinned = pinned;
+            if let Some(idx) = conv.find_msg_idx(target_timestamp) {
+                conv.messages[idx].is_pinned = pinned;
             }
         }
-        db_warn(
+        self.db_warn_visible(
             self.db.set_message_pinned(conv_id, target_timestamp, pinned),
             "set_message_pinned",
         );
@@ -3207,13 +3228,13 @@ impl App {
         // If the message hasn't arrived yet (race), buffer the poll data so
         // handle_message can attach it when the message arrives.
         if let Some(conv) = self.conversations.get_mut(conv_id) {
-            if let Some(msg) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == timestamp) {
-                msg.poll_data = Some(poll_data.clone());
+            if let Some(idx) = conv.find_msg_idx(timestamp) {
+                conv.messages[idx].poll_data = Some(poll_data.clone());
             } else {
                 self.pending_polls.insert((conv_id.to_string(), timestamp), poll_data.clone());
             }
         }
-        db_warn(
+        self.db_warn_visible(
             self.db.upsert_poll_data(conv_id, timestamp, &poll_data),
             "upsert_poll_data",
         );
@@ -3229,7 +3250,8 @@ impl App {
         vote_count: i64,
     ) {
         if let Some(conv) = self.conversations.get_mut(conv_id) {
-            if let Some(msg) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == target_timestamp) {
+            if let Some(idx) = conv.find_msg_idx(target_timestamp) {
+                let msg = &mut conv.messages[idx];
                 // Upsert vote in memory
                 if let Some(existing) = msg.poll_votes.iter_mut().find(|v| v.voter == voter) {
                     existing.option_indexes = option_indexes.to_vec();
@@ -3245,7 +3267,7 @@ impl App {
                 }
             }
         }
-        db_warn(
+        self.db_warn_visible(
             self.db.upsert_poll_vote(conv_id, target_timestamp, voter, voter_name, option_indexes, vote_count),
             "upsert_poll_vote",
         );
@@ -3253,13 +3275,13 @@ impl App {
 
     fn handle_poll_terminated(&mut self, conv_id: &str, target_timestamp: i64) {
         if let Some(conv) = self.conversations.get_mut(conv_id) {
-            if let Some(msg) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == target_timestamp) {
-                if let Some(ref mut poll) = msg.poll_data {
+            if let Some(idx) = conv.find_msg_idx(target_timestamp) {
+                if let Some(ref mut poll) = conv.messages[idx].poll_data {
                     poll.closed = true;
                 }
             }
         }
-        db_warn(
+        self.db_warn_visible(
             self.db.close_poll(conv_id, target_timestamp),
             "close_poll",
         );
@@ -3285,11 +3307,11 @@ impl App {
         if was_pinned {
             // Unpin immediately — no duration needed
             if let Some(conv) = self.conversations.get_mut(&conv_id) {
-                if let Some(m) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == target_timestamp) {
-                    m.is_pinned = false;
+                if let Some(idx) = conv.find_msg_idx(target_timestamp) {
+                    conv.messages[idx].is_pinned = false;
                 }
             }
-            db_warn(
+            self.db_warn_visible(
                 self.db.set_message_pinned(&conv_id, target_timestamp, false),
                 "set_message_pinned",
             );
@@ -3339,11 +3361,11 @@ impl App {
 
                 // Optimistically pin
                 if let Some(conv) = self.conversations.get_mut(&pending.conv_id) {
-                    if let Some(m) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == pending.target_timestamp) {
-                        m.is_pinned = true;
+                    if let Some(idx) = conv.find_msg_idx(pending.target_timestamp) {
+                        conv.messages[idx].is_pinned = true;
                     }
                 }
-                db_warn(
+                self.db_warn_visible(
                     self.db.set_message_pinned(&pending.conv_id, pending.target_timestamp, true),
                     "set_message_pinned",
                 );
@@ -3835,23 +3857,24 @@ impl App {
             crate::debug_log::logf(format_args!(
                 "send confirmed: conv={conv_id} local_ts={local_ts} server_ts={server_ts}"
             ));
+            let effective_ts = if server_ts != 0 { server_ts } else { local_ts };
+            let mut found = false;
             if let Some(conv) = self.conversations.get_mut(&conv_id) {
                 // Find the outgoing message with matching local timestamp
-                for msg in conv.messages.iter_mut().rev() {
-                    if msg.sender == "you" && msg.timestamp_ms == local_ts {
-                        let effective_ts = if server_ts != 0 { server_ts } else { local_ts };
-                        // Update the DB row's timestamp_ms from local → server
-                        db_warn(self.db.update_message_timestamp_ms(
-                            &conv_id,
-                            local_ts,
-                            effective_ts,
-                            MessageStatus::Sent.to_i32(),
-                        ), "update_message_timestamp_ms");
-                        msg.timestamp_ms = effective_ts;
-                        msg.status = Some(MessageStatus::Sent);
-                        break;
-                    }
+                if let Some(idx) = conv.find_msg_idx(local_ts).filter(|&idx| conv.messages[idx].sender == "you") {
+                    conv.messages[idx].timestamp_ms = effective_ts;
+                    conv.messages[idx].status = Some(MessageStatus::Sent);
+                    found = true;
                 }
+            }
+            if found {
+                // Update the DB row's timestamp_ms from local → server
+                self.db_warn_visible(self.db.update_message_timestamp_ms(
+                    &conv_id,
+                    local_ts,
+                    effective_ts,
+                    MessageStatus::Sent.to_i32(),
+                ), "update_message_timestamp_ms");
             }
 
             // Replay any buffered receipts that may have arrived before this SendTimestamp
@@ -3866,18 +3889,19 @@ impl App {
 
     fn handle_send_failed(&mut self, rpc_id: &str) {
         if let Some((conv_id, local_ts)) = self.pending_sends.remove(rpc_id) {
+            let mut found = false;
             if let Some(conv) = self.conversations.get_mut(&conv_id) {
-                for msg in conv.messages.iter_mut().rev() {
-                    if msg.sender == "you" && msg.timestamp_ms == local_ts {
-                        msg.status = Some(MessageStatus::Failed);
-                        db_warn(self.db.update_message_status(
-                            &conv_id,
-                            local_ts,
-                            MessageStatus::Failed.to_i32(),
-                        ), "update_message_status");
-                        break;
-                    }
+                if let Some(idx) = conv.find_msg_idx(local_ts).filter(|&idx| conv.messages[idx].sender == "you") {
+                    conv.messages[idx].status = Some(MessageStatus::Failed);
+                    found = true;
                 }
+            }
+            if found {
+                self.db_warn_visible(self.db.update_message_status(
+                    &conv_id,
+                    local_ts,
+                    MessageStatus::Failed.to_i32(),
+                ), "update_message_status");
             }
         }
     }
@@ -3891,19 +3915,17 @@ impl App {
         ts: i64,
         new_status: MessageStatus,
     ) -> bool {
-        for msg in conv.messages.iter_mut().rev() {
-            if msg.sender == "you" && msg.timestamp_ms == ts {
-                if let Some(current) = msg.status {
-                    if new_status > current {
-                        msg.status = Some(new_status);
-                        db_warn(
-                            db.update_message_status(conv_id, ts, new_status.to_i32()),
-                            "update_message_status",
-                        );
-                    }
+        if let Some(idx) = conv.find_msg_idx(ts).filter(|&idx| conv.messages[idx].sender == "you") {
+            if let Some(current) = conv.messages[idx].status {
+                if new_status > current {
+                    conv.messages[idx].status = Some(new_status);
+                    db_warn(
+                        db.update_message_status(conv_id, ts, new_status.to_i32()),
+                        "update_message_status",
+                    );
                 }
-                return true;
             }
+            return true;
         }
         false
     }
@@ -4018,18 +4040,19 @@ impl App {
                     if !text.is_empty() {
                         // Extract original quote fields (immutable borrow) before mutating
                         let original_quote = self.conversations.get(&edit_conv_id)
-                            .and_then(|conv| conv.messages.iter().rev().find(|m| m.timestamp_ms == edit_ts && m.sender == "you"))
+                            .and_then(|conv| conv.find_msg_idx(edit_ts).map(|idx| &conv.messages[idx]))
+                            .filter(|msg| msg.sender == "you")
                             .and_then(|msg| msg.quote.as_ref())
                             .map(|q| (q.timestamp_ms, q.author_id.clone(), q.body.clone()));
                         if let Some(conv) = self.conversations.get_mut(&edit_conv_id) {
-                            if let Some(msg) = conv.messages.iter_mut().rev().find(|m| m.timestamp_ms == edit_ts && m.sender == "you") {
-                                msg.body = text.clone();
-                                msg.is_edited = true;
+                            if let Some(idx) = conv.find_msg_idx(edit_ts).filter(|&idx| conv.messages[idx].sender == "you") {
+                                conv.messages[idx].body = text.clone();
+                                conv.messages[idx].is_edited = true;
                             }
                             let is_group = conv.is_group;
                             let (wire_body, wire_mentions) = self.prepare_outgoing_mentions(&text);
                             self.pending_mentions.clear();
-                            db_warn(
+                            self.db_warn_visible(
                                 self.db.update_message_body(&edit_conv_id, edit_ts, &text),
                                 "update_message_body",
                             );
@@ -4129,7 +4152,7 @@ impl App {
                             poll_votes: Vec::new(),
                         });
                     }
-                    db_warn(self.db.insert_message_full(
+                    self.db_warn_visible(self.db.insert_message_full(
                         &conv_id,
                         "you",
                         &now.to_rfc3339(),
@@ -4307,7 +4330,7 @@ impl App {
                             if let Some(conv) = self.conversations.get_mut(&conv_id) {
                                 conv.expiration_timer = seconds;
                             }
-                            db_warn(self.db.update_expiration_timer(&conv_id, seconds), "update_expiration_timer");
+                            self.db_warn_visible(self.db.update_expiration_timer(&conv_id, seconds), "update_expiration_timer");
                             // Return a SendRequest to trigger the RPC in main.rs
                             return Some(SendRequest::UpdateExpiration {
                                 conv_id,
@@ -4366,13 +4389,13 @@ impl App {
                             poll_votes: Vec::new(),
                         });
                     }
-                    db_warn(self.db.insert_message_full(
+                    self.db_warn_visible(self.db.insert_message_full(
                         &conv_id, "you", &now.to_rfc3339(),
                         &format!("\u{1F4CA} {question}"),
                         false, Some(MessageStatus::Sending), local_ts_ms,
                         &self.account.clone(), None, None, None, 0, 0,
                     ), "insert_poll_msg");
-                    db_warn(self.db.upsert_poll_data(&conv_id, local_ts_ms, &poll_data_for_db), "upsert_poll_data");
+                    self.db_warn_visible(self.db.upsert_poll_data(&conv_id, local_ts_ms, &poll_data_for_db), "upsert_poll_data");
 
                     self.scroll_offset = 0;
                     return Some(SendRequest::PollCreate {
