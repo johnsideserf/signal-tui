@@ -639,6 +639,18 @@ async fn dispatch_send(
                 };
             }
         }
+        SendRequest::ListIdentities => {
+            let _ = signal_client.list_identities().await;
+        }
+        SendRequest::TrustIdentity { recipient } => {
+            if let Err(e) = signal_client.trust_identity(&recipient).await {
+                app.status_message = format!("trust error: {e}");
+            } else {
+                app.status_message = format!("Trusted {}", app.contact_names.get(&recipient).unwrap_or(&recipient));
+                // Re-fetch identities to update trust levels
+                let _ = signal_client.list_identities().await;
+            }
+        }
     }
 }
 
@@ -679,6 +691,7 @@ async fn run_app(
     let _ = signal_client.send_sync_request().await;
     let _ = signal_client.list_contacts().await;
     let _ = signal_client.list_groups().await;
+    let _ = signal_client.list_identities().await;
 
     let mut last_expiry_sweep = Instant::now();
 
