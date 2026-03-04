@@ -32,6 +32,10 @@ pub struct Config {
     #[serde(default = "default_true")]
     pub inline_images: bool,
 
+    /// Show link previews (title, description, thumbnail) for URLs in messages
+    #[serde(default = "default_true")]
+    pub show_link_previews: bool,
+
     /// Experimental: use native terminal image protocols (Kitty/iTerm2) over halfblock
     #[serde(default)]
     pub native_images: bool,
@@ -93,6 +97,7 @@ impl Default for Config {
             notify_group: true,
             desktop_notifications: false,
             inline_images: true,
+            show_link_previews: true,
             native_images: false,
             show_receipts: true,
             color_receipts: true,

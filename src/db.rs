@@ -5,7 +5,7 @@ use anyhow::Result;
 use rusqlite::{params, Connection};
 
 use crate::app::{Conversation, DisplayMessage};
-use crate::signal::types::{MessageStatus, PollData, PollVote, Reaction};
+use crate::signal::types::{LinkPreview, MessageStatus, PollData, PollVote, Reaction};
 
 /// (sender, body, timestamp_ms, conversation_id, conversation_name)
 pub type SearchRow = (String, String, i64, String, String);
@@ -216,6 +216,17 @@ impl Database {
             )?;
         }
 
+        if version < 12 {
+            self.conn.execute_batch(
+                "
+                BEGIN;
+                ALTER TABLE messages ADD COLUMN link_preview TEXT;
+                UPDATE schema_version SET version = 12;
+                COMMIT;
+                ",
+            )?;
+        }
+
         Ok(())
     }
 
@@ -270,7 +281,7 @@ impl Database {
         for (id, name, is_group, expiration_timer, accepted) in convs {
             // Load last N messages
             let mut msg_stmt = self.conn.prepare(
-                "SELECT sender, timestamp, body, is_system, status, timestamp_ms, is_edited, is_deleted, quote_author, quote_body, quote_ts_ms, sender_id, expires_in_seconds, expiration_start_ms, pinned, poll_data FROM messages
+                "SELECT sender, timestamp, body, is_system, status, timestamp_ms, is_edited, is_deleted, quote_author, quote_body, quote_ts_ms, sender_id, expires_in_seconds, expiration_start_ms, pinned, poll_data, link_preview FROM messages
                  WHERE conversation_id = ?1
                  ORDER BY timestamp_ms DESC, rowid DESC LIMIT ?2",
             )?;
@@ -293,10 +304,11 @@ impl Database {
                     let expiration_start_ms: i64 = row.get(13)?;
                     let is_pinned: bool = row.get::<_, i32>(14)? != 0;
                     let poll_data_json: Option<String> = row.get(15)?;
-                    Ok((sender, ts_str, body, is_system, status_i32, timestamp_ms, is_edited, is_deleted, quote_author, quote_body, quote_ts_ms, sender_id, expires_in_seconds, expiration_start_ms, is_pinned, poll_data_json))
+                    let link_preview_json: Option<String> = row.get(16)?;
+                    Ok((sender, ts_str, body, is_system, status_i32, timestamp_ms, is_edited, is_deleted, quote_author, quote_body, quote_ts_ms, sender_id, expires_in_seconds, expiration_start_ms, is_pinned, poll_data_json, link_preview_json))
                 })?
                 .filter_map(|r| r.ok())
-                .filter_map(|(sender, ts_str, body, is_system, status_i32, timestamp_ms, is_edited, is_deleted, quote_author, quote_body, quote_ts_ms, sender_id, expires_in_seconds, expiration_start_ms, is_pinned, poll_data_json)| {
+                .filter_map(|(sender, ts_str, body, is_system, status_i32, timestamp_ms, is_edited, is_deleted, quote_author, quote_body, quote_ts_ms, sender_id, expires_in_seconds, expiration_start_ms, is_pinned, poll_data_json, link_preview_json)| {
                     let timestamp = chrono::DateTime::parse_from_rfc3339(&ts_str)
                         .ok()?
                         .with_timezone(&chrono::Utc);
@@ -310,6 +322,7 @@ impl Database {
                         _ => None,
                     };
                     let poll_data = poll_data_json.and_then(|j| serde_json::from_str::<PollData>(&j).ok());
+                    let preview = link_preview_json.and_then(|j| serde_json::from_str::<LinkPreview>(&j).ok());
                     Some(DisplayMessage {
                         sender,
                         timestamp,
@@ -331,6 +344,9 @@ impl Database {
                         expiration_start_ms,
                         poll_data,
                         poll_votes: Vec::new(),
+                        preview,
+                        preview_image_lines: None,
+                        preview_image_path: None,
                     })
                 })
                 .collect();
@@ -751,6 +767,16 @@ impl Database {
         let json = serde_json::to_string(poll_data)?;
         self.conn.execute(
             "UPDATE messages SET poll_data = ?3
+             WHERE conversation_id = ?1 AND timestamp_ms = ?2",
+            params![conv_id, timestamp_ms, json],
+        )?;
+        Ok(())
+    }
+
+    pub fn upsert_link_preview(&self, conv_id: &str, timestamp_ms: i64, preview: &LinkPreview) -> Result<()> {
+        let json = serde_json::to_string(preview)?;
+        self.conn.execute(
+            "UPDATE messages SET link_preview = ?3
              WHERE conversation_id = ?1 AND timestamp_ms = ?2",
             params![conv_id, timestamp_ms, json],
         )?;

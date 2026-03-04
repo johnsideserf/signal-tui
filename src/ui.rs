@@ -23,7 +23,7 @@ const MSG_WINDOW_MULTIPLIER: usize = 10;
 
 // Popup dimensions
 const SETTINGS_POPUP_WIDTH: u16 = 42;
-const SETTINGS_POPUP_HEIGHT: u16 = 16;
+const SETTINGS_POPUP_HEIGHT: u16 = 17;
 const CONTACTS_POPUP_WIDTH: u16 = 50;
 const CONTACTS_MAX_VISIBLE: usize = 20;
 const FILE_BROWSER_POPUP_WIDTH: u16 = 60;
@@ -906,6 +906,55 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     if use_native {
                         if let Some(ref path) = msg.image_path {
                             image_records.push((first_idx, count, path.clone()));
+                        }
+                    }
+                }
+            }
+
+            // Render link preview block
+            if !msg.is_deleted && app.show_link_previews {
+                if let Some(ref preview) = msg.preview {
+                    if let Some(ref title) = preview.title {
+                        lines.push(Line::from(vec![
+                            Span::styled("  \u{258E} ", Style::default().fg(theme.link)),
+                            Span::styled(
+                                truncate(title, 60),
+                                Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+                            ),
+                        ]));
+                        line_msg_idx.push(Some(msg_index));
+                    }
+                    if let Some(ref desc) = preview.description {
+                        lines.push(Line::from(vec![
+                            Span::styled("  \u{258E} ", Style::default().fg(theme.link)),
+                            Span::styled(
+                                truncate(desc, 60),
+                                Style::default().fg(theme.fg_muted),
+                            ),
+                        ]));
+                        line_msg_idx.push(Some(msg_index));
+                    }
+                    lines.push(Line::from(vec![
+                        Span::styled("  \u{258E} ", Style::default().fg(theme.link)),
+                        Span::styled(
+                            truncate(&preview.url, 60),
+                            Style::default().fg(theme.link).add_modifier(Modifier::UNDERLINED),
+                        ),
+                    ]));
+                    line_msg_idx.push(Some(msg_index));
+
+                    // Render link preview thumbnail
+                    if let Some(ref img_lines) = msg.preview_image_lines {
+                        let first_idx = lines.len();
+                        let count = img_lines.len();
+                        for line in img_lines {
+                            lines.push(line.clone());
+                            line_msg_idx.push(Some(msg_index));
+                        }
+                        if use_native {
+                            if let Some(ref path) = msg.preview_image_path {
+                                image_records.push((first_idx, count, path.clone()));
+                            }
                         }
                     }
                 }
