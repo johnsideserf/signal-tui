@@ -7,4 +7,5 @@ Cargo.lock
 docs/book/
 docs/plans/
 siggy-debug.log
+signal-tui-debug.log
 .claude/settings.local.json
