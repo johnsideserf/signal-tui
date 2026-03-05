@@ -1,4 +1,6 @@
-# siggy
+<p align="center">
+  <img src="siggy-logo.png" alt="siggy" width="400">
+</p>
 
 A terminal-based Signal messenger client with an IRC aesthetic.
 
