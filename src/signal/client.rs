@@ -2173,6 +2173,16 @@ fn parse_attachment(
         }
     }
 
+    // Sanitize filename: strip path separators and traversal sequences
+    // to prevent writes outside the download directory.
+    effective_name = effective_name
+        .replace(['/', '\\'], "_")
+        .replace("..", "_");
+    if effective_name.is_empty() {
+        let short_id = if id.len() > 8 { &id[id.len() - 8..] } else { &id };
+        effective_name = format!("{short_id}.bin");
+    }
+
     let dest = download_dir.join(&effective_name);
 
     // Try to find the source file: explicit "file" field, or signal-cli's attachment dir

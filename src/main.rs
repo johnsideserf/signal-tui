@@ -385,11 +385,13 @@ fn emit_osc8_links(
             let ct_bg = ratatui_color_to_crossterm(bg);
             queue!(backend, SetBackgroundColor(ct_bg))?;
         }
+        // Sanitize URL: strip control characters to prevent terminal escape injection
+        let safe_url: String = link.url.chars().filter(|c| !c.is_control()).collect();
         queue!(
             backend,
             Print(format!(
                 "\x1b]8;;{}\x07{}\x1b]8;;\x07",
-                link.url, link.text
+                safe_url, link.text
             ))
         )?;
         queue!(backend, ResetColor)?;
