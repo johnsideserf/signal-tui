@@ -1,41 +1,41 @@
 /* ═══════════════════════════════════════════════════════════════
- *  siggy docs — mIRC theme
- *  Light 90s IRC aesthetic (mIRC / Win95 era) with modern polish.
+ *  siggy docs — brand theme
+ *  Retro IRC aesthetic with siggy brand palette (navy + blue).
  *  Overrides ALL mdBook themes — we force a single look.
  * ═══════════════════════════════════════════════════════════════ */
 
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap');
 
-/* ── palette ───────────────────────────────────────────── */
+/* ── palette (light — blue-tinted) ─────────────────────── */
 :root {
-    --irc-bg:         #eeeeee;
-    --irc-bg-alt:     #e4e4e4;
-    --irc-sidebar-bg: #d6d6d6;
-    --irc-code-bg:    #dcdcdc;
-    --irc-panel-bg:   #c8c8c8;
+    --irc-bg:         #edf0f5;
+    --irc-bg-alt:     #e2e7f0;
+    --irc-sidebar-bg: #d8dfe9;
+    --irc-code-bg:    #dce2ec;
+    --irc-panel-bg:   #c8d0dc;
 
-    --irc-text:       #111111;
-    --irc-text-dim:   #555555;
-    --irc-text-light: #777777;
+    --irc-text:       #1e2640;
+    --irc-text-dim:   #4a5570;
+    --irc-text-light: #6b7590;
 
-    /* classic mIRC nick palette */
-    --irc-blue:       #0000cc;
-    --irc-green:      #007700;
-    --irc-red:        #cc0000;
+    /* accent palette — siggy brand + mIRC classics */
+    --irc-blue:       #5b7ec0;
+    --irc-green:      #2d8a4e;
+    --irc-red:        #c03030;
     --irc-brown:      #7b5804;
-    --irc-purple:     #7700aa;
-    --irc-teal:       #008080;
-    --irc-navy:       #000077;
-    --irc-magenta:    #cc00cc;
+    --irc-purple:     #6b44aa;
+    --irc-teal:       #1a7a7a;
+    --irc-navy:       #2c3553;
+    --irc-magenta:    #aa3399;
 
     /* UI borders — Win95-style bevels */
     --bevel-light:    #ffffff;
-    --bevel-dark:     #808080;
-    --bevel-shadow:   #404040;
-    --border-mid:     #aaaaaa;
+    --bevel-dark:     #8090a8;
+    --bevel-shadow:   #4a5570;
+    --border-mid:     #a8b2c4;
 
-    --link-blue:      #0000ee;
-    --link-visited:   #551a8b;
+    --link-blue:      #3a5eaa;
+    --link-visited:   #6644aa;
 }
 
 /* ── force our theme on ALL mdBook theme classes ───────── */
@@ -60,7 +60,7 @@ html:not(.js) {
     --quote-border:       var(--border-mid);
     --table-border-color: var(--border-mid);
     --table-header-bg:    var(--irc-panel-bg);
-    --table-alternate-bg: #e8e8e8;
+    --table-alternate-bg: #e4e8f0;
     --searchbar-border-color: var(--border-mid);
     --searchbar-bg:       #ffffff;
     --searchbar-fg:       var(--irc-text);
@@ -68,14 +68,14 @@ html:not(.js) {
     --searchresults-header-fg: var(--irc-text-dim);
     --searchresults-border-color: var(--border-mid);
     --searchresults-li-bg: var(--irc-bg-alt);
-    --search-mark-bg:     #ffff00;
-    --warning-border:     #ff8e00;
+    --search-mark-bg:     #d4e0ff;
+    --warning-border:     #e07030;
     --color-scheme:       light;
     --sidebar-header-border-color: var(--irc-blue);
 
     --copy-button-filter: invert(45.49%);
-    --copy-button-filter-hover: invert(14%) sepia(93%) saturate(4250%) hue-rotate(243deg) brightness(99%) contrast(130%);
-    --overlay-bg: rgba(200, 200, 205, 0.5);
+    --copy-button-filter-hover: invert(30%) sepia(60%) saturate(1200%) hue-rotate(195deg) brightness(90%) contrast(95%);
+    --overlay-bg: rgba(180, 190, 210, 0.5);
 }
 
 /* ── hide theme picker & hamburger ─────────────────────── */
@@ -301,7 +301,7 @@ body {
 .content pre::before {
     content: ' Terminal';
     display: block;
-    background: linear-gradient(90deg, var(--irc-navy), #1040a0);
+    background: linear-gradient(90deg, var(--irc-navy), #3a4a6e);
     color: #ffffff;
     font-size: 0.75em;
     font-weight: 700;
@@ -343,7 +343,7 @@ body {
 
 .content table th {
     color: #ffffff;
-    background: linear-gradient(90deg, var(--irc-navy), #1040a0);
+    background: linear-gradient(90deg, var(--irc-navy), #3a4a6e);
     border: 1px solid var(--bevel-dark);
     padding: 0.4em 0.8em;
     text-align: left;
@@ -360,11 +360,11 @@ body {
 }
 
 .content table tr:nth-child(even) {
-    background-color: #e8e8e8;
+    background-color: #e4e8f0;
 }
 
 .content table tr:hover {
-    background-color: #d0d8ff;
+    background-color: #d0d8ee;
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -463,7 +463,7 @@ body {
  * ═══════════════════════════════════════════════════════════ */
 .content .warning {
     border-left-color: var(--irc-red);
-    background-color: #ffeeee;
+    background-color: #f5e8e8;
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -559,32 +559,32 @@ body {
  *  Activated via data-irc-mode="dark" on <html>
  * ═══════════════════════════════════════════════════════════ */
 html[data-irc-mode="dark"] {
-    --irc-bg:         #1a1a1a;
-    --irc-bg-alt:     #222222;
-    --irc-sidebar-bg: #141414;
-    --irc-code-bg:    #111111;
-    --irc-panel-bg:   #2a2a2a;
+    --irc-bg:         #1e2640;
+    --irc-bg-alt:     #252e4a;
+    --irc-sidebar-bg: #181f35;
+    --irc-code-bg:    #151c30;
+    --irc-panel-bg:   #2c3553;
 
-    --irc-text:       #cccccc;
-    --irc-text-dim:   #888888;
-    --irc-text-light: #666666;
+    --irc-text:       #d8dde8;
+    --irc-text-dim:   #8090a8;
+    --irc-text-light: #5a6a84;
 
-    --irc-blue:       #5599ff;
-    --irc-green:      #44bb44;
-    --irc-red:        #ff5555;
+    --irc-blue:       #6b8ed0;
+    --irc-green:      #4dbb6a;
+    --irc-red:        #e05555;
     --irc-brown:      #cc9944;
-    --irc-purple:     #bb77dd;
+    --irc-purple:     #aa77dd;
     --irc-teal:       #44bbbb;
-    --irc-navy:       #6688cc;
-    --irc-magenta:    #ee66cc;
+    --irc-navy:       #8ba5d5;
+    --irc-magenta:    #dd66cc;
 
-    --bevel-light:    #3a3a3a;
-    --bevel-dark:     #0a0a0a;
+    --bevel-light:    #3a4a6a;
+    --bevel-dark:     #0e1525;
     --bevel-shadow:   #000000;
-    --border-mid:     #333333;
+    --border-mid:     #354060;
 
-    --link-blue:      #6699ff;
-    --link-visited:   #aa88cc;
+    --link-blue:      #7099dd;
+    --link-visited:   #9988cc;
 }
 
 /* override mdBook theme vars in dark mode */
@@ -613,15 +613,15 @@ html[data-irc-mode="dark"]:not(.js) {
     --quote-border:       var(--border-mid);
     --table-border-color: var(--border-mid);
     --table-header-bg:    var(--irc-panel-bg);
-    --table-alternate-bg: #1f1f1f;
+    --table-alternate-bg: #222a44;
     --searchbar-border-color: var(--border-mid);
-    --searchbar-bg:       #111111;
+    --searchbar-bg:       #151c30;
     --searchbar-fg:       var(--irc-text);
-    --searchbar-shadow-color: #000;
+    --searchbar-shadow-color: #0e1525;
     --searchresults-header-fg: var(--irc-text-dim);
     --searchresults-border-color: var(--border-mid);
     --searchresults-li-bg: var(--irc-bg-alt);
-    --search-mark-bg:     #555500;
+    --search-mark-bg:     #3a4a70;
     --warning-border:     #ff8e00;
     --color-scheme:       dark;
     --sidebar-header-border-color: var(--irc-blue);
@@ -718,12 +718,12 @@ html[data-irc-mode="dark"] .content code {
 }
 
 html[data-irc-mode="dark"] .content pre {
-    background-color: #0d0d0d !important;
+    background-color: #121828 !important;
     border-color: var(--bevel-dark) var(--bevel-light) var(--bevel-light) var(--bevel-dark);
 }
 
 html[data-irc-mode="dark"] .content pre::before {
-    background: linear-gradient(90deg, #2a2a5a, #3a3a7a);
+    background: linear-gradient(90deg, #252e4a, #354068);
 }
 
 html[data-irc-mode="dark"] .content pre > code {
@@ -736,7 +736,7 @@ html[data-irc-mode="dark"] .content table {
 }
 
 html[data-irc-mode="dark"] .content table th {
-    background: linear-gradient(90deg, #2a2a5a, #3a3a7a);
+    background: linear-gradient(90deg, #252e4a, #354068);
     border-color: var(--bevel-dark);
 }
 
@@ -745,11 +745,11 @@ html[data-irc-mode="dark"] .content table td {
 }
 
 html[data-irc-mode="dark"] .content table tr:nth-child(even) {
-    background-color: #1f1f1f;
+    background-color: #222a44;
 }
 
 html[data-irc-mode="dark"] .content table tr:hover {
-    background-color: #252540;
+    background-color: #2a3558;
 }
 
 /* ── dark: links ───────────────────────────────────────── */
@@ -779,7 +779,7 @@ html[data-irc-mode="dark"] .content strong {
 
 /* ── dark: search ──────────────────────────────────────── */
 html[data-irc-mode="dark"] #searchbar {
-    background-color: #111111 !important;
+    background-color: #151c30 !important;
     border-color: var(--bevel-dark) var(--bevel-light) var(--bevel-light) var(--bevel-dark) !important;
     color: var(--irc-text) !important;
 }
@@ -808,7 +808,7 @@ html[data-irc-mode="dark"] #mdbook-help-popup kbd {
 
 /* ── dark: warnings ────────────────────────────────────── */
 html[data-irc-mode="dark"] .content .warning {
-    background-color: #2a1515;
+    background-color: #2a1e30;
 }
 
 /* ── dark: selection ───────────────────────────────────── */
@@ -819,7 +819,7 @@ html[data-irc-mode="dark"] ::selection {
 
 /* ── dark: scrollbar ───────────────────────────────────── */
 html[data-irc-mode="dark"] ::-webkit-scrollbar-track {
-    background: #111111;
+    background: #151c30;
     border-color: var(--border-mid);
 }
 
@@ -829,7 +829,7 @@ html[data-irc-mode="dark"] ::-webkit-scrollbar-thumb {
 }
 
 html[data-irc-mode="dark"] ::-webkit-scrollbar-thumb:hover {
-    background: #3a3a3a;
+    background: #3a4a6a;
 }
 
 html[data-irc-mode="dark"] ::-webkit-scrollbar-button {
