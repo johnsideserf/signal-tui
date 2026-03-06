@@ -541,6 +541,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_profile(frame, app, size);
     }
 
+    // Forward message picker overlay
+    if app.show_forward {
+        draw_forward(frame, app, size);
+    }
+
     // Collect link regions from the rendered buffer for OSC 8 injection
     let area = frame.area();
     app.link_regions = collect_link_regions(frame.buffer_mut(), area, app.theme.link);
@@ -3213,6 +3218,74 @@ fn draw_profile(frame: &mut Frame, app: &App, area: Rect) {
     let (popup_area, block) = centered_popup(
         frame, area, PROFILE_POPUP_WIDTH, pref_height, " Edit Profile ", theme,
     );
+
+    let popup = Paragraph::new(lines).block(block);
+    frame.render_widget(popup, popup_area);
+}
+
+fn draw_forward(frame: &mut Frame, app: &App, area: Rect) {
+    let theme = &app.theme;
+    let max_rows = 10usize;
+    let list_height = app.forward_filtered.len().min(max_rows);
+    let pref_height = (list_height + 4) as u16; // filter line + blank + list + footer
+    let (popup_area, block) = centered_popup(
+        frame, area, 45, pref_height, " Forward to ", theme,
+    );
+    let inner = popup_area.inner(ratatui::layout::Margin { horizontal: 1, vertical: 1 });
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Filter input
+    let filter_display = if app.forward_filter.is_empty() {
+        "type to filter...".to_string()
+    } else {
+        app.forward_filter.clone()
+    };
+    let filter_style = if app.forward_filter.is_empty() {
+        Style::default().fg(theme.fg_muted)
+    } else {
+        Style::default().fg(theme.fg)
+    };
+    lines.push(Line::from(Span::styled(format!("  > {filter_display}"), filter_style)));
+    lines.push(Line::from(""));
+
+    // Conversation list
+    let visible_rows = inner.height.saturating_sub(3) as usize;
+    let scroll_offset = if app.forward_index >= visible_rows {
+        app.forward_index - visible_rows + 1
+    } else {
+        0
+    };
+    let end = (scroll_offset + visible_rows).min(app.forward_filtered.len());
+
+    if app.forward_filtered.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  No conversations found",
+            Style::default().fg(theme.fg_muted),
+        )));
+    } else {
+        for (i, (_id, name)) in app.forward_filtered[scroll_offset..end].iter().enumerate() {
+            let actual_idx = scroll_offset + i;
+            let is_selected = actual_idx == app.forward_index;
+            let prefix = if is_selected { "> " } else { "  " };
+            let style = if is_selected {
+                Style::default().bg(theme.bg_selected).fg(theme.fg).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.fg)
+            };
+            lines.push(Line::from(Span::styled(
+                format!("{prefix}{name}"),
+                style,
+            )));
+        }
+    }
+
+    // Footer
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Enter: forward | Esc: cancel",
+        Style::default().fg(theme.fg_muted),
+    )));
 
     let popup = Paragraph::new(lines).block(block);
     frame.render_widget(popup, popup_area);

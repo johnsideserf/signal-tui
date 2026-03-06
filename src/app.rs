@@ -419,6 +419,16 @@ pub struct App {
     pub show_action_menu: bool,
     /// Cursor position in action menu
     pub action_menu_index: usize,
+    /// Forward message picker overlay
+    pub show_forward: bool,
+    /// Forward picker cursor index
+    pub forward_index: usize,
+    /// Forward picker type-to-filter text
+    pub forward_filter: String,
+    /// Forward picker filtered list of (conv_id, display_name)
+    pub forward_filtered: Vec<(String, String)>,
+    /// Body of the message being forwarded
+    pub forward_body: String,
     /// Group management menu state (None = closed)
     pub group_menu_state: Option<GroupMenuState>,
     /// Cursor position in group menu / member lists
@@ -1410,6 +1420,13 @@ impl App {
                 nerd_icon: "\u{f0785}",
             });
         }
+        if !msg.is_system && !msg.is_deleted {
+            items.push(MenuAction {
+                label: "Forward",
+                key_hint: "f",
+                nerd_icon: "\u{f04d6}",
+            });
+        }
         items.push(MenuAction {
             label: "Copy",
             key_hint: "y",
@@ -1477,11 +1494,12 @@ impl App {
                     None
                 }
             }
-            KeyCode::Char(c @ ('q' | 'e' | 'r' | 'y' | 'd' | 'p' | 'v' | 'x')) => {
+            KeyCode::Char(c @ ('q' | 'e' | 'r' | 'f' | 'y' | 'd' | 'p' | 'v' | 'x')) => {
                 let hint = match c {
                     'q' => "q",
                     'e' => "e",
                     'r' => "r",
+                    'f' => "f",
                     'y' => "y",
                     'd' => "d",
                     'p' => "p",
@@ -1554,6 +1572,16 @@ impl App {
                 if self.selected_message().is_some_and(|m| !m.is_system) {
                     self.show_reaction_picker = true;
                     self.reaction_picker_index = 0;
+                }
+                None
+            }
+            "f" => {
+                // Forward — open conversation picker
+                if let Some(msg) = self.selected_message() {
+                    if !msg.is_system && !msg.is_deleted {
+                        self.forward_body = msg.body.clone();
+                        self.open_forward_picker();
+                    }
                 }
                 None
             }
@@ -1680,6 +1708,84 @@ impl App {
             _ => {
                 self.verify_confirming = false;
             }
+        }
+        None
+    }
+
+    fn open_forward_picker(&mut self) {
+        self.show_forward = true;
+        self.forward_index = 0;
+        self.forward_filter.clear();
+        self.update_forward_filter();
+    }
+
+    fn update_forward_filter(&mut self) {
+        let filter = self.forward_filter.to_lowercase();
+        self.forward_filtered = self.conversation_order.iter()
+            .filter_map(|id| {
+                let conv = self.conversations.get(id)?;
+                if !conv.accepted { return None; }
+                // Exclude the current conversation
+                if self.active_conversation.as_deref() == Some(id.as_str()) { return None; }
+                let name = &conv.name;
+                if filter.is_empty() || name.to_lowercase().contains(&filter) {
+                    Some((id.clone(), name.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if self.forward_index >= self.forward_filtered.len() {
+            self.forward_index = self.forward_filtered.len().saturating_sub(1);
+        }
+    }
+
+    pub fn handle_forward_key(&mut self, code: KeyCode) -> Option<SendRequest> {
+        match code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                if !self.forward_filtered.is_empty()
+                    && self.forward_index < self.forward_filtered.len() - 1
+                {
+                    self.forward_index += 1;
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.forward_index = self.forward_index.saturating_sub(1);
+            }
+            KeyCode::Enter => {
+                if let Some((conv_id, name)) = self.forward_filtered.get(self.forward_index).cloned() {
+                    let is_group = self.conversations.get(&conv_id).map(|c| c.is_group).unwrap_or(false);
+                    let body = format!("[Forwarded]\n{}", self.forward_body);
+                    let local_ts_ms = chrono::Utc::now().timestamp_millis();
+                    self.show_forward = false;
+                    self.status_message = format!("Forwarded to {name}");
+                    return Some(SendRequest::Message {
+                        recipient: conv_id,
+                        body,
+                        is_group,
+                        local_ts_ms,
+                        mentions: Vec::new(),
+                        attachment: None,
+                        quote_timestamp: None,
+                        quote_author: None,
+                        quote_body: None,
+                    });
+                }
+            }
+            KeyCode::Backspace => {
+                self.forward_filter.pop();
+                self.update_forward_filter();
+            }
+            KeyCode::Esc => {
+                self.show_forward = false;
+            }
+            KeyCode::Char(c) => {
+                if !c.is_control() {
+                    self.forward_filter.push(c);
+                    self.update_forward_filter();
+                }
+            }
+            _ => {}
         }
         None
     }
@@ -2164,6 +2270,11 @@ impl App {
             pending_read_receipts: Vec::new(),
             show_action_menu: false,
             action_menu_index: 0,
+            show_forward: false,
+            forward_index: 0,
+            forward_filter: String::new(),
+            forward_filtered: Vec::new(),
+            forward_body: String::new(),
             group_menu_state: None,
             group_menu_index: 0,
             group_menu_filter: String::new(),
@@ -2497,6 +2608,10 @@ impl App {
             let send = self.handle_verify_key(code);
             return (true, send);
         }
+        if self.show_forward {
+            let send = self.handle_forward_key(code);
+            return (true, send);
+        }
         if self.show_contacts {
             self.handle_contacts_key(code);
             return (true, None);
@@ -2728,6 +2843,14 @@ impl App {
                             self.input_cursor = self.input_buffer.len();
                             self.mode = InputMode::Insert;
                         }
+                    }
+                }
+            }
+            KeyCode::Char('f') => {
+                if let Some(msg) = self.selected_message() {
+                    if !msg.is_system && !msg.is_deleted {
+                        self.forward_body = msg.body.clone();
+                        self.open_forward_picker();
                     }
                 }
             }
@@ -5454,6 +5577,7 @@ impl App {
             || self.show_poll_vote
             || self.show_about
             || self.show_profile
+            || self.show_forward
             || self.autocomplete_visible
     }
 
@@ -7906,6 +8030,10 @@ mod tests {
         app.show_profile = true;
         assert!(app.has_overlay());
         app.show_profile = false;
+
+        app.show_forward = true;
+        assert!(app.has_overlay());
+        app.show_forward = false;
 
         assert!(!app.has_overlay());
     }
