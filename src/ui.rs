@@ -850,7 +850,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             if let Some(ref quote) = msg.quote {
                 let quote_body = truncate(&quote.body, 50);
                 lines.push(Line::from(vec![
-                    Span::styled("  \u{2502} ", Style::default().fg(theme.quote)),
+                    Span::styled("  \u{2570} ", Style::default().fg(theme.quote)),
                     Span::styled(
                         format!("<{}>", quote.author),
                         Style::default()
@@ -957,7 +957,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                 if let Some(ref preview) = msg.preview {
                     if let Some(ref title) = preview.title {
                         lines.push(Line::from(vec![
-                            Span::styled("  \u{258E} ", Style::default().fg(theme.link)),
+                            Span::styled("  \u{2502} ", Style::default().fg(theme.link)),
                             Span::styled(
                                 truncate(title, 60),
                                 Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
@@ -967,7 +967,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     }
                     if let Some(ref desc) = preview.description {
                         lines.push(Line::from(vec![
-                            Span::styled("  \u{258E} ", Style::default().fg(theme.link)),
+                            Span::styled("  \u{2502} ", Style::default().fg(theme.link)),
                             Span::styled(
                                 truncate(desc, 60),
                                 Style::default().fg(theme.fg_muted),
@@ -976,7 +976,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                         line_msg_idx.push(Some(msg_index));
                     }
                     lines.push(Line::from(vec![
-                        Span::styled("  \u{258E} ", Style::default().fg(theme.link)),
+                        Span::styled("  \u{2570} ", Style::default().fg(theme.link)),
                         Span::styled(
                             truncate(&preview.url, 60),
                             Style::default().fg(theme.link).add_modifier(Modifier::UNDERLINED),
