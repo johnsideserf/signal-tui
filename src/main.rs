@@ -266,6 +266,17 @@ async fn run_main_flow(
         }
     }
 
+    // In incognito mode, redirect attachments to a temp directory
+    let incognito_tmp_dir = if incognito {
+        let tmp = std::env::temp_dir().join(format!("siggy-incognito-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmp);
+        set_dir_permissions(&tmp);
+        config.download_dir = tmp.clone();
+        Some(tmp)
+    } else {
+        None
+    };
+
     // Spawn signal-cli backend
     let signal_result = SignalClient::spawn(config).await;
     let mut signal_client = match signal_result {
@@ -282,6 +293,11 @@ async fn run_main_flow(
 
     // Shut down signal-cli
     signal_client.shutdown().await?;
+
+    // Clean up incognito temp directory
+    if let Some(ref tmp) = incognito_tmp_dir {
+        let _ = std::fs::remove_dir_all(tmp);
+    }
 
     result
 }
