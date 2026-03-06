@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.1.0
+
+### New features
+
+- **Forward messages** -- press `f` in Normal mode to forward a message to
+  another conversation via a filterable picker overlay (#139)
+- **Scroll position memory** -- switching between conversations now remembers
+  and restores your scroll position (#137)
+- **Notification preview levels** -- new `notification_preview` config option
+  with three levels: `"full"` (default), `"sender"`, or `"minimal"` (#132)
+- **Clipboard auto-clear** -- clipboard is automatically cleared 30 seconds
+  after copying a message. Configurable via `clipboard_clear_seconds` (#131)
+- **Tree-style connectors** -- quotes and link previews now use curved Unicode
+  box-drawing characters (`╭`, `├`, `╰`) for visual clarity (#141)
+
+### Security
+
+- **Identity verification fix** -- `/verify` now uses `verifiedSafetyNumber`
+  instead of `trustAllKnownKeys`, requiring explicit safety number confirmation
+  before trusting a contact's identity key (#144)
+- **Secure debug log** -- debug log moved from CWD to `~/.cache/siggy/debug.log`
+  with 10MB rotation and a startup warning (#134)
+- **Incognito attachment isolation** -- `--incognito` mode now redirects
+  attachment downloads to a temp directory that is auto-deleted on exit (#133)
+
+---
+
 ## v1.0.1
 
 ### Security
