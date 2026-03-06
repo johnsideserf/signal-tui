@@ -10,11 +10,18 @@ static FILE: Mutex<Option<File>> = Mutex::new(None);
 
 pub fn enable() {
     ENABLED.store(true, Ordering::Relaxed);
+    let path = "siggy-debug.log";
     if let Ok(f) = OpenOptions::new()
         .create(true)
         .append(true)
-        .open("siggy-debug.log")
+        .open(path)
     {
+        // Restrict log file to owner-only access (contains message content)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        }
         if let Ok(mut guard) = FILE.lock() {
             *guard = Some(f);
         }

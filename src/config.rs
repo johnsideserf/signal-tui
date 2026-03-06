@@ -155,13 +155,35 @@ impl Config {
         if let Some(parent) = config_path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("Failed to create config directory {}", parent.display()))?;
+            Self::set_dir_permissions(parent);
         }
         let contents = toml::to_string_pretty(self)
             .context("Failed to serialize config")?;
         std::fs::write(&config_path, contents)
             .with_context(|| format!("Failed to write config to {}", config_path.display()))?;
+        Self::set_file_permissions(&config_path);
         Ok(())
     }
+
+    /// Set restrictive permissions (0600) on a sensitive file (Unix only).
+    #[cfg(unix)]
+    fn set_file_permissions(path: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+
+    #[cfg(not(unix))]
+    fn set_file_permissions(_path: &std::path::Path) {}
+
+    /// Set restrictive permissions (0700) on a sensitive directory (Unix only).
+    #[cfg(unix)]
+    fn set_dir_permissions(path: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
+    }
+
+    #[cfg(not(unix))]
+    fn set_dir_permissions(_path: &std::path::Path) {}
 
     /// Returns true if the account is empty and setup is needed.
     pub fn needs_setup(&self) -> bool {

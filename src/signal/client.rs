@@ -2206,6 +2206,11 @@ fn parse_attachment(
 
         if let Some(src) = src.filter(|p| p.exists()) {
             let _ = std::fs::create_dir_all(download_dir);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(download_dir, std::fs::Permissions::from_mode(0o700));
+            }
             match std::fs::copy(&src, &dest) {
                 Ok(_) => Some(dest.to_string_lossy().to_string()),
                 Err(_) => Some(src.to_string_lossy().to_string()),

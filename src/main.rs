@@ -38,6 +38,26 @@ use signal::client::SignalClient;
 /// Keyboard polling interval for the main event loop.
 const POLL_TIMEOUT: Duration = Duration::from_millis(50);
 
+/// Set restrictive permissions (0600) on a sensitive file (Unix only).
+#[cfg(unix)]
+fn set_file_permissions(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+}
+
+#[cfg(not(unix))]
+fn set_file_permissions(_path: &std::path::Path) {}
+
+/// Set restrictive permissions (0700) on a sensitive directory (Unix only).
+#[cfg(unix)]
+fn set_dir_permissions(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
+}
+
+#[cfg(not(unix))]
+fn set_dir_permissions(_path: &std::path::Path) {}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Disable the default Windows Ctrl+C handler — crossterm captures it as a
@@ -186,6 +206,7 @@ async fn run_main_flow(
     // Create download directory
     if !config.download_dir.exists() {
         std::fs::create_dir_all(&config.download_dir)?;
+        set_dir_permissions(&config.download_dir);
     }
 
     // Open database (in-memory for incognito mode)
@@ -207,6 +228,7 @@ async fn run_main_flow(
         }
 
         std::fs::create_dir_all(&db_dir)?;
+        set_dir_permissions(&db_dir);
         let db_path = db_dir.join("siggy.db");
 
         // Auto-migrate old database filename
@@ -216,6 +238,7 @@ async fn run_main_flow(
                 let _ = std::fs::rename(&old_db_path, &db_path);
             }
         }
+        set_file_permissions(&db_path);
         db::Database::open(&db_path)?
     };
 
