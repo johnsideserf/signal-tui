@@ -174,6 +174,7 @@ menu. Available actions depend on the message type:
 | Edit | `e` | Your own outgoing messages |
 | React | `r` | All messages |
 | Copy | `y` | All messages |
+| Forward | `f` | Non-deleted messages |
 | Delete | `d` | Non-deleted messages |
 
 Navigate with `j`/`k`, press Enter to execute, or press the shortcut key
@@ -287,6 +288,33 @@ repository link.
 
 The sidebar can be placed on the left (default) or right side of the screen.
 Toggle via `/settings` > "Sidebar on right".
+
+## Configurable keybindings
+
+All keybindings are fully configurable. Choose from three built-in profiles
+(Default, Emacs, Minimal) or create your own. Override individual keys via
+`~/.config/siggy/keybindings.toml`, or rebind keys live in the app with
+`/keybindings` (alias `/kb`).
+
+See [Keybindings](keybindings.md) for full details on profiles, customization,
+and the TOML format.
+
+## Multi-line input
+
+Press `Alt+Enter` or `Shift+Enter` in Insert mode to insert a newline. Compose
+multi-line messages before sending with Enter. The input area expands
+automatically to show all lines.
+
+## Message history pagination
+
+Scrolling to the top of a conversation automatically loads older messages from
+the database. A loading indicator appears briefly while fetching. This lets you
+browse your full message history without loading everything upfront.
+
+## Forward messages
+
+Press `f` in Normal mode on a focused message to forward it to another
+conversation. A filterable picker overlay lets you choose the destination.
 
 ## Demo mode
 

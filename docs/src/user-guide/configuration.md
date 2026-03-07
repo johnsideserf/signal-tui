@@ -35,6 +35,7 @@ reaction_verbose = false
 send_read_receipts = true
 mouse_enabled = true
 theme = "Default"
+keybinding_profile = "Default"
 ```
 
 ### Field reference
@@ -56,6 +57,7 @@ theme = "Default"
 | `send_read_receipts` | bool | `true` | Send read receipts when viewing conversations |
 | `mouse_enabled` | bool | `true` | Enable mouse support (click sidebar, scroll, etc.) |
 | `theme` | string | `"Default"` | Color theme name |
+| `keybinding_profile` | string | `"Default"` | Keybinding profile (`Default`, `Emacs`, `Minimal`, or custom) |
 
 ## CLI flags
 
@@ -80,6 +82,7 @@ toggles for runtime settings:
 - Send read receipts
 - Mouse support
 - Theme selector
+- Keybinding profile selector
 
 Changes made in the settings overlay are saved to the config file when you
 close the overlay, and persist across sessions.

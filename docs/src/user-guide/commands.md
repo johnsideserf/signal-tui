@@ -18,6 +18,7 @@ All commands start with `/`. Type `/` in Insert mode to open the autocomplete po
 | `/disappearing` | `/dm` | `<duration>` | Set disappearing message timer (`off`, `30s`, `5m`, `1h`, `1d`, `1w`) |
 | `/group` | `/g` | | Open group management menu |
 | `/theme` | `/t` | | Open theme picker |
+| `/keybindings` | `/kb` | | Open keybindings overlay |
 | `/poll` | | `"q" "a" "b" [--single]` | Create a poll |
 | `/verify` | `/v` | | Verify contact identity keys |
 | `/profile` | | | Edit your Signal profile |

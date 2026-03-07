@@ -1,7 +1,77 @@
 # Keybindings
 
 siggy uses vim-style modal editing with two modes: **Insert** (default) and
-**Normal**.
+**Normal**. All keybindings are configurable via profiles and per-key overrides.
+
+## Profiles
+
+Three built-in profiles are available:
+
+| Profile | Description |
+|---|---|
+| **Default** | Vim-style modal editing (Normal / Insert modes) |
+| **Emacs** | No modal concept; Ctrl-based shortcuts in Insert mode |
+| **Minimal** | Arrow-key centric; F-key shortcuts for actions |
+
+Set the profile in your config file:
+
+```toml
+keybinding_profile = "Default"
+```
+
+Or switch profiles live in the app via `/keybindings` or `/settings` > Keybindings.
+
+## Customizing keybindings
+
+### Per-key overrides
+
+Create `~/.config/siggy/keybindings.toml` to override individual keys on top
+of your active profile:
+
+```toml
+[global]
+quit = "ctrl+q"
+
+[normal]
+scroll_up = "ctrl+j"
+react = "ctrl+r"
+
+[insert]
+send_message = "ctrl+enter"
+```
+
+### Custom profiles
+
+Create full profiles in `~/.config/siggy/keybindings/myprofile.toml`:
+
+```toml
+name = "My Custom"
+
+[global]
+quit = "ctrl+c"
+next_conversation = "tab"
+
+[normal]
+scroll_up = "k"
+scroll_down = "j"
+
+[insert]
+exit_insert = "esc"
+send_message = "enter"
+insert_newline = ["shift+enter", "alt+enter"]
+```
+
+Arrays are supported for binding multiple keys to the same action.
+
+### In-app rebinding
+
+Open the keybindings overlay with `/keybindings` (alias `/kb`). Navigate
+actions with `j`/`k`, press Enter to capture a new key, Backspace to reset
+to profile default. Changes are saved automatically.
+
+## Default keybindings
+
+The tables below show the Default profile bindings.
 
 ## Global (both modes)
 
@@ -36,6 +106,7 @@ changes in the status bar.
 | `r` | Open reaction picker on focused message |
 | `q` | Reply to focused message (quote reply) |
 | `e` | Edit own outgoing message |
+| `f` | Forward focused message |
 | `d` | Delete focused message |
 | `p` | Pin / unpin focused message |
 | `n` | Jump to next search result |
@@ -76,6 +147,8 @@ Insert mode is the default on startup. You can type messages and commands direct
 |---|---|
 | `Esc` | Switch to Normal mode |
 | `Enter` | Send message or execute command |
+| `Alt+Enter` / `Shift+Enter` | Insert newline (multi-line input) |
+| `Ctrl+W` | Delete word back |
 | `Backspace` / `Delete` | Delete characters |
 | `Up` / `Down` | Recall input history |
 | `Left` / `Right` | Move cursor |

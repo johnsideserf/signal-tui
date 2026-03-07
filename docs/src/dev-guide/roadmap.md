@@ -62,15 +62,13 @@
 - [x] Publish to crates.io (`cargo install siggy`)
 - [x] Rename to siggy (auto-migration from signal-tui paths)
 
+- [x] Forward messages (`f` key, filterable picker overlay)
+- [x] Scroll position memory per conversation
+- [x] Multi-line message input (Alt+Enter / Shift+Enter for newlines)
+- [x] Message history pagination (scroll-up to load older messages)
+- [x] Configurable keybindings (profiles, in-app rebinding, TOML overrides)
+
 ## Future
 
-### Medium priority
-
-- [ ] Multi-line message input (Shift+Enter for newlines)
-- [ ] Forward messages
-
-### Low priority
-
-- [ ] Message history pagination (scroll-up to load older messages)
-- [ ] Scroll position memory per conversation
-- [ ] Configurable keybindings
+*No planned features at this time. Have an idea?
+[Open an issue](https://github.com/johnsideserf/siggy/issues).*
