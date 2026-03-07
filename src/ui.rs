@@ -1881,16 +1881,16 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
             }
 
             if i == cursor_line {
-                let line_scroll = cursor_col.saturating_sub(text_width);
-                let visible_end = (line_scroll + text_width).min(line_str.len());
+                let char_scroll = cursor_col.saturating_sub(text_width);
+                let visible_text: String = line_str.chars().skip(char_scroll).take(text_width).collect();
                 spans.push(Span::styled(
-                    line_str[line_scroll..visible_end].to_string(),
+                    visible_text,
                     Style::default().fg(theme.fg),
                 ));
             } else {
-                let visible_end = text_width.min(line_str.len());
+                let visible_text: String = line_str.chars().take(text_width).collect();
                 spans.push(Span::styled(
-                    line_str[..visible_end].to_string(),
+                    visible_text,
                     Style::default().fg(theme.fg),
                 ));
             }
