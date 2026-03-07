@@ -4311,7 +4311,8 @@ impl App {
             }
             if !found {
                 crate::debug_log::logf(format_args!(
-                    "read_sync: no conversation found for sender={sender} ts={timestamp}"
+                    "read_sync: no conversation found for sender={} ts={timestamp}",
+                    crate::debug_log::mask_phone(sender)
                 ));
             }
         }
@@ -4714,7 +4715,8 @@ impl App {
     fn handle_send_timestamp(&mut self, rpc_id: &str, server_ts: i64) {
         if let Some((conv_id, local_ts)) = self.pending_sends.remove(rpc_id) {
             crate::debug_log::logf(format_args!(
-                "send confirmed: conv={conv_id} local_ts={local_ts} server_ts={server_ts}"
+                "send confirmed: conv={} local_ts={local_ts} server_ts={server_ts}",
+                crate::debug_log::mask_phone(&conv_id)
             ));
             let effective_ts = if server_ts != 0 { server_ts } else { local_ts };
             let mut found = false;
@@ -4827,7 +4829,8 @@ impl App {
         // that assigns the server timestamp. Buffer it for replay.
         if !matched_any && !timestamps.is_empty() {
             crate::debug_log::logf(format_args!(
-                "receipt: buffering {receipt_type} from {sender} (no matching ts)"
+                "receipt: buffering {receipt_type} from {} (no matching ts)",
+                crate::debug_log::mask_phone(sender)
             ));
             self.pending_receipts.push((
                 sender.to_string(),
@@ -4836,7 +4839,8 @@ impl App {
             ));
         } else if matched_any {
             crate::debug_log::logf(format_args!(
-                "receipt: {receipt_type} from {sender} -> {new_status:?}"
+                "receipt: {receipt_type} from {} -> {new_status:?}",
+                crate::debug_log::mask_phone(sender)
             ));
         }
     }

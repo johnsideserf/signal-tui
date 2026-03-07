@@ -1,5 +1,8 @@
 //! Optional debug logger — writes to ~/.cache/siggy/debug.log when --debug is passed.
 //! Rotates log file when it exceeds MAX_LOG_SIZE bytes.
+//!
+//! `--debug` enables logging with PII redaction (phone numbers masked, message bodies omitted).
+//! `--debug-full` enables logging with full unredacted output.
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -7,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
+static REDACT: AtomicBool = AtomicBool::new(true);
 static FILE: Mutex<Option<File>> = Mutex::new(None);
 static PATH: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
 
@@ -19,8 +23,7 @@ fn log_path() -> std::path::PathBuf {
         .join("debug.log")
 }
 
-pub fn enable() {
-    ENABLED.store(true, Ordering::Relaxed);
+fn setup_file() {
     let path = log_path();
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -57,6 +60,49 @@ pub fn enable() {
         }
     }
     eprintln!("Debug logging enabled: {}", path.display());
+}
+
+/// Enable debug logging with PII redaction (--debug).
+pub fn enable() {
+    ENABLED.store(true, Ordering::Relaxed);
+    REDACT.store(true, Ordering::Relaxed);
+    setup_file();
+}
+
+/// Enable debug logging without PII redaction (--debug-full).
+pub fn enable_full() {
+    ENABLED.store(true, Ordering::Relaxed);
+    REDACT.store(false, Ordering::Relaxed);
+    setup_file();
+}
+
+/// Whether PII should be redacted in log output.
+pub fn redact() -> bool {
+    REDACT.load(Ordering::Relaxed)
+}
+
+/// Mask a phone number for redacted logging: "+15551234567" → "+1***...567"
+pub fn mask_phone(phone: &str) -> String {
+    if !redact() {
+        return phone.to_string();
+    }
+    if phone.starts_with('+') && phone.len() > 5 {
+        let suffix = &phone[phone.len() - 3..];
+        format!("+{}***...{}", &phone[1..2], suffix)
+    } else if phone.len() > 8 {
+        // Group IDs or other long identifiers
+        format!("{}...{}", &phone[..4], &phone[phone.len() - 4..])
+    } else {
+        "[redacted]".to_string()
+    }
+}
+
+/// Summarize a message body for redacted logging: "hello world" → "[msg: 11 chars]"
+pub fn mask_body(body: &str) -> String {
+    if !redact() {
+        return body.to_string();
+    }
+    format!("[msg: {} chars]", body.len())
 }
 
 pub fn log(msg: &str) {

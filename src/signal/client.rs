@@ -100,7 +100,11 @@ impl SignalClient {
                         };
 
                         if let Some(ref event) = event {
-                            crate::debug_log::logf(format_args!("event: {event:?}"));
+                            if crate::debug_log::redact() {
+                                crate::debug_log::logf(format_args!("event: {}", event.redacted_summary()));
+                            } else {
+                                crate::debug_log::logf(format_args!("event: {event:?}"));
+                            }
                         }
 
                         if let Some(event) = event {

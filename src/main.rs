@@ -79,6 +79,7 @@ async fn main() -> Result<()> {
     let mut demo_mode = false;
     let mut incognito = false;
     let mut debug = false;
+    let mut debug_full = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -117,6 +118,10 @@ async fn main() -> Result<()> {
                 debug = true;
                 i += 1;
             }
+            "--debug-full" => {
+                debug_full = true;
+                i += 1;
+            }
             "--help" => {
                 eprintln!("siggy - Terminal Signal client");
                 eprintln!();
@@ -128,7 +133,8 @@ async fn main() -> Result<()> {
                 eprintln!("      --setup             Run first-time setup wizard");
                 eprintln!("      --demo              Launch with dummy data (no signal-cli needed)");
                 eprintln!("      --incognito         No local message storage (in-memory only)");
-                eprintln!("      --debug             Write debug log to siggy-debug.log");
+                eprintln!("      --debug             Write debug log (PII redacted)");
+                eprintln!("      --debug-full        Write debug log (full, unredacted)");
                 eprintln!("      --help              Show this help");
                 std::process::exit(0);
             }
@@ -139,9 +145,12 @@ async fn main() -> Result<()> {
         }
     }
 
-    if debug {
+    if debug_full {
+        debug_log::enable_full();
+        debug_log::log("=== siggy debug session started (full/unredacted) ===");
+    } else if debug {
         debug_log::enable();
-        debug_log::log("=== siggy debug session started ===");
+        debug_log::log("=== siggy debug session started (PII redacted) ===");
     }
 
     // Load config
@@ -530,7 +539,7 @@ async fn dispatch_send(
             let att_refs: Vec<&std::path::Path> = attachments.iter().map(|p| p.as_path()).collect();
             match signal_client.send_message(&recipient, &body, is_group, &mentions, &att_refs, quote.as_ref().map(|(a, t, b)| (a.as_str(), *t, b.as_str()))).await {
                 Ok(rpc_id) => {
-                    debug_log::logf(format_args!("send: to={recipient} ts={local_ts_ms}"));
+                    debug_log::logf(format_args!("send: to={} ts={local_ts_ms}", debug_log::mask_phone(&recipient)));
                     app.pending_sends
                         .insert(rpc_id, (recipient.to_string(), local_ts_ms));
                 }
@@ -556,7 +565,7 @@ async fn dispatch_send(
             };
             match signal_client.send_edit_message(&recipient, &body, is_group, edit_timestamp, &mentions, quote.as_ref().map(|(a, t, b)| (a.as_str(), *t, b.as_str()))).await {
                 Ok(rpc_id) => {
-                    debug_log::logf(format_args!("edit: to={recipient} ts={edit_timestamp}"));
+                    debug_log::logf(format_args!("edit: to={} ts={edit_timestamp}", debug_log::mask_phone(&recipient)));
                     app.pending_sends.insert(rpc_id, (recipient.to_string(), local_ts_ms));
                 }
                 Err(e) => {
