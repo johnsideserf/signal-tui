@@ -19,6 +19,7 @@ impl Database {
         let conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+        conn.execute_batch("PRAGMA secure_delete=ON;")?;
         let db = Self { conn };
         db.migrate()?;
         Ok(db)
