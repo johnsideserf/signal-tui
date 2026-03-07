@@ -14,6 +14,27 @@ use crate::keybindings::{self, BindingMode, KeyAction, KeyBindings};
 use crate::theme::{self, Theme};
 use crate::signal::types::{Contact, Group, IdentityInfo, LinkPreview, Mention, MessageStatus, PollData, PollOption, PollVote, Reaction, SignalEvent, SignalMessage, StyleType, TextStyle, TrustLevel};
 
+/// Find the byte position one character forward from `pos` in `buf`.
+fn next_char_pos(buf: &str, pos: usize) -> usize {
+    if pos >= buf.len() { return buf.len(); }
+    pos + buf[pos..].chars().next().map_or(1, |c| c.len_utf8())
+}
+
+/// Find the byte position one character backward from `pos` in `buf`.
+fn prev_char_pos(buf: &str, pos: usize) -> usize {
+    if pos == 0 { return 0; }
+    pos - buf[..pos].chars().next_back().map_or(1, |c| c.len_utf8())
+}
+
+/// Snap a byte position to the nearest valid char boundary at or before `pos`.
+fn floor_char_boundary(buf: &str, pos: usize) -> usize {
+    let pos = pos.min(buf.len());
+    if buf.is_char_boundary(pos) { return pos; }
+    let mut p = pos;
+    while p > 0 && !buf.is_char_boundary(p) { p -= 1; }
+    p
+}
+
 /// Log a database error via debug_log (no-op when --debug is off).
 fn db_warn<T>(result: Result<T, impl std::fmt::Display>, context: &str) {
     if let Err(e) = result {
@@ -2969,16 +2990,16 @@ impl App {
             // Edit/mode-switch
             Some(KeyAction::InsertAtCursor) => { self.mode = InputMode::Insert; None }
             Some(KeyAction::InsertAfterCursor) => {
-                if self.input_cursor < self.input_buffer.len() { self.input_cursor += 1; }
+                self.input_cursor = next_char_pos(&self.input_buffer, self.input_cursor);
                 self.mode = InputMode::Insert;
                 None
             }
             Some(KeyAction::InsertLineStart) => { self.input_cursor = self.current_line_start(); self.mode = InputMode::Insert; None }
             Some(KeyAction::InsertLineEnd) => { self.input_cursor = self.current_line_end(); self.mode = InputMode::Insert; None }
             Some(KeyAction::OpenLineBelow) => { self.input_buffer.clear(); self.input_cursor = 0; self.mode = InputMode::Insert; None }
-            Some(KeyAction::CursorLeft) => { self.input_cursor = self.input_cursor.saturating_sub(1); None }
+            Some(KeyAction::CursorLeft) => { self.input_cursor = prev_char_pos(&self.input_buffer, self.input_cursor); None }
             Some(KeyAction::CursorRight) => {
-                if self.input_cursor < self.input_buffer.len() { self.input_cursor += 1; }
+                self.input_cursor = next_char_pos(&self.input_buffer, self.input_cursor);
                 None
             }
             Some(KeyAction::LineStart) => { self.input_cursor = self.current_line_start(); None }
@@ -3019,7 +3040,7 @@ impl App {
                 if self.input_cursor < self.input_buffer.len() {
                     self.input_buffer.remove(self.input_cursor);
                     if self.input_cursor > 0 && self.input_cursor >= self.input_buffer.len() {
-                        self.input_cursor = self.input_buffer.len().saturating_sub(1);
+                        self.input_cursor = prev_char_pos(&self.input_buffer, self.input_buffer.len());
                     }
                 }
                 None
@@ -3178,9 +3199,9 @@ impl App {
             // Actions that alternative profiles (Emacs/Minimal) may bind in Insert mode
             Some(KeyAction::ScrollDown) => { self.scroll_offset = self.scroll_offset.saturating_sub(1); self.focused_msg_index = None; None }
             Some(KeyAction::ScrollUp) => { self.scroll_offset = self.scroll_offset.saturating_add(1); self.focused_msg_index = None; None }
-            Some(KeyAction::CursorLeft) => { self.input_cursor = self.input_cursor.saturating_sub(1); None }
+            Some(KeyAction::CursorLeft) => { self.input_cursor = prev_char_pos(&self.input_buffer, self.input_cursor); None }
             Some(KeyAction::CursorRight) => {
-                if self.input_cursor < self.input_buffer.len() { self.input_cursor += 1; }
+                self.input_cursor = next_char_pos(&self.input_buffer, self.input_cursor);
                 None
             }
             Some(KeyAction::LineStart) => { self.input_cursor = self.current_line_start(); None }
@@ -5545,7 +5566,7 @@ impl App {
         match key_code {
             KeyCode::Backspace => {
                 if self.input_cursor > 0 {
-                    self.input_cursor -= 1;
+                    self.input_cursor = prev_char_pos(&self.input_buffer, self.input_cursor);
                     self.input_buffer.remove(self.input_cursor);
                 } else if self.pending_attachment.is_some() {
                     self.pending_attachment = None;
@@ -5559,13 +5580,11 @@ impl App {
                 true
             }
             KeyCode::Left => {
-                self.input_cursor = self.input_cursor.saturating_sub(1);
+                self.input_cursor = prev_char_pos(&self.input_buffer, self.input_cursor);
                 true
             }
             KeyCode::Right => {
-                if self.input_cursor < self.input_buffer.len() {
-                    self.input_cursor += 1;
-                }
+                self.input_cursor = next_char_pos(&self.input_buffer, self.input_cursor);
                 true
             }
             KeyCode::Home => {
@@ -5580,7 +5599,9 @@ impl App {
                 let (line, col) = self.cursor_line_col();
                 if line > 0 {
                     let lines: Vec<&str> = self.input_buffer.split('\n').collect();
-                    let target_col = col.min(lines[line - 1].len());
+                    let target_line = lines[line - 1];
+                    let target_chars = target_line.chars().count();
+                    let target_col: usize = target_line.chars().take(col.min(target_chars)).map(|c| c.len_utf8()).sum();
                     let offset: usize = lines.iter().take(line - 1).map(|l| l.len() + 1).sum();
                     self.input_cursor = offset + target_col;
                 } else {
@@ -5593,7 +5614,9 @@ impl App {
                 let total_lines = self.input_line_count();
                 if line < total_lines - 1 {
                     let lines: Vec<&str> = self.input_buffer.split('\n').collect();
-                    let target_col = col.min(lines[line + 1].len());
+                    let target_line = lines[line + 1];
+                    let target_chars = target_line.chars().count();
+                    let target_col: usize = target_line.chars().take(col.min(target_chars)).map(|c| c.len_utf8()).sum();
                     let offset: usize = lines.iter().take(line + 1).map(|l| l.len() + 1).sum();
                     self.input_cursor = offset + target_col;
                 } else {
@@ -5603,7 +5626,7 @@ impl App {
             }
             KeyCode::Char(c) => {
                 self.input_buffer.insert(self.input_cursor, c);
-                self.input_cursor += 1;
+                self.input_cursor += c.len_utf8();
                 true
             }
             _ => false,
@@ -5616,13 +5639,15 @@ impl App {
     }
 
     /// Returns (line_index, column) of the cursor within the input buffer.
+    /// Column is measured in characters (not bytes) for correct display positioning.
     pub fn cursor_line_col(&self) -> (usize, usize) {
         let before = &self.input_buffer[..self.input_cursor];
         let line = before.matches('\n').count();
-        let col = match before.rfind('\n') {
-            Some(pos) => self.input_cursor - pos - 1,
-            None => self.input_cursor,
+        let line_start = match before.rfind('\n') {
+            Some(pos) => pos + 1,
+            None => 0,
         };
+        let col = before[line_start..].chars().count();
         (line, col)
     }
 
@@ -6078,7 +6103,7 @@ impl App {
             if col >= content_start_col {
                 let text_width = (self.mouse_input_area.width.saturating_sub(2)) as usize
                     - self.mouse_input_prefix_len as usize;
-                let input_scroll = self.input_cursor.saturating_sub(text_width);
+                let input_scroll = floor_char_boundary(&self.input_buffer, self.input_cursor.saturating_sub(text_width));
                 let target_col = (col - content_start_col) as usize;
                 // Walk characters to find the byte offset for the target column
                 let mut byte_pos = input_scroll;
