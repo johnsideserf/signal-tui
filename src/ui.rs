@@ -2147,7 +2147,7 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect) {
 
 fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
     let theme = &app.theme;
-    let height = SETTINGS_POPUP_HEIGHT + 2; // extra lines for theme + keybindings entries
+    let height = SETTINGS_POPUP_HEIGHT + 3; // extra lines for preview + theme + keybindings entries
     let (popup_area, block) = centered_popup(
         frame, area, SETTINGS_POPUP_WIDTH, height, " Settings ", theme,
     );
@@ -2176,8 +2176,26 @@ fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
         ]));
     }
 
-    // Theme selector entry (index == SETTINGS.len())
-    let is_theme_selected = app.settings_index == SETTINGS.len();
+    // Notification preview cycle entry (index == SETTINGS.len())
+    let preview_index = SETTINGS.len();
+    let is_preview_selected = app.settings_index == preview_index;
+    let preview_style = if is_preview_selected {
+        Style::default().bg(theme.bg_selected).fg(theme.fg).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.fg_secondary)
+    };
+    let preview_value_style = if is_preview_selected {
+        Style::default().bg(theme.bg_selected).fg(theme.accent)
+    } else {
+        Style::default().fg(theme.accent)
+    };
+    lines.push(Line::from(vec![
+        Span::styled("  Notification preview: ", preview_style),
+        Span::styled(app.notification_preview.clone(), preview_value_style),
+    ]));
+
+    // Theme selector entry (index == SETTINGS.len() + 1)
+    let is_theme_selected = app.settings_index == SETTINGS.len() + 1;
     let theme_style = if is_theme_selected {
         Style::default().bg(theme.bg_selected).fg(theme.fg).add_modifier(Modifier::BOLD)
     } else {
@@ -2193,8 +2211,8 @@ fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled(app.theme.name.clone(), theme_value_style),
     ]));
 
-    // Keybindings selector entry (index == SETTINGS.len() + 1)
-    let is_kb_selected = app.settings_index == SETTINGS.len() + 1;
+    // Keybindings selector entry (index == SETTINGS.len() + 2)
+    let is_kb_selected = app.settings_index == SETTINGS.len() + 2;
     let kb_style = if is_kb_selected {
         Style::default().bg(theme.bg_selected).fg(theme.fg).add_modifier(Modifier::BOLD)
     } else {

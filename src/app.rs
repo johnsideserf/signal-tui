@@ -818,6 +818,7 @@ impl App {
         config.account = self.account.clone();
         config.theme = self.theme.name.clone();
         config.keybinding_profile = self.keybindings.profile_name.clone();
+        config.notification_preview = self.notification_preview.clone();
         for def in SETTINGS {
             if let Some(save_fn) = def.save {
                 save_fn(&mut config, (def.get)(self));
@@ -880,8 +881,9 @@ impl App {
     /// Handle a key press while the settings overlay is open.
     /// After toggles: Theme at SETTINGS.len(), Keybindings at SETTINGS.len()+1.
     pub fn handle_settings_key(&mut self, code: KeyCode) {
-        let theme_index = SETTINGS.len();
-        let kb_index = SETTINGS.len() + 1;
+        let preview_index = SETTINGS.len();
+        let theme_index = SETTINGS.len() + 1;
+        let kb_index = SETTINGS.len() + 2;
         let max_index = kb_index;
         match code {
             KeyCode::Char('j') | KeyCode::Down => {
@@ -893,7 +895,13 @@ impl App {
                 self.settings_index = self.settings_index.saturating_sub(1);
             }
             KeyCode::Char(' ') | KeyCode::Enter | KeyCode::Tab => {
-                if self.settings_index == theme_index {
+                if self.settings_index == preview_index {
+                    self.notification_preview = match self.notification_preview.as_str() {
+                        "full" => "sender".to_string(),
+                        "sender" => "minimal".to_string(),
+                        _ => "full".to_string(),
+                    };
+                } else if self.settings_index == theme_index {
                     self.show_settings = false;
                     self.save_settings();
                     self.show_theme_picker = true;
