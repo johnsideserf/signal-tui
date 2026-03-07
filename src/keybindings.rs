@@ -233,6 +233,47 @@ impl KeyBindings {
         }
     }
 
+    /// Compute the difference between current bindings and the profile's defaults.
+    /// Returns overrides that, when applied to the profile, reproduce the current state.
+    pub fn diff_from_profile(&self) -> KeyBindingOverrides {
+        let defaults = find_profile(&self.profile_name);
+        fn diff_mode(
+            current: &HashMap<KeyCombo, KeyAction>,
+            default: &HashMap<KeyCombo, KeyAction>,
+        ) -> Vec<(KeyAction, Vec<KeyCombo>)> {
+            // Collect all actions that appear in either map
+            let mut all_actions: std::collections::HashSet<KeyAction> = std::collections::HashSet::new();
+            for action in current.values() { all_actions.insert(*action); }
+            for action in default.values() { all_actions.insert(*action); }
+
+            let mut result = Vec::new();
+            for action in &all_actions {
+                let current_combos: Vec<&KeyCombo> = current.iter()
+                    .filter(|(_, a)| *a == action)
+                    .map(|(c, _)| c)
+                    .collect();
+                let default_combos: Vec<&KeyCombo> = default.iter()
+                    .filter(|(_, a)| *a == action)
+                    .map(|(c, _)| c)
+                    .collect();
+                // Check if the bindings differ
+                let mut cur_sorted: Vec<_> = current_combos.iter().map(|c| format_key_combo(c)).collect();
+                let mut def_sorted: Vec<_> = default_combos.iter().map(|c| format_key_combo(c)).collect();
+                cur_sorted.sort();
+                def_sorted.sort();
+                if cur_sorted != def_sorted {
+                    result.push((*action, current_combos.into_iter().cloned().collect()));
+                }
+            }
+            result
+        }
+        KeyBindingOverrides {
+            global: diff_mode(&self.global, &defaults.global),
+            normal: diff_mode(&self.normal, &defaults.normal),
+            insert: diff_mode(&self.insert, &defaults.insert),
+        }
+    }
+
     /// Get the binding map for a specific mode.
     #[allow(dead_code)]
     fn map_for_mode(&self, mode: BindingMode) -> &HashMap<KeyCombo, KeyAction> {
@@ -250,12 +291,18 @@ impl KeyBindings {
     }
 }
 
-/// User overrides loaded from `keybindings.toml`.
+/// User overrides loaded from / saved to `keybindings.toml`.
 #[derive(Debug, Default)]
 pub struct KeyBindingOverrides {
     pub global: Vec<(KeyAction, Vec<KeyCombo>)>,
     pub normal: Vec<(KeyAction, Vec<KeyCombo>)>,
     pub insert: Vec<(KeyAction, Vec<KeyCombo>)>,
+}
+
+impl KeyBindingOverrides {
+    pub fn is_empty(&self) -> bool {
+        self.global.is_empty() && self.normal.is_empty() && self.insert.is_empty()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -804,6 +851,62 @@ pub fn load_overrides() -> KeyBindingOverrides {
             crate::debug_log::logf(format_args!("keybindings.toml read error: {e}"));
             KeyBindingOverrides::default()
         }
+    }
+}
+
+/// Save overrides to `~/.config/siggy/keybindings.toml`.
+/// If there are no overrides, removes the file.
+pub fn save_overrides(overrides: &KeyBindingOverrides) {
+    let path = match dirs::config_dir() {
+        Some(d) => d.join("siggy").join("keybindings.toml"),
+        None => return,
+    };
+    if overrides.is_empty() {
+        // No overrides — remove the file if it exists
+        let _ = std::fs::remove_file(&path);
+        return;
+    }
+    fn section_to_toml(entries: &[(KeyAction, Vec<KeyCombo>)]) -> String {
+        let mut lines = Vec::new();
+        for (action, combos) in entries {
+            let action_str = serde_json::to_string(action)
+                .unwrap_or_default()
+                .trim_matches('"')
+                .to_string();
+            if combos.len() == 1 {
+                lines.push(format!("{} = \"{}\"", action_str, format_key_combo(&combos[0]).to_lowercase()));
+            } else {
+                let keys: Vec<String> = combos.iter()
+                    .map(|c| format!("\"{}\"", format_key_combo(c).to_lowercase()))
+                    .collect();
+                lines.push(format!("{} = [{}]", action_str, keys.join(", ")));
+            }
+        }
+        lines.join("\n")
+    }
+    let mut content = String::new();
+    if !overrides.global.is_empty() {
+        content.push_str("[global]\n");
+        content.push_str(&section_to_toml(&overrides.global));
+        content.push('\n');
+    }
+    if !overrides.normal.is_empty() {
+        if !content.is_empty() { content.push('\n'); }
+        content.push_str("[normal]\n");
+        content.push_str(&section_to_toml(&overrides.normal));
+        content.push('\n');
+    }
+    if !overrides.insert.is_empty() {
+        if !content.is_empty() { content.push('\n'); }
+        content.push_str("[insert]\n");
+        content.push_str(&section_to_toml(&overrides.insert));
+        content.push('\n');
+    }
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Err(e) = std::fs::write(&path, content) {
+        crate::debug_log::logf(format_args!("keybindings.toml write error: {e}"));
     }
 }
 

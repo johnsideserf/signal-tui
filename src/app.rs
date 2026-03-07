@@ -805,6 +805,9 @@ impl App {
         if let Err(e) = config.save() {
             crate::debug_log::logf(format_args!("settings save error: {e}"));
         }
+        // Persist in-app keybinding rebinds
+        let overrides = self.keybindings.diff_from_profile();
+        keybindings::save_overrides(&overrides);
     }
 
     /// Re-render or clear image previews on all messages (after toggling inline_images).
@@ -980,7 +983,7 @@ impl App {
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 self.keybindings_index = self.keybindings_index.saturating_sub(1);
-                // Skip section headers
+                // Skip section headers (index 0 is the profile row — always selectable)
                 while self.keybindings_index > 0 && self.keybindings_overlay_item(self.keybindings_index).1.is_none() {
                     self.keybindings_index = self.keybindings_index.saturating_sub(1);
                 }
@@ -2977,16 +2980,32 @@ impl App {
             Some(KeyAction::WordForward) => {
                 let buf = &self.input_buffer;
                 let mut pos = self.input_cursor;
-                while pos < buf.len() { let c = buf[pos..].chars().next().unwrap(); if c.is_whitespace() { break; } pos += c.len_utf8(); }
-                while pos < buf.len() { let c = buf[pos..].chars().next().unwrap(); if !c.is_whitespace() { break; } pos += c.len_utf8(); }
+                while pos < buf.len() {
+                    let c = buf[pos..].chars().next().unwrap();
+                    if c.is_whitespace() { break; }
+                    pos += c.len_utf8();
+                }
+                while pos < buf.len() {
+                    let c = buf[pos..].chars().next().unwrap();
+                    if !c.is_whitespace() { break; }
+                    pos += c.len_utf8();
+                }
                 self.input_cursor = pos;
                 None
             }
             Some(KeyAction::WordBack) => {
                 let buf = &self.input_buffer;
                 let mut pos = self.input_cursor;
-                while pos > 0 { let prev = buf[..pos].chars().next_back().unwrap(); if !prev.is_whitespace() { break; } pos -= prev.len_utf8(); }
-                while pos > 0 { let prev = buf[..pos].chars().next_back().unwrap(); if prev.is_whitespace() { break; } pos -= prev.len_utf8(); }
+                while pos > 0 {
+                    let prev = buf[..pos].chars().next_back().unwrap();
+                    if !prev.is_whitespace() { break; }
+                    pos -= prev.len_utf8();
+                }
+                while pos > 0 {
+                    let prev = buf[..pos].chars().next_back().unwrap();
+                    if prev.is_whitespace() { break; }
+                    pos -= prev.len_utf8();
+                }
                 self.input_cursor = pos;
                 None
             }
@@ -3150,6 +3169,104 @@ impl App {
                 self.delete_word_back();
                 None
             }
+            // Actions that alternative profiles (Emacs/Minimal) may bind in Insert mode
+            Some(KeyAction::ScrollDown) => { self.scroll_offset = self.scroll_offset.saturating_sub(1); self.focused_msg_index = None; None }
+            Some(KeyAction::ScrollUp) => { self.scroll_offset = self.scroll_offset.saturating_add(1); self.focused_msg_index = None; None }
+            Some(KeyAction::CursorLeft) => { self.input_cursor = self.input_cursor.saturating_sub(1); None }
+            Some(KeyAction::CursorRight) => {
+                if self.input_cursor < self.input_buffer.len() { self.input_cursor += 1; }
+                None
+            }
+            Some(KeyAction::LineStart) => { self.input_cursor = self.current_line_start(); None }
+            Some(KeyAction::LineEnd) => { self.input_cursor = self.current_line_end(); None }
+            Some(KeyAction::DeleteChar) => {
+                if self.input_cursor < self.input_buffer.len() {
+                    self.input_buffer.remove(self.input_cursor);
+                }
+                None
+            }
+            Some(KeyAction::DeleteToEnd) => {
+                let line_end = self.current_line_end();
+                self.input_buffer.drain(self.input_cursor..line_end);
+                None
+            }
+            Some(KeyAction::CopyMessage) => { self.copy_selected_message(false); None }
+            Some(KeyAction::CopyAllMessages) => { self.copy_selected_message(true); None }
+            Some(KeyAction::React) => {
+                if self.selected_message().is_some_and(|m| !m.is_system) {
+                    self.show_reaction_picker = true;
+                    self.reaction_picker_index = 0;
+                }
+                None
+            }
+            Some(KeyAction::Quote) => {
+                if let Some(msg) = self.selected_message() {
+                    if !msg.is_system && !msg.is_deleted {
+                        let author_phone = msg.sender_id.clone();
+                        let snippet: String = if msg.body.chars().count() > 50 {
+                            format!("{}…", msg.body.chars().take(50).collect::<String>())
+                        } else {
+                            msg.body.clone()
+                        };
+                        let ts = msg.timestamp_ms;
+                        let phone = if author_phone.is_empty() || author_phone == "you" {
+                            self.account.clone()
+                        } else {
+                            author_phone
+                        };
+                        self.reply_target = Some((phone, snippet, ts));
+                    }
+                }
+                None
+            }
+            Some(KeyAction::EditMessage) => {
+                if let Some(msg) = self.selected_message() {
+                    if msg.sender == "you" && !msg.is_deleted && !msg.is_system {
+                        let ts = msg.timestamp_ms;
+                        let body = msg.body.clone();
+                        if let Some(ref conv_id) = self.active_conversation {
+                            let conv_id = conv_id.clone();
+                            self.editing_message = Some((ts, conv_id));
+                            self.input_buffer = body;
+                            self.input_cursor = self.input_buffer.len();
+                        }
+                    }
+                }
+                None
+            }
+            Some(KeyAction::ForwardMessage) => {
+                if let Some(msg) = self.selected_message() {
+                    if !msg.is_system && !msg.is_deleted {
+                        self.forward_body = msg.body.clone();
+                        self.open_forward_picker();
+                    }
+                }
+                None
+            }
+            Some(KeyAction::DeleteMessage) => {
+                if let Some(msg) = self.selected_message() {
+                    if !msg.is_system && !msg.is_deleted {
+                        self.show_delete_confirm = true;
+                    }
+                }
+                None
+            }
+            Some(KeyAction::NextSearchResult) => {
+                if !self.search_results.is_empty() { self.jump_to_search_result(true); }
+                None
+            }
+            Some(KeyAction::PrevSearchResult) => {
+                if !self.search_results.is_empty() { self.jump_to_search_result(false); }
+                None
+            }
+            Some(KeyAction::OpenActionMenu) => {
+                if self.selected_message().is_some_and(|m| !m.is_system) {
+                    self.show_action_menu = true;
+                    self.action_menu_index = 0;
+                }
+                None
+            }
+            Some(KeyAction::PinMessage) => self.execute_pin_toggle(),
             _ => {
                 let needs_ac_update = matches!(
                     code,
