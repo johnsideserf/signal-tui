@@ -10,6 +10,7 @@ use crate::db::Database;
 use crate::image_render;
 use crate::image_render::ImageProtocol;
 use crate::input::{self, InputAction, COMMANDS};
+use crate::keybindings::{self, BindingMode, KeyAction, KeyBindings};
 use crate::theme::{self, Theme};
 use crate::signal::types::{Contact, Group, IdentityInfo, LinkPreview, Mention, MessageStatus, PollData, PollOption, PollVote, Reaction, SignalEvent, SignalMessage, StyleType, TextStyle, TrustLevel};
 
@@ -465,6 +466,22 @@ pub struct App {
     pub theme_index: usize,
     /// All available themes (built-in + custom)
     pub available_themes: Vec<Theme>,
+    /// Active keybindings
+    pub keybindings: KeyBindings,
+    /// Keybindings overlay visible
+    pub show_keybindings: bool,
+    /// Cursor position in keybindings overlay
+    pub keybindings_index: usize,
+    /// Whether capturing a new key binding
+    pub keybindings_capturing: bool,
+    /// Conflict detected during capture: (displaced_action, new_combo)
+    pub keybindings_conflict: Option<(KeyAction, keybindings::KeyCombo)>,
+    /// Profile sub-picker visible within keybindings overlay
+    pub keybindings_profile_picker: bool,
+    /// Cursor position in profile sub-picker
+    pub keybindings_profile_index: usize,
+    /// All available keybinding profile names
+    pub available_kb_profiles: Vec<String>,
     /// Pin duration picker overlay visible
     pub show_pin_duration: bool,
     /// Cursor position in pin duration picker
@@ -779,6 +796,7 @@ impl App {
         let mut config = crate::config::Config::load(None).unwrap_or_default();
         config.account = self.account.clone();
         config.theme = self.theme.name.clone();
+        config.keybinding_profile = self.keybindings.profile_name.clone();
         for def in SETTINGS {
             if let Some(save_fn) = def.save {
                 save_fn(&mut config, (def.get)(self));
@@ -836,9 +854,11 @@ impl App {
     }
 
     /// Handle a key press while the settings overlay is open.
-    /// The last entry (index == SETTINGS.len()) is the Theme selector.
+    /// After toggles: Theme at SETTINGS.len(), Keybindings at SETTINGS.len()+1.
     pub fn handle_settings_key(&mut self, code: KeyCode) {
-        let max_index = SETTINGS.len(); // toggles 0..len-1, theme at len
+        let theme_index = SETTINGS.len();
+        let kb_index = SETTINGS.len() + 1;
+        let max_index = kb_index;
         match code {
             KeyCode::Char('j') | KeyCode::Down => {
                 if self.settings_index < max_index {
@@ -849,14 +869,18 @@ impl App {
                 self.settings_index = self.settings_index.saturating_sub(1);
             }
             KeyCode::Char(' ') | KeyCode::Enter | KeyCode::Tab => {
-                if self.settings_index == SETTINGS.len() {
-                    // Theme entry — open picker
+                if self.settings_index == theme_index {
                     self.show_settings = false;
                     self.save_settings();
                     self.show_theme_picker = true;
                     self.theme_index = self.available_themes.iter()
                         .position(|t| t.name == self.theme.name)
                         .unwrap_or(0);
+                } else if self.settings_index == kb_index {
+                    self.show_settings = false;
+                    self.save_settings();
+                    self.show_keybindings = true;
+                    self.keybindings_index = 0;
                 } else {
                     self.toggle_setting(self.settings_index);
                 }
@@ -892,6 +916,178 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Handle a key press while the keybindings overlay is open.
+    pub fn handle_keybindings_key(&mut self, code: KeyCode) {
+        if self.keybindings_profile_picker {
+            match code {
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if self.keybindings_profile_index < self.available_kb_profiles.len().saturating_sub(1) {
+                        self.keybindings_profile_index += 1;
+                    }
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.keybindings_profile_index = self.keybindings_profile_index.saturating_sub(1);
+                }
+                KeyCode::Char(' ') | KeyCode::Enter => {
+                    if let Some(name) = self.available_kb_profiles.get(self.keybindings_profile_index) {
+                        let mut kb = keybindings::find_profile(name);
+                        let overrides = keybindings::load_overrides();
+                        kb.apply_overrides(&overrides);
+                        self.keybindings = kb;
+                        self.save_settings();
+                    }
+                    self.keybindings_profile_picker = false;
+                }
+                KeyCode::Esc => {
+                    self.keybindings_profile_picker = false;
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        if let Some((displaced_action, _combo)) = self.keybindings_conflict.take() {
+            match code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    // Accept: the displaced action loses its binding
+                    self.status_message = format!("{} is now unbound", keybindings::action_label(displaced_action));
+                }
+                _ => {
+                    // Undo the rebind — restore both
+                    let (mode, action) = self.keybindings_overlay_item(self.keybindings_index);
+                    if let Some(action) = action {
+                        self.keybindings.reset_action(mode, action);
+                        self.keybindings.reset_action(mode, displaced_action);
+                    }
+                    self.status_message.clear();
+                }
+            }
+            return;
+        }
+
+        let total = self.keybindings_overlay_total();
+        match code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                if self.keybindings_index < total.saturating_sub(1) {
+                    self.keybindings_index += 1;
+                }
+                // Skip section headers
+                while self.keybindings_index < total && self.keybindings_overlay_item(self.keybindings_index).1.is_none() {
+                    self.keybindings_index += 1;
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.keybindings_index = self.keybindings_index.saturating_sub(1);
+                // Skip section headers
+                while self.keybindings_index > 0 && self.keybindings_overlay_item(self.keybindings_index).1.is_none() {
+                    self.keybindings_index = self.keybindings_index.saturating_sub(1);
+                }
+            }
+            KeyCode::Enter => {
+                if self.keybindings_index == 0 {
+                    // Profile row → open profile picker
+                    self.keybindings_profile_picker = true;
+                    self.keybindings_profile_index = self.available_kb_profiles.iter()
+                        .position(|n| *n == self.keybindings.profile_name)
+                        .unwrap_or(0);
+                } else {
+                    let (_, action) = self.keybindings_overlay_item(self.keybindings_index);
+                    if action.is_some() {
+                        self.keybindings_capturing = true;
+                        self.status_message = "Press a key combo...".to_string();
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                // Reset to profile default
+                let (mode, action) = self.keybindings_overlay_item(self.keybindings_index);
+                if let Some(action) = action {
+                    self.keybindings.reset_action(mode, action);
+                    self.status_message = format!("Reset {}", keybindings::action_label(action));
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.show_keybindings = false;
+                self.save_settings();
+            }
+            _ => {}
+        }
+    }
+
+    /// Handle keybinding capture: intercepts ALL keys when capturing a new binding.
+    pub fn handle_keybinding_capture(&mut self, modifiers: KeyModifiers, code: KeyCode) {
+        if code == KeyCode::Esc && modifiers == KeyModifiers::NONE {
+            self.keybindings_capturing = false;
+            self.status_message.clear();
+            return;
+        }
+
+        let (mode, action) = self.keybindings_overlay_item(self.keybindings_index);
+        let Some(action) = action else {
+            self.keybindings_capturing = false;
+            return;
+        };
+
+        let combo = keybindings::KeyCombo { modifiers, code };
+        let displaced = self.keybindings.rebind(mode, action, combo.clone());
+        self.keybindings_capturing = false;
+
+        if let Some(displaced_action) = displaced {
+            if displaced_action != action {
+                self.status_message = format!(
+                    "'{}' was bound to {}. Accept? (y/n)",
+                    keybindings::format_key_combo(&combo),
+                    keybindings::action_label(displaced_action)
+                );
+                self.keybindings_conflict = Some((displaced_action, combo));
+                return;
+            }
+        }
+        self.status_message = format!(
+            "{} → {}",
+            keybindings::action_label(action),
+            keybindings::format_key_combo(&combo)
+        );
+    }
+
+    /// Total number of rows in the keybindings overlay (profile + sections + actions).
+    pub fn keybindings_overlay_total(&self) -> usize {
+        // profile row + 3 section headers + action counts
+        1 + 1 + keybindings::GLOBAL_ACTIONS.len()
+          + 1 + keybindings::NORMAL_ACTIONS.len()
+          + 1 + keybindings::INSERT_ACTIONS.len()
+    }
+
+    /// Get the (mode, action) for a keybindings overlay row index.
+    /// Returns (mode, None) for section headers and the profile row.
+    pub fn keybindings_overlay_item(&self, index: usize) -> (BindingMode, Option<KeyAction>) {
+        if index == 0 {
+            return (BindingMode::Global, None); // profile row
+        }
+        let mut i = 1;
+        // Global section header
+        if index == i { return (BindingMode::Global, None); }
+        i += 1;
+        if index < i + keybindings::GLOBAL_ACTIONS.len() {
+            return (BindingMode::Global, Some(keybindings::GLOBAL_ACTIONS[index - i]));
+        }
+        i += keybindings::GLOBAL_ACTIONS.len();
+        // Normal section header
+        if index == i { return (BindingMode::Normal, None); }
+        i += 1;
+        if index < i + keybindings::NORMAL_ACTIONS.len() {
+            return (BindingMode::Normal, Some(keybindings::NORMAL_ACTIONS[index - i]));
+        }
+        i += keybindings::NORMAL_ACTIONS.len();
+        // Insert section header
+        if index == i { return (BindingMode::Insert, None); }
+        i += 1;
+        if index < i + keybindings::INSERT_ACTIONS.len() {
+            return (BindingMode::Insert, Some(keybindings::INSERT_ACTIONS[index - i]));
+        }
+        (BindingMode::Insert, None)
     }
 
     /// Build the filtered contacts list from contact_names using the current filter.
@@ -2297,6 +2493,14 @@ impl App {
             show_theme_picker: false,
             theme_index: 0,
             available_themes: theme::all_themes(),
+            keybindings: keybindings::default_profile(),
+            show_keybindings: false,
+            keybindings_index: 0,
+            keybindings_capturing: false,
+            keybindings_conflict: None,
+            keybindings_profile_picker: false,
+            keybindings_profile_index: 0,
+            available_kb_profiles: keybindings::all_profile_names(),
             show_pin_duration: false,
             pin_duration_index: 0,
             pin_pending: None,
@@ -2614,33 +2818,33 @@ impl App {
     /// Handle global keys that work in both Normal and Insert mode.
     /// Returns true if the key was consumed.
     pub fn handle_global_key(&mut self, modifiers: KeyModifiers, code: KeyCode) -> bool {
-        match (modifiers, code) {
-            (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
+        match self.keybindings.resolve(modifiers, code, BindingMode::Global) {
+            Some(KeyAction::Quit) => {
                 self.should_quit = true;
                 true
             }
-            (KeyModifiers::NONE, KeyCode::Tab) if !self.autocomplete_visible => {
+            Some(KeyAction::NextConversation) if !self.autocomplete_visible => {
                 self.next_conversation();
                 true
             }
-            (KeyModifiers::SHIFT, KeyCode::BackTab) => {
+            Some(KeyAction::PrevConversation) => {
                 self.prev_conversation();
                 true
             }
-            (KeyModifiers::CONTROL, KeyCode::Left) => {
+            Some(KeyAction::ResizeSidebarLeft) => {
                 self.resize_sidebar(-2);
                 true
             }
-            (KeyModifiers::CONTROL, KeyCode::Right) => {
+            Some(KeyAction::ResizeSidebarRight) => {
                 self.resize_sidebar(2);
                 true
             }
-            (_, KeyCode::PageUp) => {
+            Some(KeyAction::PageScrollUp) => {
                 self.scroll_offset = self.scroll_offset.saturating_add(5);
                 self.focused_msg_index = None;
                 true
             }
-            (_, KeyCode::PageDown) => {
+            Some(KeyAction::PageScrollDown) => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(5);
                 self.focused_msg_index = None;
                 true
@@ -2718,6 +2922,10 @@ impl App {
             self.handle_theme_key(code);
             return (true, None);
         }
+        if self.show_keybindings {
+            self.handle_keybindings_key(code);
+            return (true, None);
+        }
         if self.show_settings {
             self.handle_settings_key(code);
             return (true, None);
@@ -2731,182 +2939,97 @@ impl App {
 
     /// Handle Normal mode key. Dispatches to scroll, edit, or action sub-handlers.
     pub fn handle_normal_key(&mut self, modifiers: KeyModifiers, code: KeyCode) -> Option<SendRequest> {
-        match (modifiers, code) {
-            (_, KeyCode::Char('j' | 'k' | 'J' | 'K' | 'g' | 'G'))
-            | (KeyModifiers::CONTROL, KeyCode::Char('d' | 'u')) => {
-                self.handle_normal_scroll_key(modifiers, code)
-            }
-            (_, KeyCode::Char('i' | 'a' | 'I' | 'A' | 'o' | 'h' | 'l' | '0' | '$' | 'w' | 'b' | 'x' | 'D' | '/'))
-            | (_, KeyCode::Esc) => {
-                self.handle_normal_edit_key(code)
-            }
-            (_, KeyCode::Char('y' | 'Y' | 'r' | 'q' | 'e' | 'd' | 'n' | 'N' | 'p'))
-            | (_, KeyCode::Enter) => {
-                self.handle_normal_action_key(code)
-            }
-            _ => None,
-        }
-    }
-
-    /// Scroll and viewport navigation keys (j/k/J/K/g/G/Ctrl-d/Ctrl-u).
-    fn handle_normal_scroll_key(&mut self, modifiers: KeyModifiers, code: KeyCode) -> Option<SendRequest> {
-        match (modifiers, code) {
-            (_, KeyCode::Char('j')) => {
-                self.scroll_offset = self.scroll_offset.saturating_sub(1);
-                self.focused_msg_index = None;
-            }
-            (_, KeyCode::Char('k')) => {
-                self.scroll_offset = self.scroll_offset.saturating_add(1);
-                self.focused_msg_index = None;
-            }
-            (_, KeyCode::Char('J')) => {
-                self.jump_to_adjacent_message(false);
-            }
-            (_, KeyCode::Char('K')) => {
-                self.jump_to_adjacent_message(true);
-            }
-            (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
-                self.scroll_offset = self.scroll_offset.saturating_sub(10);
-                self.focused_msg_index = None;
-            }
-            (KeyModifiers::CONTROL, KeyCode::Char('u')) => {
-                self.scroll_offset = self.scroll_offset.saturating_add(10);
-                self.focused_msg_index = None;
-            }
-            (_, KeyCode::Char('g')) => {
+        match self.keybindings.resolve(modifiers, code, BindingMode::Normal) {
+            // Scroll
+            Some(KeyAction::ScrollDown) => { self.scroll_offset = self.scroll_offset.saturating_sub(1); self.focused_msg_index = None; None }
+            Some(KeyAction::ScrollUp) => { self.scroll_offset = self.scroll_offset.saturating_add(1); self.focused_msg_index = None; None }
+            Some(KeyAction::FocusNextMessage) => { self.jump_to_adjacent_message(false); None }
+            Some(KeyAction::FocusPrevMessage) => { self.jump_to_adjacent_message(true); None }
+            Some(KeyAction::HalfPageDown) => { self.scroll_offset = self.scroll_offset.saturating_sub(10); self.focused_msg_index = None; None }
+            Some(KeyAction::HalfPageUp) => { self.scroll_offset = self.scroll_offset.saturating_add(10); self.focused_msg_index = None; None }
+            Some(KeyAction::ScrollToTop) => {
                 if let Some(ref id) = self.active_conversation {
                     if let Some(conv) = self.conversations.get(id) {
                         self.scroll_offset = conv.messages.len();
                     }
                 }
                 self.focused_msg_index = None;
+                None
             }
-            (_, KeyCode::Char('G')) => {
-                self.scroll_offset = 0;
-                self.focused_msg_index = None;
-            }
-            _ => {}
-        }
-        None
-    }
-
-    /// Input buffer and mode-switch keys (i/a/I/A/o/h/l/0/$/w/b/x/D///Esc).
-    fn handle_normal_edit_key(&mut self, code: KeyCode) -> Option<SendRequest> {
-        match code {
-            KeyCode::Char('i') => {
+            Some(KeyAction::ScrollToBottom) => { self.scroll_offset = 0; self.focused_msg_index = None; None }
+            // Edit/mode-switch
+            Some(KeyAction::InsertAtCursor) => { self.mode = InputMode::Insert; None }
+            Some(KeyAction::InsertAfterCursor) => {
+                if self.input_cursor < self.input_buffer.len() { self.input_cursor += 1; }
                 self.mode = InputMode::Insert;
+                None
             }
-            KeyCode::Char('a') => {
-                if self.input_cursor < self.input_buffer.len() {
-                    self.input_cursor += 1;
-                }
-                self.mode = InputMode::Insert;
+            Some(KeyAction::InsertLineStart) => { self.input_cursor = self.current_line_start(); self.mode = InputMode::Insert; None }
+            Some(KeyAction::InsertLineEnd) => { self.input_cursor = self.current_line_end(); self.mode = InputMode::Insert; None }
+            Some(KeyAction::OpenLineBelow) => { self.input_buffer.clear(); self.input_cursor = 0; self.mode = InputMode::Insert; None }
+            Some(KeyAction::CursorLeft) => { self.input_cursor = self.input_cursor.saturating_sub(1); None }
+            Some(KeyAction::CursorRight) => {
+                if self.input_cursor < self.input_buffer.len() { self.input_cursor += 1; }
+                None
             }
-            KeyCode::Char('I') => {
-                self.input_cursor = self.current_line_start();
-                self.mode = InputMode::Insert;
-            }
-            KeyCode::Char('A') => {
-                self.input_cursor = self.current_line_end();
-                self.mode = InputMode::Insert;
-            }
-            KeyCode::Char('o') => {
-                self.input_buffer.clear();
-                self.input_cursor = 0;
-                self.mode = InputMode::Insert;
-            }
-            KeyCode::Char('h') => {
-                self.input_cursor = self.input_cursor.saturating_sub(1);
-            }
-            KeyCode::Char('l') => {
-                if self.input_cursor < self.input_buffer.len() {
-                    self.input_cursor += 1;
-                }
-            }
-            KeyCode::Char('0') => {
-                self.input_cursor = self.current_line_start();
-            }
-            KeyCode::Char('$') => {
-                self.input_cursor = self.current_line_end();
-            }
-            KeyCode::Char('w') => {
+            Some(KeyAction::LineStart) => { self.input_cursor = self.current_line_start(); None }
+            Some(KeyAction::LineEnd) => { self.input_cursor = self.current_line_end(); None }
+            Some(KeyAction::WordForward) => {
                 let buf = &self.input_buffer;
                 let mut pos = self.input_cursor;
-                while pos < buf.len() {
-                    let c = buf[pos..].chars().next().unwrap();
-                    if c.is_whitespace() { break; }
-                    pos += c.len_utf8();
-                }
-                while pos < buf.len() {
-                    let c = buf[pos..].chars().next().unwrap();
-                    if !c.is_whitespace() { break; }
-                    pos += c.len_utf8();
-                }
+                while pos < buf.len() { let c = buf[pos..].chars().next().unwrap(); if c.is_whitespace() { break; } pos += c.len_utf8(); }
+                while pos < buf.len() { let c = buf[pos..].chars().next().unwrap(); if !c.is_whitespace() { break; } pos += c.len_utf8(); }
                 self.input_cursor = pos;
+                None
             }
-            KeyCode::Char('b') => {
+            Some(KeyAction::WordBack) => {
                 let buf = &self.input_buffer;
                 let mut pos = self.input_cursor;
-                while pos > 0 {
-                    let prev = buf[..pos].chars().next_back().unwrap();
-                    if !prev.is_whitespace() { break; }
-                    pos -= prev.len_utf8();
-                }
-                while pos > 0 {
-                    let prev = buf[..pos].chars().next_back().unwrap();
-                    if prev.is_whitespace() { break; }
-                    pos -= prev.len_utf8();
-                }
+                while pos > 0 { let prev = buf[..pos].chars().next_back().unwrap(); if !prev.is_whitespace() { break; } pos -= prev.len_utf8(); }
+                while pos > 0 { let prev = buf[..pos].chars().next_back().unwrap(); if prev.is_whitespace() { break; } pos -= prev.len_utf8(); }
                 self.input_cursor = pos;
+                None
             }
-            KeyCode::Char('x') => {
+            Some(KeyAction::DeleteChar) => {
                 if self.input_cursor < self.input_buffer.len() {
                     self.input_buffer.remove(self.input_cursor);
-                    if self.input_cursor > 0
-                        && self.input_cursor >= self.input_buffer.len()
-                    {
+                    if self.input_cursor > 0 && self.input_cursor >= self.input_buffer.len() {
                         self.input_cursor = self.input_buffer.len().saturating_sub(1);
                     }
                 }
+                None
             }
-            KeyCode::Char('D') => {
+            Some(KeyAction::DeleteToEnd) => {
                 let line_end = self.current_line_end();
                 self.input_buffer.drain(self.input_cursor..line_end);
+                None
             }
-            KeyCode::Char('/') => {
+            Some(KeyAction::StartSearch) => {
                 self.input_buffer = "/".to_string();
                 self.input_cursor = 1;
                 self.mode = InputMode::Insert;
                 self.update_autocomplete();
+                None
             }
-            KeyCode::Esc => {
+            Some(KeyAction::ClearInput) => {
                 if !self.input_buffer.is_empty() {
                     self.input_buffer.clear();
                     self.input_cursor = 0;
                     self.pending_mentions.clear();
                 }
+                None
             }
-            _ => {}
-        }
-        None
-    }
-
-    /// Message action keys (y/Y/r/q/e/d/n/N/p/Enter).
-    fn handle_normal_action_key(&mut self, code: KeyCode) -> Option<SendRequest> {
-        match code {
-            KeyCode::Char('y') => {
-                self.copy_selected_message(false);
-            }
-            KeyCode::Char('Y') => {
-                self.copy_selected_message(true);
-            }
-            KeyCode::Char('r') => {
+            // Actions
+            Some(KeyAction::CopyMessage) => { self.copy_selected_message(false); None }
+            Some(KeyAction::CopyAllMessages) => { self.copy_selected_message(true); None }
+            Some(KeyAction::React) => {
                 if self.selected_message().is_some_and(|m| !m.is_system) {
                     self.show_reaction_picker = true;
                     self.reaction_picker_index = 0;
                 }
+                None
             }
-            KeyCode::Char('q') => {
+            Some(KeyAction::Quote) => {
                 if let Some(msg) = self.selected_message() {
                     if !msg.is_system && !msg.is_deleted {
                         let author_phone = msg.sender_id.clone();
@@ -2925,8 +3048,9 @@ impl App {
                         self.mode = InputMode::Insert;
                     }
                 }
+                None
             }
-            KeyCode::Char('e') => {
+            Some(KeyAction::EditMessage) => {
                 if let Some(msg) = self.selected_message() {
                     if msg.sender == "you" && !msg.is_deleted && !msg.is_system {
                         let ts = msg.timestamp_ms;
@@ -2940,56 +3064,54 @@ impl App {
                         }
                     }
                 }
+                None
             }
-            KeyCode::Char('f') => {
+            Some(KeyAction::ForwardMessage) => {
                 if let Some(msg) = self.selected_message() {
                     if !msg.is_system && !msg.is_deleted {
                         self.forward_body = msg.body.clone();
                         self.open_forward_picker();
                     }
                 }
+                None
             }
-            KeyCode::Char('d') => {
+            Some(KeyAction::DeleteMessage) => {
                 if let Some(msg) = self.selected_message() {
                     if !msg.is_system && !msg.is_deleted {
                         self.show_delete_confirm = true;
                     }
                 }
+                None
             }
-            KeyCode::Char('n') => {
-                if !self.search_results.is_empty() {
-                    self.jump_to_search_result(true);
-                }
+            Some(KeyAction::NextSearchResult) => {
+                if !self.search_results.is_empty() { self.jump_to_search_result(true); }
+                None
             }
-            KeyCode::Char('N') => {
-                if !self.search_results.is_empty() {
-                    self.jump_to_search_result(false);
-                }
+            Some(KeyAction::PrevSearchResult) => {
+                if !self.search_results.is_empty() { self.jump_to_search_result(false); }
+                None
             }
-            KeyCode::Enter => {
+            Some(KeyAction::OpenActionMenu) => {
                 if self.selected_message().is_some_and(|m| !m.is_system) {
                     self.show_action_menu = true;
                     self.action_menu_index = 0;
                 }
+                None
             }
-            KeyCode::Char('p') => {
-                return self.execute_pin_toggle();
-            }
-            _ => {}
+            Some(KeyAction::PinMessage) => self.execute_pin_toggle(),
+            _ => None,
         }
-        None
     }
 
     /// Handle Insert mode key.
     /// Returns `Some(SendRequest)` if a message send or typing indicator should be dispatched.
     pub fn handle_insert_key(&mut self, modifiers: KeyModifiers, code: KeyCode) -> Option<SendRequest> {
-        match (modifiers, code) {
-            (_, KeyCode::Esc) => {
+        match self.keybindings.resolve(modifiers, code, BindingMode::Insert) {
+            Some(KeyAction::ExitInsert) => {
                 self.mode = InputMode::Normal;
                 self.autocomplete_visible = false;
                 self.reply_target = None;
                 self.editing_message = None;
-                // Send typing stop if we had an active typing indicator
                 if self.typing_sent {
                     self.typing_sent = false;
                     self.typing_last_keypress = None;
@@ -2997,12 +3119,10 @@ impl App {
                 }
                 None
             }
-            (m, KeyCode::Enter) if m.contains(KeyModifiers::ALT) || m.contains(KeyModifiers::SHIFT) => {
-                // Insert newline for multi-line input
+            Some(KeyAction::InsertNewline) => {
                 self.input_buffer.insert(self.input_cursor, '\n');
                 self.input_cursor += 1;
                 self.autocomplete_visible = false;
-                // Typing indicator
                 self.typing_last_keypress = Some(Instant::now());
                 if !self.typing_sent
                     && !self.input_buffer.starts_with('/')
@@ -3013,8 +3133,7 @@ impl App {
                 }
                 None
             }
-            (_, KeyCode::Enter) => {
-                // Sending a message implicitly stops typing — just reset state
+            Some(KeyAction::SendMessage) => {
                 let was_typing = self.typing_sent;
                 self.typing_sent = false;
                 self.typing_last_keypress = None;
@@ -3022,11 +3141,14 @@ impl App {
                 if result.is_some() {
                     result
                 } else if was_typing {
-                    // Empty/command input — send explicit typing stop
                     self.build_typing_request(true)
                 } else {
                     None
                 }
+            }
+            Some(KeyAction::DeleteWordBack) => {
+                self.delete_word_back();
+                None
             }
             _ => {
                 let needs_ac_update = matches!(
@@ -3037,17 +3159,13 @@ impl App {
                 if needs_ac_update {
                     self.update_autocomplete();
                 }
-                // Send typing indicator for text input (not commands)
                 if matches!(code, KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete) {
                     self.typing_last_keypress = Some(Instant::now());
-                    // Send typing stop if buffer is now empty
                     if self.input_buffer.is_empty() && self.typing_sent {
                         self.typing_sent = false;
                         self.typing_last_keypress = None;
                         return self.build_typing_request(true);
                     }
-                    // Send typing start if not already sent, buffer is non-empty,
-                    // input is not a command, conversation is active and not blocked
                     if !self.typing_sent
                         && !self.input_buffer.is_empty()
                         && !self.input_buffer.starts_with('/')
@@ -4969,6 +5087,10 @@ impl App {
             InputAction::About => {
                 self.show_about = true;
             }
+            InputAction::Keybindings => {
+                self.show_keybindings = true;
+                self.keybindings_index = 0;
+            }
             InputAction::Help => {
                 self.show_help = true;
             }
@@ -5397,6 +5519,29 @@ impl App {
             .unwrap_or(self.input_buffer.len())
     }
 
+    /// Delete the word before the cursor (Ctrl+W behavior).
+    fn delete_word_back(&mut self) {
+        if self.input_cursor == 0 {
+            return;
+        }
+        let buf = &self.input_buffer;
+        let mut pos = self.input_cursor;
+        // Skip whitespace before cursor
+        while pos > 0 {
+            let prev = buf[..pos].chars().next_back().unwrap();
+            if !prev.is_whitespace() { break; }
+            pos -= prev.len_utf8();
+        }
+        // Skip word chars
+        while pos > 0 {
+            let prev = buf[..pos].chars().next_back().unwrap();
+            if prev.is_whitespace() { break; }
+            pos -= prev.len_utf8();
+        }
+        self.input_buffer.drain(pos..self.input_cursor);
+        self.input_cursor = pos;
+    }
+
     /// Handle a bracketed paste event (Ctrl+V or terminal paste).
     /// Inserts the entire pasted string at once, avoiding per-character overhead.
     pub fn handle_paste(&mut self, text: String) -> Option<SendRequest> {
@@ -5734,6 +5879,7 @@ impl App {
             || self.group_menu_state.is_some()
             || self.show_message_request
             || self.show_theme_picker
+            || self.show_keybindings
             || self.show_pin_duration
             || self.show_poll_vote
             || self.show_about

@@ -11,6 +11,7 @@ use ratatui::{
 };
 
 use crate::app::{App, AutocompleteMode, GroupMenuState, InputMode, VisibleImage, PIN_DURATIONS, QUICK_REACTIONS, SETTINGS};
+use crate::keybindings::{self, BindingMode, KeyAction};
 use crate::signal::types::{MessageStatus, PollData, PollVote, Reaction, StyleType, TrustLevel};
 use crate::image_render::ImageProtocol;
 use crate::input::{COMMANDS, format_compact_duration};
@@ -519,6 +520,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Theme picker overlay
     if app.show_theme_picker {
         draw_theme_picker(frame, app, size);
+    }
+
+    // Keybindings overlay
+    if app.show_keybindings {
+        draw_keybindings(frame, app, size);
     }
 
     // Pin duration picker overlay
@@ -2127,7 +2133,7 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect) {
 
 fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
     let theme = &app.theme;
-    let height = SETTINGS_POPUP_HEIGHT + 1; // extra line for theme entry
+    let height = SETTINGS_POPUP_HEIGHT + 2; // extra lines for theme + keybindings entries
     let (popup_area, block) = centered_popup(
         frame, area, SETTINGS_POPUP_WIDTH, height, " Settings ", theme,
     );
@@ -2173,6 +2179,23 @@ fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled(app.theme.name.clone(), theme_value_style),
     ]));
 
+    // Keybindings selector entry (index == SETTINGS.len() + 1)
+    let is_kb_selected = app.settings_index == SETTINGS.len() + 1;
+    let kb_style = if is_kb_selected {
+        Style::default().bg(theme.bg_selected).fg(theme.fg).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.fg_secondary)
+    };
+    let kb_value_style = if is_kb_selected {
+        Style::default().bg(theme.bg_selected).fg(theme.accent)
+    } else {
+        Style::default().fg(theme.accent)
+    };
+    lines.push(Line::from(vec![
+        Span::styled("  Keybindings: ", kb_style),
+        Span::styled(app.keybindings.profile_name.clone(), kb_value_style),
+    ]));
+
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "  Esc to close  |  Space to toggle",
@@ -2185,6 +2208,8 @@ fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
 
 fn draw_help(frame: &mut Frame, app: &App, area: Rect) {
     let theme = &app.theme;
+    let kb = &app.keybindings;
+
     // Help table entries: (key, description)
     let commands: &[(&str, &str)] = &[
         ("/join <name>", "Switch to a conversation"),
@@ -2196,39 +2221,67 @@ fn draw_help(frame: &mut Frame, app: &App, area: Rect) {
         ("/mute", "Mute/unmute conversation"),
         ("/contacts", "Browse contacts"),
         ("/settings", "Open settings"),
+        ("/keybindings", "Configure keybindings"),
         ("/quit", "Exit siggy"),
     ];
-    let shortcuts: &[(&str, &str)] = &[
-        ("Tab / Shift+Tab", "Next / prev conversation"),
-        ("Up / Down", "Recall input history"),
-        ("@", "Mention autocomplete"),
-        ("PgUp / PgDn", "Scroll messages"),
-        ("Ctrl+Left/Right", "Resize sidebar"),
-        ("Ctrl+C", "Quit"),
+
+    // Dynamic shortcuts from active keybindings
+    let dk = |a: KeyAction| kb.display_key(a);
+    let nav_keys = format!("{} / {}", dk(KeyAction::NextConversation), dk(KeyAction::PrevConversation));
+    let scroll_keys = format!("{} / {}", dk(KeyAction::PageScrollUp), dk(KeyAction::PageScrollDown));
+    let resize_keys = format!("{} / {}", dk(KeyAction::ResizeSidebarLeft), dk(KeyAction::ResizeSidebarRight));
+    let quit_key = dk(KeyAction::Quit);
+    let shortcuts: Vec<(String, &str)> = vec![
+        (nav_keys, "Next / prev conversation"),
+        ("Up / Down".to_string(), "Recall input history"),
+        ("@".to_string(), "Mention autocomplete"),
+        (scroll_keys, "Scroll messages"),
+        (resize_keys, "Resize sidebar"),
+        (quit_key, "Quit"),
     ];
+
     let cli: &[(&str, &str)] = &[
         ("--incognito", "No local message storage"),
         ("--demo", "Launch with dummy data"),
         ("--setup", "Re-run first-time wizard"),
     ];
-    let vim: &[(&str, &str)] = &[
-        ("Esc", "Normal mode"),
-        ("i / a / I / A / o", "Insert mode"),
-        ("j / k", "Scroll up / down"),
-        ("J / K", "Prev / next message"),
-        ("g / G", "Top / bottom of messages"),
-        ("Ctrl+D / U", "Half-page scroll"),
-        ("h / l", "Cursor left / right"),
-        ("w / b", "Word forward / back"),
-        ("0 / $", "Start / end of line"),
-        ("x / D", "Delete char / to end"),
-        ("y / Y", "Copy message / full line"),
-        ("r", "React to focused message"),
-        ("q", "Reply / quote message"),
-        ("e", "Edit own message"),
-        ("d", "Delete message"),
-        ("n / N", "Next / prev search match"),
-        ("/", "Start command input"),
+
+    // Dynamic normal-mode keybindings
+    let exit_key = dk(KeyAction::ExitInsert);
+    let insert_keys = format!("{} / {} / {} / {} / {}",
+        dk(KeyAction::InsertAtCursor), dk(KeyAction::InsertAfterCursor),
+        dk(KeyAction::InsertLineStart), dk(KeyAction::InsertLineEnd),
+        dk(KeyAction::OpenLineBelow));
+    let scroll_ud = format!("{} / {}", dk(KeyAction::ScrollDown), dk(KeyAction::ScrollUp));
+    let focus_ud = format!("{} / {}", dk(KeyAction::FocusNextMessage), dk(KeyAction::FocusPrevMessage));
+    let top_bottom = format!("{} / {}", dk(KeyAction::ScrollToTop), dk(KeyAction::ScrollToBottom));
+    let half_page = format!("{} / {}", dk(KeyAction::HalfPageDown), dk(KeyAction::HalfPageUp));
+    let cursor_lr = format!("{} / {}", dk(KeyAction::CursorLeft), dk(KeyAction::CursorRight));
+    let word_fb = format!("{} / {}", dk(KeyAction::WordForward), dk(KeyAction::WordBack));
+    let line_se = format!("{} / {}", dk(KeyAction::LineStart), dk(KeyAction::LineEnd));
+    let del_keys = format!("{} / {}", dk(KeyAction::DeleteChar), dk(KeyAction::DeleteToEnd));
+    let copy_keys = format!("{} / {}", dk(KeyAction::CopyMessage), dk(KeyAction::CopyAllMessages));
+    let search_keys = format!("{} / {}", dk(KeyAction::NextSearchResult), dk(KeyAction::PrevSearchResult));
+
+    let profile_label = format!("  Keybindings [{}]", app.keybindings.profile_name);
+    let vim: Vec<(String, &str)> = vec![
+        (exit_key, "Normal mode"),
+        (insert_keys, "Insert mode"),
+        (scroll_ud, "Scroll up / down"),
+        (focus_ud, "Prev / next message"),
+        (top_bottom, "Top / bottom of messages"),
+        (half_page, "Half-page scroll"),
+        (cursor_lr, "Cursor left / right"),
+        (word_fb, "Word forward / back"),
+        (line_se, "Start / end of line"),
+        (del_keys, "Delete char / to end"),
+        (copy_keys, "Copy message / full line"),
+        (dk(KeyAction::React), "React to focused message"),
+        (dk(KeyAction::Quote), "Reply / quote message"),
+        (dk(KeyAction::EditMessage), "Edit own message"),
+        (dk(KeyAction::DeleteMessage), "Delete message"),
+        (search_keys, "Next / prev search match"),
+        (dk(KeyAction::StartSearch), "Start command input"),
     ];
 
     // Calculate popup size
@@ -2236,7 +2289,7 @@ fn draw_help(frame: &mut Frame, app: &App, area: Rect) {
     let desc_col_width = 28;
     let pref_width = (key_col_width + desc_col_width + 6) as u16;
     let content_lines =
-        commands.len() + shortcuts.len() + vim.len() + cli.len() + 7; // headers + footer + spacing
+        commands.len() + shortcuts.len() + vim.len() + cli.len() + 7;
     let pref_height = content_lines as u16 + 2;
 
     let (popup_area, block) = centered_popup(frame, area, pref_width, pref_height, " Help ", theme);
@@ -2249,7 +2302,6 @@ fn draw_help(frame: &mut Frame, app: &App, area: Rect) {
 
     let mut lines: Vec<Line> = Vec::new();
 
-    // Helper to push a row
     let push_row = |lines: &mut Vec<Line>, key: &str, desc: &str| {
         lines.push(Line::from(vec![
             Span::styled(format!("  {:<width$}", key, width = key_col_width), key_style),
@@ -2264,13 +2316,13 @@ fn draw_help(frame: &mut Frame, app: &App, area: Rect) {
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled("  Shortcuts", header_style)));
-    for &(key, desc) in shortcuts {
+    for (key, desc) in &shortcuts {
         push_row(&mut lines, key, desc);
     }
 
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("  Vim Keybindings", header_style)));
-    for &(key, desc) in vim {
+    lines.push(Line::from(Span::styled(&profile_label, header_style)));
+    for (key, desc) in &vim {
         push_row(&mut lines, key, desc);
     }
 
@@ -2980,6 +3032,171 @@ fn draw_theme_picker(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     // Pad to fill visible rows
+    while lines.len() < visible_rows {
+        lines.push(Line::from(""));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  j/k navigate  |  Enter apply  |  Esc cancel",
+        Style::default().fg(theme.fg_muted),
+    )));
+
+    let popup = Paragraph::new(lines).block(block);
+    frame.render_widget(popup, popup_area);
+}
+
+fn draw_keybindings(frame: &mut Frame, app: &App, area: Rect) {
+    let theme = &app.theme;
+
+    // If the profile picker sub-overlay is open, draw it instead
+    if app.keybindings_profile_picker {
+        draw_keybindings_profile_picker(frame, app, area);
+        return;
+    }
+
+    let total_rows = app.keybindings_overlay_total();
+    let max_visible = 24usize.min(total_rows);
+    let pref_height = max_visible as u16 + 4; // borders + footer
+    let pref_width = 52;
+
+    let (popup_area, block) = centered_popup(
+        frame, area, pref_width, pref_height, " Keybindings ", theme,
+    );
+
+    let inner_height = popup_area.height.saturating_sub(2) as usize;
+    let footer_lines = 2;
+    let visible_rows = inner_height.saturating_sub(footer_lines);
+
+    let scroll_offset = if app.keybindings_index >= visible_rows {
+        app.keybindings_index - visible_rows + 1
+    } else {
+        0
+    };
+
+    let mut lines: Vec<Line> = Vec::new();
+    let key_col_width = 26;
+    let val_col_width = 20;
+
+    let end = (scroll_offset + visible_rows).min(total_rows);
+    for row in scroll_offset..end {
+        let is_selected = row == app.keybindings_index;
+        let (mode, action): (BindingMode, Option<KeyAction>) = app.keybindings_overlay_item(row);
+
+        if row == 0 {
+            // Profile row
+            let style = if is_selected {
+                Style::default().bg(theme.bg_selected).fg(theme.fg).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.fg_secondary)
+            };
+            let val_style = if is_selected {
+                Style::default().bg(theme.bg_selected).fg(theme.accent)
+            } else {
+                Style::default().fg(theme.accent)
+            };
+            lines.push(Line::from(vec![
+                Span::styled("  Profile: ", style),
+                Span::styled(app.keybindings.profile_name.clone(), val_style),
+            ]));
+        } else if action.is_none() {
+            // Section header
+            let label = match mode {
+                BindingMode::Global => "Global",
+                BindingMode::Normal => "Normal Mode",
+                BindingMode::Insert => "Insert Mode",
+            };
+            let header_style = Style::default()
+                .fg(theme.accent_secondary)
+                .add_modifier(Modifier::BOLD);
+            lines.push(Line::from(Span::styled(format!("  -- {label} --"), header_style)));
+        } else {
+            // Action row
+            let action = action.unwrap();
+            let label = keybindings::action_label(action);
+            let key_display = if is_selected && app.keybindings_capturing {
+                "[Press key...]".to_string()
+            } else {
+                app.keybindings.display_key(action)
+            };
+
+            let row_style = if is_selected {
+                Style::default().bg(theme.bg_selected).fg(theme.fg).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.fg_secondary)
+            };
+            let key_style = if is_selected {
+                Style::default().bg(theme.bg_selected).fg(theme.accent)
+            } else {
+                Style::default().fg(theme.accent)
+            };
+
+            let padded_label = format!("{label:width$}", width = key_col_width);
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {padded_label}"), row_style),
+                Span::styled(format!("{key_display:>width$}", width = val_col_width), key_style),
+            ]));
+        }
+    }
+
+    // Pad
+    while lines.len() < visible_rows {
+        lines.push(Line::from(""));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Enter rebind | Backspace reset | Esc close",
+        Style::default().fg(theme.fg_muted),
+    )));
+
+    let popup = Paragraph::new(lines).block(block);
+    frame.render_widget(popup, popup_area);
+}
+
+fn draw_keybindings_profile_picker(frame: &mut Frame, app: &App, area: Rect) {
+    let theme = &app.theme;
+    let max_visible = 8usize.min(app.available_kb_profiles.len());
+    let pref_height = max_visible as u16 + 5;
+
+    let (popup_area, block) = centered_popup(
+        frame, area, 36, pref_height, " Keybinding Profile ", theme,
+    );
+
+    let inner_height = popup_area.height.saturating_sub(2) as usize;
+    let footer_lines = 2;
+    let visible_rows = inner_height.saturating_sub(footer_lines);
+
+    let scroll_offset = if app.keybindings_profile_index >= visible_rows {
+        app.keybindings_profile_index - visible_rows + 1
+    } else {
+        0
+    };
+
+    let mut lines: Vec<Line> = Vec::new();
+    let end = (scroll_offset + visible_rows).min(app.available_kb_profiles.len());
+    for i in scroll_offset..end {
+        let is_selected = i == app.keybindings_profile_index;
+        let is_active = app.available_kb_profiles[i] == app.keybindings.profile_name;
+        let marker = if is_active { "[*]" } else { "[ ]" };
+
+        let row_style = if is_selected {
+            Style::default().bg(theme.bg_selected).fg(theme.fg).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.fg)
+        };
+        let marker_style = if is_selected {
+            Style::default().bg(theme.bg_selected).fg(if is_active { theme.success } else { theme.fg_muted })
+        } else {
+            Style::default().fg(if is_active { theme.success } else { theme.fg_muted })
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {marker} "), marker_style),
+            Span::styled(app.available_kb_profiles[i].clone(), row_style),
+        ]));
+    }
+
     while lines.len() < visible_rows {
         lines.push(Line::from(""));
     }

@@ -79,6 +79,10 @@ pub struct Config {
     /// Color theme name (matches a built-in or custom theme)
     #[serde(default = "default_theme")]
     pub theme: String,
+
+    /// Keybinding profile name (matches a built-in or custom profile)
+    #[serde(default = "default_keybinding_profile")]
+    pub keybinding_profile: String,
 }
 
 fn default_true() -> bool {
@@ -86,6 +90,10 @@ fn default_true() -> bool {
 }
 
 fn default_theme() -> String {
+    "Default".to_string()
+}
+
+fn default_keybinding_profile() -> String {
     "Default".to_string()
 }
 
@@ -129,6 +137,7 @@ impl Default for Config {
             mouse_enabled: true,
             sidebar_on_right: false,
             theme: default_theme(),
+            keybinding_profile: default_keybinding_profile(),
         }
     }
 }

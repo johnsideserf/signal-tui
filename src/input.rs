@@ -25,6 +25,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { name: "/verify",   alias: "/v",  args: "",        description: "Verify contact identity" },
     CommandInfo { name: "/profile",  alias: "",    args: "",        description: "Edit your Signal profile" },
     CommandInfo { name: "/about",    alias: "",    args: "",        description: "About siggy" },
+    CommandInfo { name: "/keybindings", alias: "/kb", args: "",    description: "Configure keybindings" },
     CommandInfo { name: "/help",     alias: "/h",  args: "",        description: "Show help" },
     CommandInfo { name: "/quit",     alias: "/q",  args: "",        description: "Exit siggy" },
 ];
@@ -74,6 +75,8 @@ pub enum InputAction {
     Profile,
     /// Show about overlay
     About,
+    /// Open keybindings overlay
+    Keybindings,
     /// Unknown command
     Unknown(String),
 }
@@ -144,6 +147,7 @@ pub fn parse_input(input: &str) -> InputAction {
         "/verify" | "/v" => InputAction::Verify,
         "/profile" => InputAction::Profile,
         "/about" => InputAction::About,
+        "/keybindings" | "/kb" => InputAction::Keybindings,
         "/help" | "/h" => InputAction::Help,
         _ => InputAction::Unknown(format!("Unknown command: {cmd}")),
     }
@@ -277,6 +281,8 @@ mod tests {
     #[case("/v", InputAction::Verify)]
     #[case("/profile", InputAction::Profile)]
     #[case("/about", InputAction::About)]
+    #[case("/keybindings", InputAction::Keybindings)]
+    #[case("/kb", InputAction::Keybindings)]
     #[case("/bell", InputAction::ToggleBell(None))]
     fn command_returns_expected_action(#[case] input: &str, #[case] expected: InputAction) {
         assert_eq!(parse_input(input), expected);

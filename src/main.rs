@@ -4,6 +4,7 @@ mod db;
 mod debug_log;
 mod image_render;
 mod input;
+mod keybindings;
 mod link;
 mod setup;
 mod signal;
@@ -751,6 +752,11 @@ async fn run_app(
     app.sidebar_on_right = config.sidebar_on_right;
     app.available_themes = theme::all_themes();
     app.theme = theme::find_theme(&config.theme);
+    let mut kb = keybindings::find_profile(&config.keybinding_profile);
+    let overrides = keybindings::load_overrides();
+    kb.apply_overrides(&overrides);
+    app.keybindings = kb;
+    app.available_kb_profiles = keybindings::all_profile_names();
     app.load_from_db()?;
     app.expiring_msg_count = app.conversations.values()
         .flat_map(|c| &c.messages)
@@ -805,7 +811,10 @@ async fn run_app(
                     if key.kind != KeyEventKind::Press {
                         continue;
                     }
-                    if !app.handle_global_key(key.modifiers, key.code) {
+                    // Keybinding capture mode intercepts ALL keys before anything else
+                    if app.keybindings_capturing {
+                        app.handle_keybinding_capture(key.modifiers, key.code);
+                    } else if !app.handle_global_key(key.modifiers, key.code) {
                         let (overlay_handled, send_request) = app.handle_overlay_key(key.code);
                         if let Some(req) = send_request {
                             dispatch_send(signal_client, &mut app, req).await;
@@ -962,7 +971,9 @@ async fn run_demo_app(
                     if key.kind != KeyEventKind::Press {
                         continue;
                     }
-                    if !app.handle_global_key(key.modifiers, key.code) {
+                    if app.keybindings_capturing {
+                        app.handle_keybinding_capture(key.modifiers, key.code);
+                    } else if !app.handle_global_key(key.modifiers, key.code) {
                         let (overlay_handled, _) = app.handle_overlay_key(key.code);
                         if !overlay_handled {
                             let _ = match app.mode {
