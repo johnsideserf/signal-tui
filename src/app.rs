@@ -2804,10 +2804,12 @@ impl App {
     }
 
     /// Remove typing indicators older than 5 seconds
-    pub fn cleanup_typing(&mut self) {
+    pub fn cleanup_typing(&mut self) -> bool {
+        let before = self.typing_indicators.len();
         let now = Instant::now();
         self.typing_indicators
             .retain(|_, ts| now.duration_since(*ts).as_secs() < 5);
+        self.typing_indicators.len() != before
     }
 
     /// Build a Typing SendRequest for the active conversation, or None if no conversation is active.

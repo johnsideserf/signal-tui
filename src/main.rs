@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::{
-    cursor::{MoveTo, RestorePosition, SavePosition},
+    cursor::{Hide, MoveTo, RestorePosition, SavePosition, Show},
     event::{self, EnableBracketedPaste, DisableBracketedPaste, EnableMouseCapture, DisableMouseCapture, Event, KeyEventKind},
     execute, queue,
     style::{Print, ResetColor, SetForegroundColor},
@@ -783,6 +783,7 @@ async fn run_app(
     let _ = signal_client.list_identities().await;
 
     let mut last_expiry_sweep = Instant::now();
+    let mut needs_redraw = true;
 
     // Re-enable terminal modes — on Windows, spawning cmd.exe subprocesses
     // (signal-cli.bat, check_account_registered) can reset console input mode flags.
@@ -793,28 +794,40 @@ async fn run_app(
     }
 
     loop {
-        // Force full redraw when active conversation changes (clears native image artifacts)
-        if app.native_images && app.active_conversation != app.prev_active_conversation {
-            app.prev_active_conversation = app.active_conversation.clone();
-            terminal.clear()?;
-        }
+        // Only redraw when state has changed (avoids resetting cursor blink timer every 50ms)
+        if needs_redraw {
+            // Force full redraw when active conversation changes (clears native image artifacts)
+            if app.native_images && app.active_conversation != app.prev_active_conversation {
+                app.prev_active_conversation = app.active_conversation.clone();
+                terminal.clear()?;
+            }
 
-        // Render
-        terminal.draw(|frame| ui::draw(frame, &mut app))?;
-        emit_osc8_links(terminal.backend_mut(), &app.link_regions, app.theme.link)?;
-        if app.native_images {
-            emit_native_images(terminal.backend_mut(), &mut app)?;
+            terminal.draw(|frame| ui::draw(frame, &mut app))?;
+            let has_post_draw = !app.link_regions.is_empty() || app.native_images;
+            if has_post_draw && app.mode == InputMode::Insert {
+                queue!(terminal.backend_mut(), Hide)?;
+            }
+            emit_osc8_links(terminal.backend_mut(), &app.link_regions, app.theme.link)?;
+            if app.native_images {
+                emit_native_images(terminal.backend_mut(), &mut app)?;
+            }
+            if has_post_draw && app.mode == InputMode::Insert {
+                execute!(terminal.backend_mut(), Show)?;
+            }
+            needs_redraw = false;
         }
 
         // Load older messages when scrolled to the top
         if app.at_scroll_top {
             app.load_more_messages();
+            needs_redraw = true;
         }
 
         // Poll for events with a short timeout so we stay responsive to signal events
         let has_terminal_event = event::poll(POLL_TIMEOUT)?;
 
         if has_terminal_event {
+            needs_redraw = true;
             match event::read()? {
                 Event::Key(key) => {
                     if key.kind != KeyEventKind::Press {
@@ -856,7 +869,10 @@ async fn run_app(
         // Drain signal events (non-blocking), detect disconnect
         loop {
             match signal_client.event_rx.try_recv() {
-                Ok(ev) => app.handle_signal_event(ev),
+                Ok(ev) => {
+                    app.handle_signal_event(ev);
+                    needs_redraw = true;
+                }
                 Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
                     if app.connection_error.is_none() {
                         let stderr = signal_client.stderr_output();
@@ -892,7 +908,9 @@ async fn run_app(
         }
 
         // Expire stale typing indicators
-        app.cleanup_typing();
+        if app.cleanup_typing() {
+            needs_redraw = true;
+        }
 
         // Check if our outgoing typing indicator has timed out
         if let Some(typing_stop) = app.check_typing_timeout() {
@@ -907,6 +925,7 @@ async fn run_app(
         if last_expiry_sweep.elapsed() >= Duration::from_secs(10) {
             app.sweep_expired_messages();
             last_expiry_sweep = Instant::now();
+            needs_redraw = true;
         }
 
         // Terminal bell on new messages in background conversations
@@ -959,22 +978,34 @@ async fn run_demo_app(
     app.status_message = "connected | demo mode".to_string();
 
     populate_demo_data(&mut app);
+    let mut needs_redraw = true;
 
     loop {
-        if app.native_images && app.active_conversation != app.prev_active_conversation {
-            app.prev_active_conversation = app.active_conversation.clone();
-            terminal.clear()?;
-        }
+        if needs_redraw {
+            if app.native_images && app.active_conversation != app.prev_active_conversation {
+                app.prev_active_conversation = app.active_conversation.clone();
+                terminal.clear()?;
+            }
 
-        terminal.draw(|frame| ui::draw(frame, &mut app))?;
-        emit_osc8_links(terminal.backend_mut(), &app.link_regions, app.theme.link)?;
-        if app.native_images {
-            emit_native_images(terminal.backend_mut(), &mut app)?;
+            terminal.draw(|frame| ui::draw(frame, &mut app))?;
+            let has_post_draw = !app.link_regions.is_empty() || app.native_images;
+            if has_post_draw && app.mode == InputMode::Insert {
+                queue!(terminal.backend_mut(), Hide)?;
+            }
+            emit_osc8_links(terminal.backend_mut(), &app.link_regions, app.theme.link)?;
+            if app.native_images {
+                emit_native_images(terminal.backend_mut(), &mut app)?;
+            }
+            if has_post_draw && app.mode == InputMode::Insert {
+                execute!(terminal.backend_mut(), Show)?;
+            }
+            needs_redraw = false;
         }
 
         let has_terminal_event = event::poll(POLL_TIMEOUT)?;
 
         if has_terminal_event {
+            needs_redraw = true;
             match event::read()? {
                 Event::Key(key) => {
                     if key.kind != KeyEventKind::Press {
@@ -1003,7 +1034,9 @@ async fn run_demo_app(
             }
         }
 
-        app.cleanup_typing();
+        if app.cleanup_typing() {
+            needs_redraw = true;
+        }
 
         let unread = app.total_unread();
         let title = if unread > 0 {
