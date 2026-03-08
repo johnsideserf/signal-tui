@@ -33,6 +33,9 @@ impl SignalClient {
         if !config.account.is_empty() {
             cmd.arg("-a").arg(&config.account);
         }
+        if !config.proxy.is_empty() {
+            cmd.arg("--proxy").arg(&config.proxy);
+        }
         cmd.arg("jsonRpc");
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())

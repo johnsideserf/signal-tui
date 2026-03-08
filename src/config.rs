@@ -83,6 +83,10 @@ pub struct Config {
     /// Keybinding profile name (matches a built-in or custom profile)
     #[serde(default = "default_keybinding_profile")]
     pub keybinding_profile: String,
+
+    /// Signal TLS proxy URL passed through to signal-cli (e.g., "https://signal-proxy.example.com")
+    #[serde(default)]
+    pub proxy: String,
 }
 
 fn default_true() -> bool {
@@ -138,6 +142,7 @@ impl Default for Config {
             sidebar_on_right: false,
             theme: default_theme(),
             keybinding_profile: default_keybinding_profile(),
+            proxy: String::new(),
         }
     }
 }
