@@ -1722,13 +1722,15 @@ fn draw_welcome(frame: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(theme.fg_secondary),
         )));
     } else if app.loading {
+        const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        let spinner_char = SPINNER[app.spinner_tick % SPINNER.len()];
         lines.push(Line::from(Span::styled(
             "  siggy",
             Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "  Loading...",
+            format!("  {spinner_char} {}", app.startup_status),
             Style::default().fg(theme.fg_muted),
         )));
     } else if app.conversation_order.is_empty() {

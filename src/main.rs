@@ -818,9 +818,13 @@ async fn run_app(
     app.sweep_expired_messages();
 
     // Ask primary device to sync contacts/groups, then fetch them (best-effort)
+    app.startup_status = "Syncing with primary device...".to_string();
     let _ = signal_client.send_sync_request().await;
+    app.startup_status = "Loading contacts...".to_string();
     let _ = signal_client.list_contacts().await;
+    app.startup_status = "Loading groups...".to_string();
     let _ = signal_client.list_groups().await;
+    app.startup_status = "Loading identities...".to_string();
     let _ = signal_client.list_identities().await;
 
     let mut last_expiry_sweep = Instant::now();
@@ -860,6 +864,12 @@ async fn run_app(
             }
             execute!(terminal.backend_mut(), EndSynchronizedUpdate)?;
             needs_redraw = false;
+        }
+
+        // Animate the loading spinner
+        if app.loading {
+            app.spinner_tick = app.spinner_tick.wrapping_add(1);
+            needs_redraw = true;
         }
 
         // Load older messages when scrolled to the top

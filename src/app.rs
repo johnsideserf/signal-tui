@@ -288,6 +288,10 @@ pub struct App {
     pub connected: bool,
     /// True until the first ContactList event arrives (initial sync in progress)
     pub loading: bool,
+    /// Status message shown on the loading screen (e.g. "Loading contacts...")
+    pub startup_status: String,
+    /// Tick counter for the loading spinner animation
+    pub spinner_tick: usize,
     /// Current input mode (Normal or Insert)
     pub mode: InputMode,
     /// SQLite database for persistent storage
@@ -2459,6 +2463,8 @@ impl App {
             last_read_index: HashMap::new(),
             connected: false,
             loading: true,
+            startup_status: "Starting signal-cli...".to_string(),
+            spinner_tick: 0,
             mode: InputMode::Insert,
             db,
             connection_error: None,
@@ -4398,6 +4404,7 @@ impl App {
 
     fn handle_contact_list(&mut self, contacts: Vec<Contact>) {
         self.loading = false;
+        self.startup_status.clear();
         for contact in contacts {
             // Store name in lookup for future message resolution
             if let Some(ref name) = contact.name {
