@@ -124,6 +124,7 @@ pub enum SignalEvent {
         sender: String,
         sender_name: Option<String>,
         is_typing: bool,
+        group_id: Option<String>,
     },
     ReactionReceived {
         conv_id: String,

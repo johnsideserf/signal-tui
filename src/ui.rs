@@ -1058,21 +1058,15 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     if let Some(ref conv_id) = app.active_conversation {
         let typers: Vec<String> = app
             .typing_indicators
-            .keys()
-            .filter(|sender| {
-                *sender == conv_id
-                    || app
-                        .conversations
-                        .get(conv_id)
-                        .is_some_and(|c| c.is_group)
-            })
-            .map(|s| {
-                if let Some(name) = app.contact_names.get(s) {
+            .iter()
+            .filter(|(key, _)| *key == conv_id)
+            .map(|(_, (sender, _))| {
+                if let Some(name) = app.contact_names.get(sender) {
                     name.clone()
-                } else if let Some(conv) = app.conversations.get(s) {
+                } else if let Some(conv) = app.conversations.get(sender) {
                     conv.name.clone()
                 } else {
-                    s.clone()
+                    sender.clone()
                 }
             })
             .collect();

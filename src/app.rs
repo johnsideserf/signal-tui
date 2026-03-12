@@ -292,8 +292,8 @@ pub struct App {
     pub sidebar_width: u16,
     /// Display sidebar on the right side instead of left
     pub sidebar_on_right: bool,
-    /// Per-conversation typing indicators with expiry timestamp
-    pub typing_indicators: HashMap<String, Instant>,
+    /// Per-conversation typing indicators: conv_id → (sender_phone, expiry timestamp)
+    pub typing_indicators: HashMap<String, (String, Instant)>,
     /// Last-read message index per conversation (for unread marker)
     pub last_read_index: HashMap<String, usize>,
     /// Whether we are connected to signal-cli
@@ -3111,7 +3111,7 @@ impl App {
         let before = self.typing_indicators.len();
         let now = Instant::now();
         self.typing_indicators
-            .retain(|_, ts| now.duration_since(*ts).as_secs() < 5);
+            .retain(|_, (_, ts)| now.duration_since(*ts).as_secs() < 5);
         self.typing_indicators.len() != before
     }
 
@@ -3673,16 +3673,17 @@ impl App {
                 self.status_message = "send failed".to_string();
                 self.handle_send_failed(&rpc_id);
             }
-            SignalEvent::TypingIndicator { sender, sender_name, is_typing } => {
+            SignalEvent::TypingIndicator { sender, sender_name, is_typing, group_id } => {
                 // Store name in contact lookup if we learned it from this event
                 if let Some(ref name) = sender_name {
                     self.contact_names.entry(sender.clone()).or_insert_with(|| name.clone());
                 }
-                // Store typing state per-conversation (use sender as key for 1:1)
+                // Key by group ID for group messages, sender phone for 1:1
+                let conv_key = group_id.as_ref().unwrap_or(&sender).clone();
                 if is_typing {
-                    self.typing_indicators.insert(sender.clone(), Instant::now());
+                    self.typing_indicators.insert(conv_key, (sender.clone(), Instant::now()));
                 } else {
-                    self.typing_indicators.remove(&sender);
+                    self.typing_indicators.remove(&conv_key);
                 }
             }
             SignalEvent::ReactionReceived {
@@ -9091,6 +9092,7 @@ mod tests {
             sender: "+1".to_string(),
             sender_name: Some("Alice".to_string()),
             is_typing: true,
+            group_id: None,
         });
         assert!(app.typing_indicators.contains_key("+1"));
         assert_eq!(app.contact_names.get("+1").unwrap(), "Alice");
@@ -9099,6 +9101,7 @@ mod tests {
             sender: "+1".to_string(),
             sender_name: None,
             is_typing: false,
+            group_id: None,
         });
         assert!(!app.typing_indicators.contains_key("+1"));
     }
@@ -9277,5 +9280,58 @@ mod tests {
         msg.expires_in_seconds = 3600;
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         assert_eq!(app.conversations["+1"].expiration_timer, 3600);
+    }
+
+    // --- Typing indicator scoping ---
+
+    #[rstest]
+    fn group_typing_indicator_keyed_by_group_not_sender(mut app: App) {
+        // Alice types in group-a. The typing indicator must be stored under
+        // "group-a", not under Alice's phone number.
+        app.handle_signal_event(SignalEvent::TypingIndicator {
+            sender: "+1".to_string(),
+            sender_name: Some("Alice".to_string()),
+            is_typing: true,
+            group_id: Some("group-a".to_string()),
+        });
+
+        assert!(app.typing_indicators.contains_key("group-a"),
+            "typing indicator should be keyed by group ID");
+        assert!(!app.typing_indicators.contains_key("+1"),
+            "typing indicator must NOT be keyed by sender phone");
+        // Value stores the sender phone so we can resolve the display name
+        assert_eq!(app.typing_indicators["group-a"].0, "+1");
+    }
+
+    #[rstest]
+    fn group_typing_does_not_bleed_into_other_group(mut app: App) {
+        // Alice types in group-a. Viewing group-b must show no typing indicator.
+        app.get_or_create_conversation("group-a", "Group A", true);
+        app.get_or_create_conversation("group-b", "Group B", true);
+
+        app.handle_signal_event(SignalEvent::TypingIndicator {
+            sender: "+1".to_string(),
+            sender_name: Some("Alice".to_string()),
+            is_typing: true,
+            group_id: Some("group-a".to_string()),
+        });
+
+        // Viewing group-b: no indicator should be visible for it
+        assert!(!app.typing_indicators.contains_key("group-b"),
+            "group-a typing must not bleed into group-b");
+    }
+
+    #[rstest]
+    fn direct_typing_indicator_keyed_by_sender(mut app: App) {
+        // 1:1 typing (no group_id) must still be keyed by sender phone number.
+        app.handle_signal_event(SignalEvent::TypingIndicator {
+            sender: "+1".to_string(),
+            sender_name: None,
+            is_typing: true,
+            group_id: None,
+        });
+
+        assert!(app.typing_indicators.contains_key("+1"),
+            "1:1 typing indicator should be keyed by sender phone");
     }
 }

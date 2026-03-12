@@ -1360,7 +1360,11 @@ fn parse_typing_indicator(envelope: &serde_json::Value) -> Option<SignalEvent> {
         .and_then(|v| v.as_str())
         .map(|a| a == "STARTED")
         .unwrap_or(false);
-    Some(SignalEvent::TypingIndicator { sender, sender_name, is_typing })
+    let group_id = typing
+        .get("groupId")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    Some(SignalEvent::TypingIndicator { sender, sender_name, is_typing, group_id })
 }
 
 fn parse_receipt_message(envelope: &serde_json::Value) -> Option<SignalEvent> {
@@ -3498,6 +3502,52 @@ mod tests {
                 assert_eq!(identities[2].safety_number, "");
             }
             _ => panic!("Expected IdentityList"),
+        }
+    }
+
+    // --- Typing indicator parsing ---
+
+    #[test]
+    fn parse_typing_indicator_group_carries_group_id() {
+        // When a typing event arrives for a group message, the parsed event
+        // must include the group's ID so the app can key it correctly.
+        let params = json!({
+            "envelope": {
+                "sourceNumber": "+15551234567",
+                "sourceName": "Alice",
+                "typingMessage": {
+                    "action": "STARTED",
+                    "groupId": "group-abc"
+                }
+            }
+        });
+        let event = parse_signal_event(&make_resp(params), std::path::Path::new("/tmp")).unwrap();
+        match event {
+            SignalEvent::TypingIndicator { sender, group_id, is_typing, .. } => {
+                assert_eq!(sender, "+15551234567");
+                assert_eq!(group_id, Some("group-abc".to_string()));
+                assert!(is_typing);
+            }
+            _ => panic!("Expected TypingIndicator"),
+        }
+    }
+
+    #[test]
+    fn parse_typing_indicator_direct_message_has_no_group_id() {
+        let params = json!({
+            "envelope": {
+                "sourceNumber": "+15551234567",
+                "typingMessage": {
+                    "action": "STARTED"
+                }
+            }
+        });
+        let event = parse_signal_event(&make_resp(params), std::path::Path::new("/tmp")).unwrap();
+        match event {
+            SignalEvent::TypingIndicator { group_id, .. } => {
+                assert_eq!(group_id, None);
+            }
+            _ => panic!("Expected TypingIndicator"),
         }
     }
 }
