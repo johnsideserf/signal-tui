@@ -24,7 +24,7 @@ const MSG_WINDOW_MULTIPLIER: usize = 10;
 
 // Popup dimensions
 const SETTINGS_POPUP_WIDTH: u16 = 50;
-const SETTINGS_POPUP_HEIGHT: u16 = 17;
+const SETTINGS_POPUP_HEIGHT: u16 = 18;
 const CONTACTS_POPUP_WIDTH: u16 = 50;
 const CONTACTS_MAX_VISIBLE: usize = 20;
 const FILE_BROWSER_POPUP_WIDTH: u16 = 60;
@@ -527,6 +527,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_keybindings(frame, app, size);
     }
 
+    // Settings profile manager overlay
+    if app.show_settings_profile_manager {
+        draw_settings_profile_manager(frame, app, size);
+    }
+
     // Pin duration picker overlay
     if app.show_pin_duration {
         draw_pin_duration_picker(frame, app, size);
@@ -832,15 +837,26 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         let msg_index = start + i;
 
         // Date separator: detect day boundary
-        let local = msg.timestamp.with_timezone(&chrono::Local);
-        let date_str = local.format("%b %d, %Y").to_string();
-        if prev_date.as_ref() != Some(&date_str) {
-            if prev_date.is_some() {
-                let label = format!(" {} ", date_str);
-                lines.push(build_separator(&label, inner_width, Style::default().fg(theme.fg_muted)));
-                line_msg_idx.push(None);
+        if app.date_separators {
+            let local = msg.timestamp.with_timezone(&chrono::Local);
+            let date_str = local.format("%Y-%m-%d").to_string();
+            if prev_date.as_ref() != Some(&date_str) {
+                if prev_date.is_some() {
+                    let today = chrono::Local::now().date_naive();
+                    let msg_date = local.date_naive();
+                    let friendly = if msg_date == today {
+                        "Today".to_string()
+                    } else if msg_date == today.pred_opt().unwrap_or(today) {
+                        "Yesterday".to_string()
+                    } else {
+                        local.format("%b %-d, %Y").to_string()
+                    };
+                    let label = format!(" {friendly} ");
+                    lines.push(build_separator(&label, inner_width, Style::default().fg(theme.fg_muted)));
+                    line_msg_idx.push(None);
+                }
+                prev_date = Some(date_str);
             }
-            prev_date = Some(date_str);
         }
 
         // Unread marker: between last_read - 1 and last_read
@@ -949,8 +965,8 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             lines.push(Line::from(spans));
             line_msg_idx.push(Some(msg_index));
 
-            // Render inline image preview if available (skip for deleted)
-            if !msg.is_deleted {
+            // Render inline image preview if available (skip for deleted, skip if images disabled)
+            if !msg.is_deleted && app.inline_images {
                 if let Some(ref image_lines) = msg.image_lines {
                     let first_idx = lines.len();
                     let count = image_lines.len();
@@ -1000,17 +1016,19 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     ]));
                     line_msg_idx.push(Some(msg_index));
 
-                    // Render link preview thumbnail
-                    if let Some(ref img_lines) = msg.preview_image_lines {
-                        let first_idx = lines.len();
-                        let count = img_lines.len();
-                        for line in img_lines {
-                            lines.push(line.clone());
-                            line_msg_idx.push(Some(msg_index));
-                        }
-                        if use_native {
-                            if let Some(ref path) = msg.preview_image_path {
-                                image_records.push((first_idx, count, path.clone()));
+                    // Render link preview thumbnail (only when images enabled)
+                    if app.inline_images {
+                        if let Some(ref img_lines) = msg.preview_image_lines {
+                            let first_idx = lines.len();
+                            let count = img_lines.len();
+                            for line in img_lines {
+                                lines.push(line.clone());
+                                line_msg_idx.push(Some(msg_index));
+                            }
+                            if use_native {
+                                if let Some(ref path) = msg.preview_image_path {
+                                    image_records.push((first_idx, count, path.clone()));
+                                }
                             }
                         }
                     }
@@ -2214,7 +2232,7 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect) {
 
 fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
     let theme = &app.theme;
-    let height = SETTINGS_POPUP_HEIGHT + 4; // extra lines for preview + theme + keybindings + hint
+    let height = SETTINGS_POPUP_HEIGHT + 5; // extra lines for preview + theme + keybindings + profile + hint
     let (popup_area, block) = centered_popup(
         frame, area, SETTINGS_POPUP_WIDTH, height, " Settings ", theme,
     );
@@ -2295,6 +2313,23 @@ fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled(app.keybindings.profile_name.clone(), kb_value_style),
     ]));
 
+    // Settings profile selector entry (index == SETTINGS.len() + 3)
+    let is_profile_selected = app.settings_index == SETTINGS.len() + 3;
+    let profile_style = if is_profile_selected {
+        Style::default().bg(theme.bg_selected).fg(theme.fg).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.fg_secondary)
+    };
+    let profile_value_style = if is_profile_selected {
+        Style::default().bg(theme.bg_selected).fg(theme.accent)
+    } else {
+        Style::default().fg(theme.accent)
+    };
+    lines.push(Line::from(vec![
+        Span::styled("  Profile: ", profile_style),
+        Span::styled(app.settings_profile_name.clone(), profile_value_style),
+    ]));
+
     // Hint line for the currently selected item
     let hint = if app.settings_index < SETTINGS.len() {
         SETTINGS[app.settings_index].hint
@@ -2303,6 +2338,7 @@ fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
             0 => "Control message content in notifications",
             1 => "Switch between color themes",
             2 => "Switch between keybinding presets",
+            3 => "h/l cycle, Enter manage settings profiles",
             _ => "",
         }
     };
@@ -3316,6 +3352,119 @@ fn draw_keybindings_profile_picker(frame: &mut Frame, app: &App, area: Rect) {
         "  j/k navigate  |  Enter apply  |  Esc cancel",
         Style::default().fg(theme.fg_muted),
     )));
+
+    let popup = Paragraph::new(lines).block(block);
+    frame.render_widget(popup, popup_area);
+}
+
+fn draw_settings_profile_manager(frame: &mut Frame, app: &App, area: Rect) {
+    let theme = &app.theme;
+
+    // If save-as input is active, draw that sub-overlay instead
+    if app.settings_profile_save_as {
+        draw_settings_profile_save_as(frame, app, area);
+        return;
+    }
+
+    let max_visible = 10usize.min(app.available_settings_profiles.len());
+    let pref_height = max_visible as u16 + 5; // borders + footer
+
+    let (popup_area, block) = centered_popup(
+        frame, area, 42, pref_height, " Settings Profiles ", theme,
+    );
+
+    let inner_height = popup_area.height.saturating_sub(2) as usize;
+    let footer_lines = 2;
+    let visible_rows = inner_height.saturating_sub(footer_lines);
+
+    let scroll_offset = if app.settings_profile_manager_index >= visible_rows {
+        app.settings_profile_manager_index - visible_rows + 1
+    } else {
+        0
+    };
+
+    // Determine if current settings differ from loaded profile
+    let has_changes = !app.available_settings_profiles.iter()
+        .any(|p| p.name == app.settings_profile_name && p.matches_app(app));
+
+    let mut lines: Vec<Line> = Vec::new();
+    let end = (scroll_offset + visible_rows).min(app.available_settings_profiles.len());
+    for i in scroll_offset..end {
+        let profile = &app.available_settings_profiles[i];
+        let is_selected = i == app.settings_profile_manager_index;
+        let is_active = profile.name == app.settings_profile_name;
+
+        let marker = if is_active { ">" } else { " " };
+        let row_style = if is_selected {
+            Style::default().bg(theme.bg_selected).fg(theme.fg).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.fg)
+        };
+        let marker_style = if is_selected {
+            Style::default().bg(theme.bg_selected).fg(if is_active { theme.accent } else { theme.fg_muted })
+        } else {
+            Style::default().fg(if is_active { theme.accent } else { theme.fg_muted })
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {marker} "), marker_style),
+            Span::styled(profile.name.clone(), row_style),
+        ]));
+    }
+
+    while lines.len() < visible_rows {
+        lines.push(Line::from(""));
+    }
+
+    // Build contextual footer hints
+    let selected_profile = app.available_settings_profiles.get(app.settings_profile_manager_index);
+    let is_builtin = selected_profile
+        .map(|p| crate::settings_profile::is_builtin(&p.name))
+        .unwrap_or(true);
+
+    let mut hints = vec!["j/k nav", "Enter load", "Esc close"];
+    if has_changes {
+        if !is_builtin {
+            hints.push("s save");
+        }
+        hints.push("S save as");
+    }
+    if !is_builtin {
+        hints.push("d delete");
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!("  {}", hints.join("  ")),
+        Style::default().fg(theme.fg_muted),
+    )));
+
+    let popup = Paragraph::new(lines).block(block);
+    frame.render_widget(popup, popup_area);
+}
+
+fn draw_settings_profile_save_as(frame: &mut Frame, app: &App, area: Rect) {
+    let theme = &app.theme;
+    let (popup_area, block) = centered_popup(
+        frame, area, 40, 7, " Save Profile As ", theme,
+    );
+
+    let cursor_char = if app.settings_profile_save_as_input.is_empty() { "_" } else { "" };
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Name: ", Style::default().fg(theme.fg_secondary)),
+            Span::styled(
+                format!("{}{cursor_char}", app.settings_profile_save_as_input),
+                Style::default().fg(theme.fg).add_modifier(Modifier::UNDERLINED),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Enter save  |  Esc cancel",
+            Style::default().fg(theme.fg_muted),
+        )),
+    ];
 
     let popup = Paragraph::new(lines).block(block);
     frame.render_widget(popup, popup_area);

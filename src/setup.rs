@@ -18,7 +18,7 @@ use crate::link;
 
 pub enum SetupResult {
     /// Wizard finished successfully, use this config.
-    Completed(Config),
+    Completed(Box<Config>),
     /// User had a valid config, no setup needed.
     Skipped,
     /// User cancelled during setup.
@@ -300,7 +300,7 @@ pub async fn run_setup(
                 })?;
                 tokio::time::sleep(Duration::from_millis(1500)).await;
 
-                return Ok(SetupResult::Completed(working_config));
+                return Ok(SetupResult::Completed(Box::new(working_config)));
             }
         }
     }

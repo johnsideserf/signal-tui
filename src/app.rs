@@ -4,6 +4,7 @@ use ratatui::layout::Rect;
 use ratatui::text::Line;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use std::time::Instant;
 
 use crate::db::Database;
@@ -102,6 +103,15 @@ pub struct VisibleImage {
     /// Cells cropped from the top when the image is partially scrolled out.
     pub crop_top: u16,
     pub path: String,
+}
+
+/// Result from a background image render task.
+pub struct ImageRenderResult {
+    pub conv_id: String,
+    pub timestamp_ms: i64,
+    pub is_preview: bool,
+    pub lines: Option<Vec<Line<'static>>>,
+    pub image_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -376,6 +386,8 @@ pub struct App {
     pub has_more_messages: HashSet<String>,
     /// Set by the renderer when the active conversation is scrolled to the top and has more
     pub at_scroll_top: bool,
+    /// Show date separator lines between messages from different days
+    pub date_separators: bool,
     /// Show delivery/read receipt status symbols on outgoing messages
     pub show_receipts: bool,
     /// Use colored status symbols (vs monochrome DarkGray)
@@ -557,6 +569,26 @@ pub struct App {
     pub kitty_pending_transmits: Vec<(u32, String, u16, u16)>,
     /// Cache of cropped image base64 for iTerm2: (path, crop_top, height) → base64.
     pub iterm2_crop_cache: HashMap<(String, u16, u16), String>,
+    /// Current settings profile name
+    pub settings_profile_name: String,
+    /// Settings profile manager overlay visible
+    pub show_settings_profile_manager: bool,
+    /// Cursor position in settings profile manager
+    pub settings_profile_manager_index: usize,
+    /// All available settings profiles (built-in + custom)
+    pub available_settings_profiles: Vec<crate::settings_profile::SettingsProfile>,
+    /// Save-as mode active in profile manager
+    pub settings_profile_save_as: bool,
+    /// Text input buffer for save-as name
+    pub settings_profile_save_as_input: String,
+    /// Mouse enabled state when settings overlay opened (for deferred toggle)
+    pub settings_mouse_snapshot: bool,
+    /// Background image render channel (sender, cloned into spawn_blocking tasks)
+    pub image_render_tx: mpsc::Sender<ImageRenderResult>,
+    /// Background image render channel (receiver, polled each frame)
+    pub image_render_rx: mpsc::Receiver<ImageRenderResult>,
+    /// In-flight background renders: (conv_id, timestamp_ms, is_preview)
+    pub image_render_in_flight: HashSet<(String, i64, bool)>,
 }
 
 /// A search result entry.
@@ -756,7 +788,7 @@ pub const SETTINGS: &[SettingDef] = &[
         get: |a| a.inline_images,
         set: |a, v| a.inline_images = v,
         save: Some(|c, v| c.inline_images = v),
-        on_toggle: Some(|a| a.refresh_image_previews()),
+        on_toggle: None, // UI checks the flag; cached lines stay in memory
     },
     SettingDef {
         label: "Link previews",
@@ -764,7 +796,7 @@ pub const SETTINGS: &[SettingDef] = &[
         get: |a| a.show_link_previews,
         set: |a, v| a.show_link_previews = v,
         save: Some(|c, v| c.show_link_previews = v),
-        on_toggle: Some(|a| a.refresh_link_preview_images()),
+        on_toggle: None, // UI checks the flag; cached lines stay in memory
     },
     SettingDef {
         label: "Native images (experimental)",
@@ -772,6 +804,14 @@ pub const SETTINGS: &[SettingDef] = &[
         get: |a| a.native_images,
         set: |a, v| a.native_images = v,
         save: Some(|c, v| c.native_images = v),
+        on_toggle: None,
+    },
+    SettingDef {
+        label: "Date separators",
+        hint: "Show date lines between messages from different days",
+        get: |a| a.date_separators,
+        set: |a, v| a.date_separators = v,
+        save: Some(|c, v| c.date_separators = v),
         on_toggle: None,
     },
     SettingDef {
@@ -856,6 +896,7 @@ impl App {
         config.account = self.account.clone();
         config.theme = self.theme.name.clone();
         config.keybinding_profile = self.keybindings.profile_name.clone();
+        config.settings_profile = self.settings_profile_name.clone();
         config.notification_preview = self.notification_preview.clone();
         for def in SETTINGS {
             if let Some(save_fn) = def.save {
@@ -870,59 +911,106 @@ impl App {
         keybindings::save_overrides(&overrides);
     }
 
-    /// Re-render or clear image previews on all messages (after toggling inline_images).
-    fn refresh_image_previews(&mut self) {
-        for conv in self.conversations.values_mut() {
-            for msg in &mut conv.messages {
-                if msg.body.starts_with("[image:") {
-                    if self.inline_images {
-                        if let Some(ref p) = msg.image_path {
-                            msg.image_lines = image_render::render_image(Path::new(p), 40);
-                        }
-                    } else {
-                        msg.image_lines = None;
-                    }
-                }
-                // Also refresh link preview thumbnails
-                if let Some(ref preview) = msg.preview {
-                    if self.inline_images && self.show_link_previews {
-                        if let Some(ref p) = preview.image_path {
-                            msg.preview_image_lines = image_render::render_image(Path::new(p), 30);
-                            msg.preview_image_path = Some(p.clone());
-                        }
-                    } else {
-                        msg.preview_image_lines = None;
-                    }
-                }
-            }
-        }
-    }
+    // Image lines are always cached in memory; the UI checks inline_images/show_link_previews
+    // before displaying them. No refresh needed on toggle — it's just a visibility flag now.
 
-    /// Re-render or clear link preview thumbnails (after toggling show_link_previews).
-    fn refresh_link_preview_images(&mut self) {
-        for conv in self.conversations.values_mut() {
-            for msg in &mut conv.messages {
-                if let Some(ref preview) = msg.preview {
-                    if self.show_link_previews && self.inline_images {
-                        if let Some(ref p) = preview.image_path {
-                            msg.preview_image_lines = image_render::render_image(Path::new(p), 30);
-                            msg.preview_image_path = Some(p.clone());
+    /// Drain completed background image renders and spawn new ones for the viewport.
+    /// Called each frame from the main loop. Returns true if any images were applied.
+    pub fn ensure_active_images(&mut self) -> bool {
+        // Always drain completed background renders (even if inline_images is off)
+        let mut drained = false;
+        while let Ok(result) = self.image_render_rx.try_recv() {
+            self.image_render_in_flight.remove(&(
+                result.conv_id.clone(),
+                result.timestamp_ms,
+                result.is_preview,
+            ));
+            if let Some(conv) = self.conversations.get_mut(&result.conv_id) {
+                if let Some(idx) = conv.find_msg_idx(result.timestamp_ms) {
+                    if result.is_preview {
+                        // Store empty vec on None to prevent infinite retry for broken images
+                        conv.messages[idx].preview_image_lines =
+                            Some(result.lines.unwrap_or_default());
+                        if let Some(p) = result.image_path {
+                            conv.messages[idx].preview_image_path = Some(p);
                         }
                     } else {
-                        msg.preview_image_lines = None;
+                        conv.messages[idx].image_lines =
+                            Some(result.lines.unwrap_or_default());
+                    }
+                    drained = true;
+                }
+            }
+        }
+
+        if !self.inline_images {
+            return drained;
+        }
+        let Some(ref id) = self.active_conversation else { return drained };
+        let id = id.clone();
+        let Some(conv) = self.conversations.get(&id) else { return drained };
+        let len = conv.messages.len();
+        if len == 0 {
+            return drained;
+        }
+        let end = len.saturating_sub(self.scroll_offset.saturating_sub(5)).min(len);
+        let start = end.saturating_sub(60);
+
+        // Collect work items to avoid borrow conflicts: (timestamp, path, max_width, is_preview)
+        let mut work: Vec<(i64, String, u32, bool)> = Vec::new();
+        for msg in &conv.messages[start..end] {
+            if self.image_render_in_flight.len() + work.len() >= 4 {
+                break;
+            }
+            if msg.body.starts_with("[image:") && msg.image_lines.is_none() {
+                if let Some(ref p) = msg.image_path {
+                    let key = (id.clone(), msg.timestamp_ms, false);
+                    if !self.image_render_in_flight.contains(&key) {
+                        work.push((msg.timestamp_ms, p.clone(), 40, false));
+                    }
+                }
+            }
+            if self.show_link_previews && msg.preview_image_lines.is_none() {
+                if let Some(ref preview) = msg.preview {
+                    if let Some(ref p) = preview.image_path {
+                        let key = (id.clone(), msg.timestamp_ms, true);
+                        if !self.image_render_in_flight.contains(&key) {
+                            work.push((msg.timestamp_ms, p.clone(), 30, true));
+                        }
                     }
                 }
             }
         }
+
+        // Spawn background render tasks
+        for (ts, path, max_width, is_preview) in work {
+            self.image_render_in_flight
+                .insert((id.clone(), ts, is_preview));
+            let tx = self.image_render_tx.clone();
+            let cid = id.clone();
+            tokio::task::spawn_blocking(move || {
+                let lines = image_render::render_image(Path::new(&path), max_width);
+                let _ = tx.send(ImageRenderResult {
+                    conv_id: cid,
+                    timestamp_ms: ts,
+                    is_preview,
+                    lines,
+                    image_path: if is_preview { Some(path) } else { None },
+                });
+            });
+        }
+
+        drained
     }
 
     /// Handle a key press while the settings overlay is open.
-    /// After toggles: Theme at SETTINGS.len(), Keybindings at SETTINGS.len()+1.
+    /// After toggles: Preview at SETTINGS.len(), Theme at +1, Keybindings at +2, Profile at +3.
     pub fn handle_settings_key(&mut self, code: KeyCode) {
         let preview_index = SETTINGS.len();
         let theme_index = SETTINGS.len() + 1;
         let kb_index = SETTINGS.len() + 2;
-        let max_index = kb_index;
+        let profile_index = SETTINGS.len() + 3;
+        let max_index = profile_index;
         match code {
             KeyCode::Char('j') | KeyCode::Down => {
                 if self.settings_index < max_index {
@@ -931,6 +1019,12 @@ impl App {
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 self.settings_index = self.settings_index.saturating_sub(1);
+            }
+            KeyCode::Char('h') | KeyCode::Left if self.settings_index == profile_index => {
+                self.cycle_settings_profile(false);
+            }
+            KeyCode::Char('l') | KeyCode::Right if self.settings_index == profile_index => {
+                self.cycle_settings_profile(true);
             }
             KeyCode::Char(' ') | KeyCode::Enter | KeyCode::Tab => {
                 if self.settings_index == preview_index {
@@ -951,6 +1045,10 @@ impl App {
                     self.save_settings();
                     self.show_keybindings = true;
                     self.keybindings_index = 0;
+                } else if self.settings_index == profile_index {
+                    self.show_settings = false;
+                    self.save_settings();
+                    self.open_settings_profile_manager();
                 } else {
                     self.toggle_setting(self.settings_index);
                 }
@@ -958,6 +1056,184 @@ impl App {
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.show_settings = false;
                 self.save_settings();
+                self.fire_deferred_settings_hooks();
+            }
+            _ => {}
+        }
+    }
+
+    /// Cycle through settings profiles (left/right on the profile row).
+    /// Uses deferred hooks since the user can't see messages while the overlay is open.
+    fn cycle_settings_profile(&mut self, forward: bool) {
+        if self.available_settings_profiles.is_empty() {
+            return;
+        }
+        let current_idx = self.available_settings_profiles.iter()
+            .position(|p| p.name == self.settings_profile_name)
+            .unwrap_or(0);
+        let new_idx = if forward {
+            (current_idx + 1) % self.available_settings_profiles.len()
+        } else {
+            (current_idx + self.available_settings_profiles.len() - 1)
+                % self.available_settings_profiles.len()
+        };
+        let profile = self.available_settings_profiles[new_idx].clone();
+        self.apply_settings_profile_deferred(&profile);
+    }
+
+    /// Apply a profile without firing expensive hooks (image re-rendering).
+    /// Hooks fire when the overlay closes (settings or profile manager Esc handler).
+    fn apply_settings_profile_deferred(&mut self, profile: &crate::settings_profile::SettingsProfile) {
+        profile.apply_to(self);
+        self.settings_profile_name = profile.name.clone();
+    }
+
+    /// Fire on_toggle hooks only for settings that changed since the overlay opened.
+    fn fire_deferred_settings_hooks(&mut self) {
+        if self.mouse_enabled != self.settings_mouse_snapshot {
+            self.pending_mouse_toggle = Some(self.mouse_enabled);
+        }
+    }
+
+    /// Open the settings profile manager overlay.
+    fn open_settings_profile_manager(&mut self) {
+        self.available_settings_profiles = crate::settings_profile::all_settings_profiles();
+        self.settings_profile_manager_index = self.available_settings_profiles.iter()
+            .position(|p| p.name == self.settings_profile_name)
+            .unwrap_or(0);
+        self.show_settings_profile_manager = true;
+        self.settings_profile_save_as = false;
+        self.settings_profile_save_as_input.clear();
+        // Don't overwrite settings_snapshot - keep the one from when /settings opened
+    }
+
+    /// Handle a key press while the settings profile manager is open.
+    pub fn handle_settings_profile_manager_key(&mut self, code: KeyCode) {
+        // Save-as text input mode
+        if self.settings_profile_save_as {
+            match code {
+                KeyCode::Enter => {
+                    let name = self.settings_profile_save_as_input.trim().to_string();
+                    if name.is_empty() {
+                        self.status_message = "Profile name cannot be empty".to_string();
+                    } else if crate::settings_profile::is_builtin(&name) {
+                        self.status_message = "Cannot overwrite built-in profile".to_string();
+                    } else {
+                        let profile = crate::settings_profile::SettingsProfile::from_app(self, name.clone());
+                        match crate::settings_profile::save_custom_profile(&profile) {
+                            Ok(()) => {
+                                self.settings_profile_name = name;
+                                self.available_settings_profiles = crate::settings_profile::all_settings_profiles();
+                                self.settings_profile_manager_index = self.available_settings_profiles.iter()
+                                    .position(|p| p.name == self.settings_profile_name)
+                                    .unwrap_or(0);
+                                self.save_settings();
+                                self.status_message = "Profile saved".to_string();
+                            }
+                            Err(e) => {
+                                self.status_message = format!("Save failed: {e}");
+                            }
+                        }
+                        self.settings_profile_save_as = false;
+                    }
+                }
+                KeyCode::Esc => {
+                    self.settings_profile_save_as = false;
+                }
+                KeyCode::Backspace => {
+                    self.settings_profile_save_as_input.pop();
+                }
+                KeyCode::Char(c) => {
+                    if self.settings_profile_save_as_input.len() < 30 {
+                        self.settings_profile_save_as_input.push(c);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // List navigation mode
+        match code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                if self.settings_profile_manager_index < self.available_settings_profiles.len().saturating_sub(1) {
+                    self.settings_profile_manager_index += 1;
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.settings_profile_manager_index = self.settings_profile_manager_index.saturating_sub(1);
+            }
+            KeyCode::Enter => {
+                // Load the selected profile (stay open for preview)
+                if let Some(profile) = self.available_settings_profiles.get(self.settings_profile_manager_index).cloned() {
+                    self.apply_settings_profile_deferred(&profile);
+                    self.save_settings();
+                    self.status_message = format!("Loaded profile: {}", profile.name);
+                }
+            }
+            KeyCode::Char('s') => {
+                // Save over current custom profile (only if custom and settings differ)
+                if let Some(profile) = self.available_settings_profiles.get(self.settings_profile_manager_index) {
+                    if crate::settings_profile::is_builtin(&profile.name) {
+                        return;
+                    }
+                    if profile.matches_app(self) {
+                        return;
+                    }
+                    let updated = crate::settings_profile::SettingsProfile::from_app(self, profile.name.clone());
+                    match crate::settings_profile::save_custom_profile(&updated) {
+                        Ok(()) => {
+                            self.settings_profile_name = updated.name.clone();
+                            self.available_settings_profiles = crate::settings_profile::all_settings_profiles();
+                            self.settings_profile_manager_index = self.available_settings_profiles.iter()
+                                .position(|p| p.name == self.settings_profile_name)
+                                .unwrap_or(0);
+                            self.save_settings();
+                            self.status_message = "Profile saved".to_string();
+                        }
+                        Err(e) => {
+                            self.status_message = format!("Save failed: {e}");
+                        }
+                    }
+                }
+            }
+            KeyCode::Char('S') => {
+                // Save-as: open name input
+                let has_changes = !self.available_settings_profiles.iter()
+                    .any(|p| p.name == self.settings_profile_name && p.matches_app(self));
+                if has_changes {
+                    self.settings_profile_save_as = true;
+                    self.settings_profile_save_as_input.clear();
+                }
+            }
+            KeyCode::Char('d') => {
+                // Delete custom profile
+                if let Some(profile) = self.available_settings_profiles.get(self.settings_profile_manager_index) {
+                    if crate::settings_profile::is_builtin(&profile.name) {
+                        return;
+                    }
+                    let name = profile.name.clone();
+                    match crate::settings_profile::delete_custom_profile(&name) {
+                        Ok(()) => {
+                            if self.settings_profile_name == name {
+                                self.settings_profile_name = "Default".to_string();
+                            }
+                            self.available_settings_profiles = crate::settings_profile::all_settings_profiles();
+                            if self.settings_profile_manager_index >= self.available_settings_profiles.len() {
+                                self.settings_profile_manager_index = self.available_settings_profiles.len().saturating_sub(1);
+                            }
+                            self.save_settings();
+                            self.status_message = format!("Deleted profile: {name}");
+                        }
+                        Err(e) => {
+                            self.status_message = format!("Delete failed: {e}");
+                        }
+                    }
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.show_settings_profile_manager = false;
+                self.fire_deferred_settings_hooks();
             }
             _ => {}
         }
@@ -2446,6 +2722,7 @@ impl App {
     }
 
     pub fn new(account: String, db: Database) -> Self {
+        let (image_render_tx, image_render_rx) = mpsc::channel();
         Self {
             conversations: HashMap::new(),
             conversation_order: Vec::new(),
@@ -2511,6 +2788,7 @@ impl App {
             incognito: false,
             has_more_messages: HashSet::new(),
             at_scroll_top: false,
+            date_separators: true,
             show_receipts: true,
             color_receipts: true,
             nerd_fonts: false,
@@ -2601,6 +2879,16 @@ impl App {
             kitty_transmitted: HashSet::new(),
             kitty_pending_transmits: Vec::new(),
             iterm2_crop_cache: HashMap::new(),
+            settings_profile_name: "Default".to_string(),
+            show_settings_profile_manager: false,
+            settings_profile_manager_index: 0,
+            available_settings_profiles: crate::settings_profile::all_settings_profiles(),
+            settings_profile_save_as: false,
+            settings_profile_save_as_input: String::new(),
+            settings_mouse_snapshot: true,
+            image_render_tx,
+            image_render_rx,
+            image_render_in_flight: HashSet::new(),
         }
     }
 
@@ -2625,11 +2913,10 @@ impl App {
                 }
             }
 
-            // Re-render image previews from stored paths
+            // Resolve image paths from stored messages (rendering is deferred to main loop)
             for msg in &mut conv.messages {
                 if msg.body.starts_with("[image:") {
                     let path_str = if let Some(uri_pos) = msg.body.find("file:///") {
-                        // Trim trailing ')' from new format: [image: label](file:///path)
                         let uri_slice = msg.body[uri_pos..].trim_end_matches(')');
                         Some(file_uri_to_path(uri_slice))
                     } else if let Some(arrow_pos) = msg.body.find(" -> ") {
@@ -2638,25 +2925,8 @@ impl App {
                         None
                     };
                     if let Some(p) = path_str {
-                        let path = Path::new(&p);
-                        if path.exists() {
-                            msg.image_path = Some(p.clone());
-                            if self.inline_images {
-                                msg.image_lines = image_render::render_image(path, 40);
-                            }
-                        }
-                    }
-                }
-
-                // Re-render link preview thumbnails from stored paths
-                if let Some(ref preview) = msg.preview {
-                    if self.show_link_previews && self.inline_images {
-                        if let Some(ref p) = preview.image_path {
-                            let path = Path::new(p);
-                            if path.exists() {
-                                msg.preview_image_lines = image_render::render_image(path, 30);
-                                msg.preview_image_path = Some(p.clone());
-                            }
+                        if Path::new(&p).exists() {
+                            msg.image_path = Some(p);
                         }
                     }
                 }
@@ -2722,7 +2992,7 @@ impl App {
 
         let prepend_count = new_msgs.len();
 
-        // Post-process: promote stale Sending → Sent, re-render images
+        // Post-process: promote stale Sending → Sent, resolve image paths
         let mut processed: Vec<DisplayMessage> = new_msgs.into_iter().map(|mut msg| {
             if msg.status == Some(MessageStatus::Sending) {
                 msg.status = Some(MessageStatus::Sent);
@@ -2737,23 +3007,8 @@ impl App {
                     None
                 };
                 if let Some(p) = path_str {
-                    let path = Path::new(&p);
-                    if path.exists() {
-                        msg.image_path = Some(p.clone());
-                        if self.inline_images {
-                            msg.image_lines = image_render::render_image(path, 40);
-                        }
-                    }
-                }
-            }
-            if let Some(ref preview) = msg.preview {
-                if self.show_link_previews && self.inline_images {
-                    if let Some(ref p) = preview.image_path {
-                        let path = Path::new(p);
-                        if path.exists() {
-                            msg.preview_image_lines = image_render::render_image(path, 30);
-                            msg.preview_image_path = Some(p.clone());
-                        }
+                    if Path::new(&p).exists() {
+                        msg.image_path = Some(p);
                     }
                 }
             }
@@ -3021,6 +3276,10 @@ impl App {
         }
         if self.show_search {
             self.handle_search_key(code);
+            return (true, None);
+        }
+        if self.show_settings_profile_manager {
+            self.handle_settings_profile_manager_key(code);
             return (true, None);
         }
         if self.show_theme_picker {
@@ -3682,13 +3941,9 @@ impl App {
                 .unwrap_or_default();
 
             if is_image {
-                let rendered = if self.inline_images {
-                    att.local_path
-                        .as_deref()
-                        .and_then(|p| image_render::render_image(Path::new(p), 40))
-                } else {
-                    None
-                };
+                let rendered = att.local_path
+                    .as_deref()
+                    .and_then(|p| image_render::render_image(Path::new(p), 40));
                 push_msg(
                     format!("[image: {label}]{path_info}"),
                     rendered,
@@ -5231,6 +5486,7 @@ impl App {
             InputAction::Settings => {
                 self.show_settings = true;
                 self.settings_index = 0;
+                self.settings_mouse_snapshot = self.mouse_enabled;
             }
             InputAction::Attach => {
                 self.open_file_browser();
@@ -5878,6 +6134,7 @@ impl App {
                 conv.unread = 0;
             }
             self.restore_scroll_position(target);
+
             self.update_status();
             return;
         }
@@ -5898,6 +6155,7 @@ impl App {
                 conv.unread = 0;
             }
             self.restore_scroll_position(&id);
+
             self.update_status();
             return;
         }
@@ -5937,6 +6195,7 @@ impl App {
             conv.unread = 0;
         }
         self.restore_scroll_position(&new_id);
+
         self.update_status();
     }
 
@@ -5964,6 +6223,7 @@ impl App {
             conv.unread = 0;
         }
         self.restore_scroll_position(&new_id);
+
         self.update_status();
     }
 
@@ -6115,6 +6375,7 @@ impl App {
             || self.show_message_request
             || self.show_theme_picker
             || self.show_keybindings
+            || self.show_settings_profile_manager
             || self.show_pin_duration
             || self.show_poll_vote
             || self.show_about

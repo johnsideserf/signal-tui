@@ -48,6 +48,10 @@ pub struct Config {
     #[serde(default)]
     pub native_images: bool,
 
+    /// Show date separator lines between messages from different days
+    #[serde(default = "default_true")]
+    pub date_separators: bool,
+
     /// Show delivery/read receipt status symbols on outgoing messages
     #[serde(default = "default_true")]
     pub show_receipts: bool,
@@ -84,6 +88,10 @@ pub struct Config {
     #[serde(default = "default_keybinding_profile")]
     pub keybinding_profile: String,
 
+    /// Settings profile name (matches a built-in or custom profile)
+    #[serde(default = "default_settings_profile")]
+    pub settings_profile: String,
+
     /// Signal TLS proxy URL passed through to signal-cli (e.g., "https://signal-proxy.example.com")
     #[serde(default)]
     pub proxy: String,
@@ -98,6 +106,10 @@ fn default_theme() -> String {
 }
 
 fn default_keybinding_profile() -> String {
+    "Default".to_string()
+}
+
+fn default_settings_profile() -> String {
     "Default".to_string()
 }
 
@@ -133,6 +145,7 @@ impl Default for Config {
             inline_images: true,
             show_link_previews: true,
             native_images: false,
+            date_separators: true,
             show_receipts: true,
             color_receipts: true,
             nerd_fonts: false,
@@ -142,6 +155,7 @@ impl Default for Config {
             sidebar_on_right: false,
             theme: default_theme(),
             keybinding_profile: default_keybinding_profile(),
+            settings_profile: default_settings_profile(),
             proxy: String::new(),
         }
     }

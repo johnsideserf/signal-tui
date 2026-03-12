@@ -6,6 +6,7 @@ mod image_render;
 mod input;
 mod keybindings;
 mod link;
+mod settings_profile;
 mod setup;
 mod signal;
 mod theme;
@@ -204,7 +205,7 @@ async fn run_main_flow(
     if config.needs_setup() || force_setup {
         match setup::run_setup(terminal, config, force_setup).await? {
             SetupResult::Completed(new_config) => {
-                *config = new_config;
+                *config = *new_config;
                 setup_handled_linking = true;
             }
             SetupResult::Skipped => {}
@@ -810,6 +811,7 @@ async fn run_app(
     app.show_link_previews = config.show_link_previews;
     app.native_images = config.native_images;
     app.incognito = incognito;
+    app.date_separators = config.date_separators;
     app.show_receipts = config.show_receipts;
     app.color_receipts = config.color_receipts;
     app.nerd_fonts = config.nerd_fonts;
@@ -824,6 +826,8 @@ async fn run_app(
     kb.apply_overrides(&overrides);
     app.keybindings = kb;
     app.available_kb_profiles = keybindings::all_profile_names();
+    app.settings_profile_name = config.settings_profile.clone();
+    app.available_settings_profiles = settings_profile::all_settings_profiles();
     app.load_from_db()?;
     app.expiring_msg_count = app.conversations.values()
         .flat_map(|c| &c.messages)
@@ -881,6 +885,12 @@ async fn run_app(
             }
             execute!(terminal.backend_mut(), EndSynchronizedUpdate)?;
             needs_redraw = false;
+        }
+
+        // Progressive image rendering (2 images per frame to avoid freezing)
+        // Progressive image rendering (renders a few cached images per frame)
+        if app.ensure_active_images() {
+            needs_redraw = true;
         }
 
         // Animate the loading spinner
@@ -1077,6 +1087,10 @@ async fn run_demo_app(
             }
             execute!(terminal.backend_mut(), EndSynchronizedUpdate)?;
             needs_redraw = false;
+        }
+
+        if app.ensure_active_images() {
+            needs_redraw = true;
         }
 
         let has_terminal_event = event::poll(POLL_TIMEOUT)?;
