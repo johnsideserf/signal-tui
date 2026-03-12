@@ -2311,6 +2311,7 @@ impl App {
                     let local_ts_ms = chrono::Utc::now().timestamp_millis();
                     self.show_forward = false;
                     self.status_message = format!("Forwarded to {name}");
+                    self.move_conversation_to_top(&conv_id);
                     return Some(SendRequest::Message {
                         recipient: conv_id,
                         body,
@@ -5364,6 +5365,7 @@ impl App {
                     self.scroll_offset = 0;
                     self.focused_msg_index = None;
                     self.reply_target = None;
+                    self.move_conversation_to_top(&conv_id);
                     return Some(SendRequest::Message {
                         recipient: conv_id,
                         body: wire_body,
