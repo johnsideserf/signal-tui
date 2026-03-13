@@ -2627,7 +2627,9 @@ impl App {
             pending_attachment: None,
             pending_paste_cleanups: HashMap::new(),
             paste_temp_path: {
-                let dir = std::env::temp_dir().join(format!("siggy-paste-{}", std::process::id()));
+                static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let dir = std::env::temp_dir().join(format!("siggy-paste-{}-{}", std::process::id(), unique));
                 // Best-effort: clean any stale files from a previous run with the same PID,
                 // then recreate. Errors here are non-fatal; handle_clipboard_image re-checks.
                 let _ = std::fs::remove_dir_all(&dir);
