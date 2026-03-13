@@ -15,6 +15,13 @@ use crate::keybindings::{self, BindingMode, KeyAction, KeyBindings};
 use crate::theme::{self, Theme};
 use crate::signal::types::{Contact, Group, IdentityInfo, LinkPreview, Mention, MessageStatus, PollData, PollOption, PollVote, Reaction, SignalEvent, SignalMessage, StyleType, TextStyle, TrustLevel};
 
+/// Sentinel lifetime for paste temp files awaiting send confirmation from signal-cli.
+/// If signal-cli never confirms, the file is deleted after this many seconds.
+pub const PASTE_CLEANUP_SENTINEL_SECS: u64 = 3600;
+
+/// How long after send confirmation to wait before deleting a paste temp file.
+const PASTE_CLEANUP_DELAY_SECS: u64 = 10;
+
 /// Find the byte position one character forward from `pos` in `buf`.
 fn next_char_pos(buf: &str, pos: usize) -> usize {
     if pos >= buf.len() { return buf.len(); }
@@ -444,6 +451,10 @@ pub struct App {
     pub pending_attachment: Option<PathBuf>,
     /// Directory for temporary clipboard paste files (PID-scoped to avoid conflicts)
     pub paste_temp_path: PathBuf,
+    /// Paste temp files pending deletion: rpc_id → (path, delete_after)
+    /// Populated when a paste attachment send is dispatched; deletion deferred 10s after
+    /// signal-cli confirms or fails the send, to avoid deleting before signal-cli reads the file.
+    pub pending_paste_cleanups: HashMap<String, (PathBuf, Instant)>,
     /// Reply target: (author_phone, body_snippet, timestamp_ms)
     pub reply_target: Option<(String, String, i64)>,
     /// Delete confirmation overlay visible
@@ -2819,6 +2830,7 @@ impl App {
             file_browser_filtered: Vec::new(),
             file_browser_error: None,
             pending_attachment: None,
+            pending_paste_cleanups: HashMap::new(),
             paste_temp_path: {
                 let dir = std::env::temp_dir().join(format!("siggy-paste-{}", std::process::id()));
                 // Best-effort: clean any stale files from a previous run with the same PID,
@@ -5052,6 +5064,13 @@ impl App {
     }
 
     fn handle_send_timestamp(&mut self, rpc_id: &str, server_ts: i64) {
+        // Schedule any paste temp file for deletion after the delay (signal-cli has confirmed send)
+        if let Some((path, _)) = self.pending_paste_cleanups.remove(rpc_id) {
+            self.pending_paste_cleanups.insert(
+                rpc_id.to_string(),
+                (path, Instant::now() + std::time::Duration::from_secs(PASTE_CLEANUP_DELAY_SECS)),
+            );
+        }
         if let Some((conv_id, local_ts)) = self.pending_sends.remove(rpc_id) {
             crate::debug_log::logf(format_args!(
                 "send confirmed: conv={} local_ts={local_ts} server_ts={server_ts}",
@@ -5088,6 +5107,13 @@ impl App {
     }
 
     fn handle_send_failed(&mut self, rpc_id: &str) {
+        // Schedule any paste temp file for deletion after the delay (signal-cli has finished with it)
+        if let Some((path, _)) = self.pending_paste_cleanups.remove(rpc_id) {
+            self.pending_paste_cleanups.insert(
+                rpc_id.to_string(),
+                (path, Instant::now() + std::time::Duration::from_secs(PASTE_CLEANUP_DELAY_SECS)),
+            );
+        }
         if let Some((conv_id, local_ts)) = self.pending_sends.remove(rpc_id) {
             let mut found = false;
             if let Some(conv) = self.conversations.get_mut(&conv_id) {
@@ -6463,6 +6489,19 @@ impl App {
         }
     }
 
+    /// Delete any paste temp files whose 10s delay has elapsed.
+    /// Called each tick from the main event loop.
+    pub fn cleanup_paste_files(&mut self) {
+        self.pending_paste_cleanups.retain(|_rpc_id, (path, delete_after)| {
+            if Instant::now() >= *delete_after {
+                let _ = std::fs::remove_file(path);
+                false
+            } else {
+                true
+            }
+        });
+    }
+
     // --- Mouse support ---
 
     /// Returns true if any overlay is currently visible (mouse events should be ignored).
@@ -7658,6 +7697,81 @@ mod tests {
             app.conversations[conv_id].messages[0].status,
             Some(MessageStatus::Failed)
         );
+    }
+
+    // --- Paste cleanup tests ---
+
+    #[rstest]
+    fn send_timestamp_resets_paste_cleanup_deadline(mut app: App) {
+        // Set up a sentinel entry (far-future deadline = awaiting confirmation)
+        let tmp = std::env::temp_dir().join("test-paste-dummy.png");
+        let sentinel = Instant::now() + std::time::Duration::from_secs(PASTE_CLEANUP_SENTINEL_SECS);
+        app.pending_paste_cleanups.insert("rpc-1".to_string(), (tmp.clone(), sentinel));
+
+        app.handle_signal_event(SignalEvent::SendTimestamp {
+            rpc_id: "rpc-1".to_string(),
+            server_ts: 0,
+        });
+
+        // Deadline should now be ~10s from now, well under the sentinel
+        let (_, deadline) = app.pending_paste_cleanups.get("rpc-1").expect("entry should still exist");
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(
+            remaining <= std::time::Duration::from_secs(PASTE_CLEANUP_DELAY_SECS),
+            "deadline should be reset to ~{PASTE_CLEANUP_DELAY_SECS}s, got {remaining:?}"
+        );
+    }
+
+    #[rstest]
+    fn send_failed_resets_paste_cleanup_deadline(mut app: App) {
+        let tmp = std::env::temp_dir().join("test-paste-dummy-fail.png");
+        let sentinel = Instant::now() + std::time::Duration::from_secs(PASTE_CLEANUP_SENTINEL_SECS);
+        app.pending_paste_cleanups.insert("rpc-2".to_string(), (tmp.clone(), sentinel));
+
+        app.handle_signal_event(SignalEvent::SendFailed {
+            rpc_id: "rpc-2".to_string(),
+        });
+
+        let (_, deadline) = app.pending_paste_cleanups.get("rpc-2").expect("entry should still exist");
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(
+            remaining <= std::time::Duration::from_secs(PASTE_CLEANUP_DELAY_SECS),
+            "deadline should be reset to ~{PASTE_CLEANUP_DELAY_SECS}s, got {remaining:?}"
+        );
+    }
+
+    #[rstest]
+    fn cleanup_paste_files_removes_file_after_deadline(mut app: App) {
+        // Create a real temp file
+        let tmp = std::env::temp_dir().join(format!("test-paste-cleanup-{}.png", std::process::id()));
+        std::fs::write(&tmp, b"fake image data").expect("write temp file");
+        assert!(tmp.exists());
+
+        // Insert with a deadline already in the past
+        let past = Instant::now() - std::time::Duration::from_secs(1);
+        app.pending_paste_cleanups.insert("rpc-3".to_string(), (tmp.clone(), past));
+
+        app.cleanup_paste_files();
+
+        assert!(!tmp.exists(), "temp file should have been deleted");
+        assert!(app.pending_paste_cleanups.is_empty(), "entry should be removed");
+    }
+
+    #[rstest]
+    fn cleanup_paste_files_keeps_file_before_deadline(mut app: App) {
+        let tmp = std::env::temp_dir().join(format!("test-paste-keep-{}.png", std::process::id()));
+        std::fs::write(&tmp, b"fake image data").expect("write temp file");
+
+        // Insert with a future deadline
+        let future = Instant::now() + std::time::Duration::from_secs(60);
+        app.pending_paste_cleanups.insert("rpc-4".to_string(), (tmp.clone(), future));
+
+        app.cleanup_paste_files();
+
+        // File should still exist; clean it up manually
+        assert!(tmp.exists(), "temp file should not have been deleted yet");
+        let _ = std::fs::remove_file(&tmp);
+        assert!(!app.pending_paste_cleanups.is_empty(), "entry should still be present");
     }
 
     #[rstest]

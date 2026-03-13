@@ -601,16 +601,28 @@ async fn dispatch_send(
                 Ok(rpc_id) => {
                     debug_log::logf(format_args!("send: to={} ts={local_ts_ms}", debug_log::mask_phone(&recipient)));
                     app.pending_sends
-                        .insert(rpc_id, (recipient.to_string(), local_ts_ms));
+                        .insert(rpc_id.clone(), (recipient.to_string(), local_ts_ms));
+                    // Register any paste temp file for deferred deletion. The actual delete is
+                    // triggered after send confirmation; this sentinel keeps it alive until then.
+                    // Only one paste attachment per send is expected; break after the first match.
+                    for path in &attachments {
+                        if path.starts_with(&app.paste_temp_path) {
+                            let sentinel = Instant::now()
+                                + Duration::from_secs(app::PASTE_CLEANUP_SENTINEL_SECS);
+                            app.pending_paste_cleanups
+                                .insert(rpc_id.clone(), (path.clone(), sentinel));
+                            break;
+                        }
+                    }
                 }
                 Err(e) => {
                     app.status_message = format!("send error: {e}");
-                }
-            }
-            // Clean up any temp paste files after signal-cli has read them
-            for path in &attachments {
-                if path.starts_with(&app.paste_temp_path) {
-                    let _ = std::fs::remove_file(path);
+                    // RPC failed to send — delete temp file immediately (signal-cli never saw it)
+                    for path in &attachments {
+                        if path.starts_with(&app.paste_temp_path) {
+                            let _ = std::fs::remove_file(path);
+                        }
+                    }
                 }
             }
         }
@@ -1052,6 +1064,9 @@ async fn run_app(
 
         // Auto-clear clipboard after timeout
         app.check_clipboard_clear();
+
+        // Delete paste temp files that have passed their 10s post-send delay
+        app.cleanup_paste_files();
 
         // Dynamic mouse capture toggle from settings
         if let Some(enabled) = app.pending_mouse_toggle.take() {
