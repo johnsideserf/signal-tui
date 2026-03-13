@@ -1,5 +1,15 @@
 # Installation
 
+## Homebrew (macOS)
+
+```sh
+brew tap johnsideserf/siggy
+brew install siggy
+```
+
+Pre-built binaries for Apple Silicon and Intel Macs. The tap is automatically
+updated on each release.
+
 ## From crates.io
 
 Requires **Rust 1.70+**.

@@ -18,6 +18,13 @@ A terminal-based Signal messenger client with an IRC aesthetic. Wraps [signal-cl
 
 ## Install
 
+### Homebrew (macOS)
+
+```sh
+brew tap johnsideserf/siggy
+brew install siggy
+```
+
 ### Pre-built binaries
 
 Download the latest release for your platform from [Releases](https://github.com/johnsideserf/siggy/releases).
