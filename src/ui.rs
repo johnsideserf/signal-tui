@@ -4137,44 +4137,14 @@ mod snapshot_tests {
     }
 
     // --- Phase 2: Message features ---
-
-    #[test]
-    fn test_quote_replies() {
-        // Alice conversation has a quoted reply at message index 7
-        let mut app = demo_app();
-        let output = render_to_string(&mut app, 100, 30);
-        insta::assert_snapshot!(output);
-    }
-
-    #[test]
-    fn test_link_preview() {
-        // Alice's farmer's market link preview renders title/description
-        let mut app = demo_app();
-        let output = render_to_string(&mut app, 100, 30);
-        insta::assert_snapshot!(output);
-    }
-
-    #[test]
-    fn test_edited_message() {
-        // Alice conversation has an edited message - verify "(edited)" label
-        let mut app = demo_app();
-        let output = render_to_string(&mut app, 100, 30);
-        insta::assert_snapshot!(output);
-    }
+    // Note: quote replies, link previews, edited messages, and reactions are all
+    // covered by test_chat_messages (Alice conversation contains all of these).
 
     #[test]
     fn test_styled_text() {
         // Bob conversation: bold and monospace styled text
         let mut app = demo_app();
         app.active_conversation = Some("+15550002222".to_string());
-        let output = render_to_string(&mut app, 100, 30);
-        insta::assert_snapshot!(output);
-    }
-
-    #[test]
-    fn test_reactions() {
-        // Alice conversation: messages with thumbs up, heart, party emoji reactions
-        let mut app = demo_app();
         let output = render_to_string(&mut app, 100, 30);
         insta::assert_snapshot!(output);
     }
