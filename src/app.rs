@@ -2409,19 +2409,8 @@ impl App {
     /// Handle a key press while the search overlay is open.
     pub fn handle_search_key(&mut self, code: KeyCode) {
         let active = self.active_conversation.as_deref().map(str::to_owned);
-        match self.search.handle_key(code, active.as_deref(), &self.db) {
-            SearchAction::Select { conv_id, timestamp_ms, status } => {
-                self.join_conversation(&conv_id);
-                self.jump_to_message_timestamp(timestamp_ms);
-                if let Some(msg) = status {
-                    self.status_message = msg;
-                }
-            }
-            SearchAction::Status(msg) => {
-                self.status_message = msg;
-            }
-            SearchAction::None => {}
-        }
+        let action = self.search.handle_key(code, active.as_deref(), &self.db);
+        self.dispatch_search_action(action);
     }
 
     /// Jump to a message by its timestamp_ms in the active conversation.
@@ -2454,8 +2443,15 @@ impl App {
     /// Jump to the next/previous search result in the active conversation.
     fn jump_to_search_result(&mut self, forward: bool) {
         let active = self.active_conversation.as_deref();
-        match self.search.jump_to_result(forward, active) {
-            SearchAction::Select { conv_id: _, timestamp_ms, status } => {
+        let action = self.search.jump_to_result(forward, active);
+        self.dispatch_search_action(action);
+    }
+
+    /// Dispatch a `SearchAction` returned by `SearchState` methods.
+    fn dispatch_search_action(&mut self, action: SearchAction) {
+        match action {
+            SearchAction::Select { conv_id, timestamp_ms, status } => {
+                self.join_conversation(&conv_id);
                 self.jump_to_message_timestamp(timestamp_ms);
                 if let Some(msg) = status {
                     self.status_message = msg;
@@ -5334,10 +5330,7 @@ impl App {
                 self.open_file_browser();
             }
             InputAction::Search(query) => {
-                self.search.query = query;
-                self.search.index = 0;
-                self.search.run(self.active_conversation.as_deref(), &self.db);
-                self.search.visible = true;
+                self.search.open(query, self.active_conversation.as_deref(), &self.db);
             }
             InputAction::Contacts => {
                 self.show_contacts = true;
@@ -6477,18 +6470,24 @@ impl App {
     /// Populate the app with demo conversations for `--demo` mode and snapshot tests.
     /// `base_date` is used for deterministic timestamps instead of `Utc::now()`.
     pub(crate) fn populate_demo_data(&mut self, base_date: chrono::NaiveDate) {
-        use chrono::{TimeZone, Utc};
+        use chrono::{Local, TimeZone};
         use crate::signal::types::{
             Group, LinkPreview, MessageStatus, PollData, PollOption, PollVote, Reaction, StyleType,
         };
 
         let today = base_date;
-        let ts = |hour: u32, min: u32| -> chrono::DateTime<Utc> {
-            Utc.from_utc_datetime(
-                &today
-                    .and_hms_opt(hour, min, 0)
-                    .unwrap_or_else(|| today.and_hms_opt(12, 0, 0).unwrap()),
-            )
+        // Build timestamps via the local timezone so that format_time() (which
+        // converts to Local) always displays the intended hour:minute values,
+        // regardless of which timezone the machine is in.
+        let ts = |hour: u32, min: u32| -> chrono::DateTime<chrono::Utc> {
+            let naive = today
+                .and_hms_opt(hour, min, 0)
+                .unwrap_or_else(|| today.and_hms_opt(12, 0, 0).unwrap());
+            Local
+                .from_local_datetime(&naive)
+                .single()
+                .expect("ambiguous or invalid local time in demo data")
+                .with_timezone(&chrono::Utc)
         };
 
         let dm = |sender: &str, time: chrono::DateTime<Utc>, body: &str| -> DisplayMessage {

@@ -36,6 +36,14 @@ pub struct SearchState {
 }
 
 impl SearchState {
+    /// Open the search overlay with an initial query.
+    pub fn open(&mut self, query: String, active_conversation: Option<&str>, db: &Database) {
+        self.query = query;
+        self.index = 0;
+        self.run(active_conversation, db);
+        self.visible = true;
+    }
+
     /// Handle a key press while the search overlay is open.
     pub fn handle_key(
         &mut self,
