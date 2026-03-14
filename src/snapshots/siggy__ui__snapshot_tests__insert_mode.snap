@@ -3,9 +3,9 @@ source: src/ui.rs
 expression: insert_output
 ---
  Chats               │╭ Alice ─────────────────────────────────────────────────────────────────────╮
-  ? +15550007777     ││[08:00] <Alice> Good morning! How's your day going?                         │
-  • ##Family         ││    👍  1                                                                    │
-  • Carol            ││● [08:05] <you> Just getting started, coffee in hand                        │
+  ? +15550007777 (1) ││[08:00] <Alice> Good morning! How's your day going?                         │
+  • ##Family (2)     ││    👍  1                                                                    │
+  • Carol (1)        ││● [08:05] <you> Just getting started, coffee in hand                        │
     ##Rust Devs      ││    ❤️  1                                                                    │
     Bob              ││[08:10] <Alice> Nice! I've been up since 6, went for a run                  │
 ▸   Alice            ││● [08:15] <you> Impressive. I can barely get out of bed before 7            │

@@ -643,6 +643,13 @@ fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
             };
             spans.push(Span::styled(name, name_style));
 
+            if has_unread && !is_active {
+                spans.push(Span::styled(
+                    format!(" ({})", conv.unread),
+                    Style::default().fg(theme.warning),
+                ));
+            }
+
             if is_muted {
                 spans.push(Span::styled(" ~", Style::default().fg(theme.fg_muted)));
             }

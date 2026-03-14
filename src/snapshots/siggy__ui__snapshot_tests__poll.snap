@@ -3,9 +3,9 @@ source: src/ui.rs
 expression: output
 ---
  Chats               │╭ ##Rust Devs ───────────────────────────────────────────────────────────────╮
-  ? +15550007777     ││📌  Alice: Has anyone tried the new async trait syntax?                      │
-  • ##Family         ││[10:30] <Alice> (pinned) Has anyone tried the new async trait syntax?       │
-  • Carol            ││    📌  1                                                                    │
+  ? +15550007777 (1) ││📌  Alice: Has anyone tried the new async trait syntax?                      │
+  • ##Family (2)     ││[10:30] <Alice> (pinned) Has anyone tried the new async trait syntax?       │
+  • Carol (1)        ││    📌  1                                                                    │
 ▸   ##Rust Devs      ││[10:32] <Bob> Yeah, it's so much cleaner than the pin-based approach        │
     Bob              ││[10:35] <Dave> I'm still wrapping my head around it                         │
     Alice            ││● [10:40] <you> The desugaring docs helped me a lot                         │

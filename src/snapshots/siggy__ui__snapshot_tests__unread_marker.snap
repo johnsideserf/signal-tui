@@ -3,9 +3,9 @@ source: src/ui.rs
 expression: output
 ---
  Chats               │╭ ##Family ──────────────────────────────────────────────────────────────────╮
-  ? +15550007777     ││[12:00] <Mom> Dinner at our place Sunday?                                   │
+  ? +15550007777 (1) ││[12:00] <Mom> Dinner at our place Sunday?                                   │
 ▸   ##Family         ││[12:05] <Dad> I'll fire up the grill                                        │
-  • Carol            ││● [12:10] <you> Count me in!                                                │
+  • Carol (1)        ││● [12:10] <you> Count me in!                                                │
     ##Rust Devs      ││    ❤️  2                                                                    │
     Bob              ││─────────────────────────────── new messages ───────────────────────────────│
     Alice            ││[13:30] <Mom> Great! Bring dessert if you can                               │

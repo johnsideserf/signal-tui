@@ -3,9 +3,9 @@ source: src/ui.rs
 expression: output
 ---
  Chats               │╭ Alice ─────────────────────────────────────────────────────────────────────╮
-  ? +15550007777     ││╭ Help ──────────────────────────────────────────────╮                      │
-  • ##Family         │││  Commands                                          │                      │
-  • Carol            │││  /join <name>        Switch to a conversation      │                      │
+  ? +15550007777 (1) ││╭ Help ──────────────────────────────────────────────╮                      │
+  • ##Family (2)     │││  Commands                                          │                      │
+  • Carol (1)        │││  /join <name>        Switch to a conversation      │                      │
     ##Rust Devs      │││  /part               Leave current conversation    │                      │
     Bob              │││  /attach             Attach a file                 │ run                  │
 ▸   Alice            │││  /search <query>     Search messages               │d before 7            │

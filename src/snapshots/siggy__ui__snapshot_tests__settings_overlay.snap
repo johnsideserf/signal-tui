@@ -3,9 +3,9 @@ source: src/ui.rs
 expression: output
 ---
  Chats               │╭ Alice ─────────────────────────────────────────────────────────────────────╮
-  ? +15550007777     ││[08:00] <Alice> Good morning! How's your day going?                         │
-  • ##Family         ││    👍  1                                                                    │
-  • Carol            ││● ╭ Settings ──────────────────────────────────────╮                        │
+  ? +15550007777 (1) ││[08:00] <Alice> Good morning! How's your day going?                         │
+  • ##Family (2)     ││    👍  1                                                                    │
+  • Carol (1)        ││● ╭ Settings ──────────────────────────────────────╮                        │
     ##Rust Devs      ││  │  [x] Direct message notifications              │                        │
     Bob              ││[0│  [x] Group message notifications               │ a run                  │
 ▸   Alice            ││● │  [ ] Desktop notifications                     │bed before 7            │

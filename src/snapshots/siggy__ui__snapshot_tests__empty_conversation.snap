@@ -3,9 +3,9 @@ source: src/ui.rs
 expression: output
 ---
  Chats               │╭ Empty ─────────────────────────────────────────────────────────────────────╮
-  ? +15550007777     ││                                                                            │
-  • ##Family         ││                                                                            │
-  • Carol            ││                                                                            │
+  ? +15550007777 (1) ││                                                                            │
+  • ##Family (2)     ││                                                                            │
+  • Carol (1)        ││                                                                            │
     ##Rust Devs      ││                                                                            │
     Bob              ││                                                                            │
     Alice            ││                                                                            │

@@ -3,9 +3,9 @@ source: src/ui.rs
 expression: output
 ---
  Chats               │╭ siggy ─────────────────────────────────────────────────────────────────────╮
-  ? +15550007777     ││                                                                            │
-  • ##Family         ││  Welcome to siggy                                                          │
-  • Carol            ││                                                                            │
+  ? +15550007777 (1) ││                                                                            │
+  • ##Family (2)     ││  Welcome to siggy                                                          │
+  • Carol (1)        ││                                                                            │
     ##Rust Devs      ││  Getting started                                                           │
     Bob              ││  Tab / Shift+Tab    cycle through conversations                            │
     Alice            ││  /join <contact>    open a conversation by name or number                  │
