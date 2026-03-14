@@ -64,6 +64,10 @@ pub struct Config {
     #[serde(default)]
     pub nerd_fonts: bool,
 
+    /// Convert emoji to text emoticons/shortcodes in message display
+    #[serde(default)]
+    pub emoji_to_text: bool,
+
     /// Show emoji reactions on messages
     #[serde(default = "default_true")]
     pub show_reactions: bool,
@@ -153,6 +157,7 @@ impl Default for Config {
             show_receipts: true,
             color_receipts: true,
             nerd_fonts: false,
+            emoji_to_text: false,
             show_reactions: true,
             reaction_verbose: false,
             send_read_receipts: true,

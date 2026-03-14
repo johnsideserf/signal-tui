@@ -36,6 +36,73 @@ const GROUP_MEMBER_MAX_VISIBLE: usize = 15;
 const ABOUT_POPUP_WIDTH: u16 = 50;
 const PROFILE_POPUP_WIDTH: u16 = 50;
 
+/// Convert emoji in a string to text emoticons or :shortcodes:.
+/// Common emoji get classic emoticons (e.g. :) <3), others get :shortcode: format.
+fn emoji_to_text(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        // Try to match emoji starting at this character
+        // Build a candidate string (emoji can be multi-char with ZWJ sequences)
+        let mut candidate = String::new();
+        candidate.push(c);
+        // Consume variation selectors and ZWJ sequences
+        while let Some(&next) = chars.peek() {
+            if next == '\u{fe0f}' || next == '\u{200d}' || next == '\u{20e3}'
+                || ('\u{1f3fb}'..='\u{1f3ff}').contains(&next)
+            {
+                candidate.push(chars.next().unwrap());
+            } else if next.is_ascii() {
+                break;
+            } else if emojis::get(&format!("{candidate}{next}")).is_some() {
+                candidate.push(chars.next().unwrap());
+            } else {
+                break;
+            }
+        }
+        if let Some(emoji) = emojis::get(&candidate) {
+            // Check for common emoticon mapping first
+            let text = match emoji.as_str() {
+                "\u{1f642}" | "\u{1f60a}" | "\u{263a}\u{fe0f}" => ":)",
+                "\u{1f600}" | "\u{1f603}" | "\u{1f604}" => ":D",
+                "\u{1f601}" => ":D",
+                "\u{1f606}" => "XD",
+                "\u{1f609}" => ";)",
+                "\u{1f61e}" | "\u{2639}\u{fe0f}" | "\u{1f641}" => ":(",
+                "\u{1f622}" => ":'(",
+                "\u{1f62d}" => ":'(",
+                "\u{1f602}" => "XD",
+                "\u{1f923}" => "XD",
+                "\u{1f60d}" => "<3_<3",
+                "\u{2764}\u{fe0f}" | "\u{2764}" => "<3",
+                "\u{1f495}" | "\u{1f496}" | "\u{1f497}" | "\u{1f498}" => "<3",
+                "\u{1f44d}" | "\u{1f44d}\u{1f3fb}" | "\u{1f44d}\u{1f3fc}" | "\u{1f44d}\u{1f3fd}" | "\u{1f44d}\u{1f3fe}" | "\u{1f44d}\u{1f3ff}" => "+1",
+                "\u{1f44e}" => "-1",
+                "\u{1f61b}" | "\u{1f61c}" | "\u{1f61d}" => ":P",
+                "\u{1f610}" | "\u{1f611}" => ":|",
+                "\u{1f914}" => ":?",
+                "\u{1f62e}" | "\u{1f632}" => ":O",
+                "\u{1f615}" => ":/",
+                _ => {
+                    // Fall back to :shortcode:
+                    if let Some(sc) = emoji.shortcode() {
+                        result.push(':');
+                        result.push_str(sc);
+                        result.push(':');
+                    } else {
+                        result.push_str(&candidate);
+                    }
+                    continue;
+                }
+            };
+            result.push_str(text);
+        } else {
+            result.push_str(&candidate);
+        }
+    }
+    result
+}
+
 /// Map a MessageStatus to its display symbol and color.
 pub(crate) fn status_symbol(status: MessageStatus, nerd_fonts: bool, color: bool, theme: &Theme) -> (&'static str, Color) {
     let (unicode_sym, nerd_sym, colored) = match status {
@@ -901,15 +968,17 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         }
 
         if msg.is_system {
+            let body = if app.emoji_to_text { emoji_to_text(&msg.body) } else { msg.body.clone() };
             lines.push(Line::from(Span::styled(
-                format!("  {}", msg.body),
+                format!("  {body}"),
                 Style::default().fg(theme.system_msg),
             )));
             line_msg_idx.push(Some(msg_index));
         } else {
             // Render quoted reply line above message
             if let Some(ref quote) = msg.quote {
-                let quote_body = truncate(&quote.body, 50);
+                let raw_body = if app.emoji_to_text { emoji_to_text(&quote.body) } else { quote.body.clone() };
+                let quote_body = truncate(&raw_body, 50);
                 lines.push(Line::from(vec![
                     Span::styled("  \u{256D} ", Style::default().fg(theme.quote)),
                     Span::styled(
@@ -990,7 +1059,13 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     app.link_url_map.insert(display_text, url);
                 }
                 spans.push(Span::raw(" ".to_string()));
-                spans.extend(body_spans);
+                if app.emoji_to_text {
+                    spans.extend(body_spans.into_iter().map(|s| {
+                        Span::styled(emoji_to_text(&s.content), s.style)
+                    }));
+                } else {
+                    spans.extend(body_spans);
+                }
             }
 
             lines.push(Line::from(spans));
@@ -1079,7 +1154,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 
             // Render reaction summary line (skip for deleted or when reactions hidden)
             if app.show_reactions && !msg.is_deleted && !msg.reactions.is_empty() {
-                lines.push(build_reaction_summary(&msg.reactions, app.reaction_verbose, theme));
+                lines.push(build_reaction_summary(&msg.reactions, app.reaction_verbose, app.emoji_to_text, theme));
                 line_msg_idx.push(Some(msg_index));
             }
         }
@@ -1323,7 +1398,10 @@ fn patch_kitty_placeholders(frame: &mut Frame, app: &mut App) {
 }
 
 /// Build a reaction summary line like "    👍 2  ❤️ 1  😂 1"
-pub(crate) fn build_reaction_summary(reactions: &[Reaction], verbose: bool, theme: &Theme) -> Line<'static> {
+pub(crate) fn build_reaction_summary(reactions: &[Reaction], verbose: bool, convert_emoji: bool, theme: &Theme) -> Line<'static> {
+    let display = |emoji: &str| -> String {
+        if convert_emoji { emoji_to_text(emoji) } else { emoji.to_string() }
+    };
     if verbose {
         // Verbose: group by emoji, show sender names
         let mut grouped: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
@@ -1332,7 +1410,7 @@ pub(crate) fn build_reaction_summary(reactions: &[Reaction], verbose: bool, them
         }
         let mut spans = vec![Span::raw("    ".to_string())];
         for (emoji, senders) in &grouped {
-            spans.push(Span::raw(format!("{emoji} ")));
+            spans.push(Span::raw(format!("{} ", display(emoji))));
             spans.push(Span::styled(
                 senders.join(", "),
                 Style::default().fg(theme.fg_muted),
@@ -1348,7 +1426,7 @@ pub(crate) fn build_reaction_summary(reactions: &[Reaction], verbose: bool, them
         }
         let mut spans = vec![Span::raw("    ".to_string())];
         for (emoji, count) in &counts {
-            spans.push(Span::raw(emoji.clone()));
+            spans.push(Span::raw(display(emoji)));
             spans.push(Span::styled(
                 format!(" {count}  "),
                 Style::default().fg(theme.fg_muted),
@@ -3937,7 +4015,7 @@ mod tests {
             Reaction { emoji: "\u{1f44d}".to_string(), sender: "Alice".to_string() },
             Reaction { emoji: "\u{1f44d}".to_string(), sender: "Bob".to_string() },
         ];
-        let line = build_reaction_summary(&reactions, false, &theme);
+        let line = build_reaction_summary(&reactions, false, false, &theme);
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert!(text.contains("2"), "expected count '2' in: {text}");
     }
@@ -3948,7 +4026,7 @@ mod tests {
         let reactions = vec![
             Reaction { emoji: "\u{2764}".to_string(), sender: "Alice".to_string() },
         ];
-        let line = build_reaction_summary(&reactions, true, &theme);
+        let line = build_reaction_summary(&reactions, true, false, &theme);
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert!(text.contains("Alice"), "expected sender name in: {text}");
     }
@@ -3956,7 +4034,7 @@ mod tests {
     #[test]
     fn reaction_summary_empty() {
         let theme = default_theme();
-        let line = build_reaction_summary(&[], false, &theme);
+        let line = build_reaction_summary(&[], false, false, &theme);
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert_eq!(text.trim(), "");
     }
