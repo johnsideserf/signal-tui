@@ -1915,6 +1915,7 @@ impl App {
     }
 
     /// Build a SendRequest::Reaction from the current picker selection and focused message.
+    /// If the user already reacted with the same emoji, removes it instead (toggle behavior).
     fn prepare_reaction_send(&mut self) -> Option<SendRequest> {
         let emoji = QUICK_REACTIONS.get(self.reaction_picker_index)?.to_string();
         let conv_id = self.active_conversation.clone()?;
@@ -1938,26 +1939,40 @@ impl App {
                 .unwrap_or_else(|| msg.sender.clone())
         };
 
+        // Check if user already reacted with the same emoji (toggle → remove)
+        let is_remove = msg.reactions.iter().any(|r| r.sender == "you" && r.emoji == emoji);
+
         // Optimistic local update
         if let Some(conv) = self.conversations.get_mut(&conv_id) {
             if let Some(msg) = conv.messages.get_mut(index) {
-                // One reaction per user — replace or push
-                if let Some(existing) = msg.reactions.iter_mut().find(|r| r.sender == "you") {
-                    existing.emoji = emoji.clone();
+                if is_remove {
+                    msg.reactions.retain(|r| !(r.sender == "you" && r.emoji == emoji));
                 } else {
-                    msg.reactions.push(Reaction {
-                        emoji: emoji.clone(),
-                        sender: "you".to_string(),
-                    });
+                    // One reaction per user — replace or push
+                    if let Some(existing) = msg.reactions.iter_mut().find(|r| r.sender == "you") {
+                        existing.emoji = emoji.clone();
+                    } else {
+                        msg.reactions.push(Reaction {
+                            emoji: emoji.clone(),
+                            sender: "you".to_string(),
+                        });
+                    }
                 }
             }
         }
 
         // Persist to DB
-        self.db_warn_visible(
-            self.db.upsert_reaction(&conv_id, target_timestamp, &target_author, "you", &emoji),
-            "upsert_reaction",
-        );
+        if is_remove {
+            self.db_warn_visible(
+                self.db.remove_reaction(&conv_id, target_timestamp, &target_author, "you"),
+                "remove_reaction",
+            );
+        } else {
+            self.db_warn_visible(
+                self.db.upsert_reaction(&conv_id, target_timestamp, &target_author, "you", &emoji),
+                "upsert_reaction",
+            );
+        }
 
         Some(SendRequest::Reaction {
             conv_id,
@@ -1965,7 +1980,7 @@ impl App {
             is_group,
             target_author,
             target_timestamp,
-            remove: false,
+            remove: is_remove,
         })
     }
 
