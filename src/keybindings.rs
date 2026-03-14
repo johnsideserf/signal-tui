@@ -55,6 +55,8 @@ pub enum KeyAction {
     PrevSearchResult,
     OpenActionMenu,
     PinMessage,
+    JumpToQuote,
+    JumpBack,
     SidebarSearch,
     // Insert
     ExitInsert,
@@ -470,6 +472,8 @@ pub const NORMAL_ACTIONS: &[KeyAction] = &[
     KeyAction::PrevSearchResult,
     KeyAction::OpenActionMenu,
     KeyAction::PinMessage,
+    KeyAction::JumpToQuote,
+    KeyAction::JumpBack,
     KeyAction::SidebarSearch,
 ];
 
@@ -524,6 +528,8 @@ pub fn action_label(action: KeyAction) -> &'static str {
         KeyAction::PrevSearchResult => "Previous search match",
         KeyAction::OpenActionMenu => "Action menu",
         KeyAction::PinMessage => "Pin/unpin message",
+        KeyAction::JumpToQuote => "Jump to quoted message",
+        KeyAction::JumpBack => "Jump back",
         KeyAction::SidebarSearch => "Filter sidebar",
         KeyAction::ExitInsert => "Normal mode",
         KeyAction::SendMessage => "Send message",
@@ -594,6 +600,8 @@ pub fn default_profile() -> KeyBindings {
     bind(&mut normal, KeyModifiers::NONE, KeyCode::Char('N'), KeyAction::PrevSearchResult);
     bind(&mut normal, KeyModifiers::NONE, KeyCode::Enter, KeyAction::OpenActionMenu);
     bind(&mut normal, KeyModifiers::NONE, KeyCode::Char('p'), KeyAction::PinMessage);
+    bind(&mut normal, KeyModifiers::NONE, KeyCode::Char('Q'), KeyAction::JumpToQuote);
+    bind(&mut normal, KeyModifiers::CONTROL, KeyCode::Char('o'), KeyAction::JumpBack);
     bind(&mut normal, KeyModifiers::NONE, KeyCode::Char('s'), KeyAction::SidebarSearch);
 
     // --- Insert ---
@@ -656,6 +664,8 @@ pub fn emacs_profile() -> KeyBindings {
     bind(&mut insert, KeyModifiers::ALT, KeyCode::Char('n'), KeyAction::NextSearchResult);
     bind(&mut insert, KeyModifiers::ALT, KeyCode::Char('p'), KeyAction::PrevSearchResult);
     bind(&mut insert, KeyModifiers::ALT, KeyCode::Char('m'), KeyAction::OpenActionMenu);
+    bind(&mut insert, KeyModifiers::ALT, KeyCode::Char('Q'), KeyAction::JumpToQuote);
+    bind(&mut insert, KeyModifiers::CONTROL, KeyCode::Char('o'), KeyAction::JumpBack);
     bind(&mut global, KeyModifiers::ALT, KeyCode::Char('s'), KeyAction::SidebarSearch);
 
     KeyBindings {
@@ -702,6 +712,8 @@ pub fn minimal_profile() -> KeyBindings {
     bind(&mut insert, KeyModifiers::NONE, KeyCode::F(6), KeyAction::DeleteMessage);
     bind(&mut insert, KeyModifiers::NONE, KeyCode::F(7), KeyAction::ForwardMessage);
     bind(&mut insert, KeyModifiers::NONE, KeyCode::F(8), KeyAction::OpenActionMenu);
+    bind(&mut insert, KeyModifiers::NONE, KeyCode::F(9), KeyAction::JumpToQuote);
+    bind(&mut insert, KeyModifiers::NONE, KeyCode::F(10), KeyAction::JumpBack);
     bind(&mut global, KeyModifiers::CONTROL, KeyCode::Char('s'), KeyAction::SidebarSearch);
 
     KeyBindings {

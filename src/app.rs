@@ -441,6 +441,8 @@ pub struct App {
     pub focused_message_time: Option<DateTime<Utc>>,
     /// Index of the focused message in the active conversation (set during draw)
     pub focused_msg_index: Option<usize>,
+    /// Jump-back stack: saved (scroll_offset, focused_msg_index) before quote jumps
+    pub jump_stack: Vec<(usize, Option<usize>)>,
     /// Reaction picker overlay visible
     pub show_reaction_picker: bool,
     /// Selected index in the reaction picker
@@ -2440,6 +2442,49 @@ impl App {
         }
     }
 
+    /// Jump to the original message quoted by the currently focused message.
+    fn jump_to_quote(&mut self) {
+        let msg = match self.selected_message() {
+            Some(m) => m,
+            None => return,
+        };
+        let quote_ts = match &msg.quote {
+            Some(q) => q.timestamp_ms,
+            None => {
+                self.status_message = "No quote on this message".to_string();
+                return;
+            }
+        };
+
+        // Save current position for jump-back
+        self.jump_stack.push((self.scroll_offset, self.focused_msg_index));
+
+        // Try to find the quoted message
+        let conv_id = match self.active_conversation.as_ref() {
+            Some(id) => id.clone(),
+            None => return,
+        };
+        let found = self.conversations.get(&conv_id)
+            .and_then(|c| c.find_msg_idx(quote_ts))
+            .is_some();
+
+        if found {
+            self.jump_to_message_timestamp(quote_ts);
+        } else {
+            // Pop the saved position since we didn't actually jump
+            self.jump_stack.pop();
+            self.status_message = "Quoted message not in loaded history".to_string();
+        }
+    }
+
+    /// Jump back to the position before the last quote jump.
+    fn jump_back(&mut self) {
+        if let Some((offset, index)) = self.jump_stack.pop() {
+            self.scroll_offset = offset;
+            self.focused_msg_index = index;
+        }
+    }
+
     /// Jump to the next/previous search result in the active conversation.
     fn jump_to_search_result(&mut self, forward: bool) {
         let active = self.active_conversation.as_deref();
@@ -2610,6 +2655,7 @@ impl App {
             pending_receipts: Vec::new(),
             focused_message_time: None,
             focused_msg_index: None,
+            jump_stack: Vec::new(),
             show_reaction_picker: false,
             reaction_picker_index: 0,
             reaction_verbose: false,
@@ -3350,6 +3396,8 @@ impl App {
                 None
             }
             Some(KeyAction::PinMessage) => self.execute_pin_toggle(),
+            Some(KeyAction::JumpToQuote) => { self.jump_to_quote(); None }
+            Some(KeyAction::JumpBack) => { self.jump_back(); None }
             _ => None,
         }
     }
@@ -3495,6 +3543,8 @@ impl App {
                 None
             }
             Some(KeyAction::PinMessage) => self.execute_pin_toggle(),
+            Some(KeyAction::JumpToQuote) => { self.jump_to_quote(); None }
+            Some(KeyAction::JumpBack) => { self.jump_back(); None }
             _ => {
                 let needs_ac_update = matches!(
                     code,
