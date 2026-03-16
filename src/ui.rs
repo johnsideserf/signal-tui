@@ -3854,7 +3854,7 @@ fn draw_forward(frame: &mut Frame, app: &App, area: Rect) {
             let is_selected = actual_idx == app.forward_index;
             let prefix = if is_selected { "> " } else { "  " };
             let style = if is_selected {
-                Style::default().bg(theme.bg_selected).fg(theme.fg).add_modifier(Modifier::BOLD)
+                list_overlay::selection_style(theme.bg_selected, theme.fg)
             } else {
                 Style::default().fg(theme.fg)
             };
@@ -4356,6 +4356,20 @@ mod snapshot_tests {
             ("+15551234567".to_string(), "Alice".to_string()),
             ("+15559876543".to_string(), "Bob".to_string()),
         ];
+        let output = render_to_string(&mut app, 100, 30);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn test_forward_overlay() {
+        let mut app = demo_app();
+        app.show_forward = true;
+        app.forward_index = 0;
+        app.forward_filtered = vec![
+            ("+15551234567".to_string(), "Alice".to_string()),
+            ("+15559876543".to_string(), "Bob".to_string()),
+        ];
+        app.forward_body = "Hello world".to_string();
         let output = render_to_string(&mut app, 100, 30);
         insta::assert_snapshot!(output);
     }

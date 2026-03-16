@@ -2354,24 +2354,22 @@ impl App {
                 }
             })
             .collect();
-        if self.forward_index >= self.forward_filtered.len() {
-            self.forward_index = self.forward_filtered.len().saturating_sub(1);
-        }
+        list_overlay::clamp_index(&mut self.forward_index, self.forward_filtered.len());
     }
 
     pub fn handle_forward_key(&mut self, code: KeyCode) -> Option<SendRequest> {
-        match code {
-            KeyCode::Char('j') | KeyCode::Down => {
+        match classify_list_key(code, true) {
+            ListKeyAction::Down => {
                 if !self.forward_filtered.is_empty()
                     && self.forward_index < self.forward_filtered.len() - 1
                 {
                     self.forward_index += 1;
                 }
             }
-            KeyCode::Char('k') | KeyCode::Up => {
+            ListKeyAction::Up => {
                 self.forward_index = self.forward_index.saturating_sub(1);
             }
-            KeyCode::Enter => {
+            ListKeyAction::Select => {
                 if let Some((conv_id, name)) = self.forward_filtered.get(self.forward_index).cloned() {
                     let is_group = self.conversations.get(&conv_id).map(|c| c.is_group).unwrap_or(false);
                     let body = format!("[Forwarded]\n{}", self.forward_body);
@@ -2392,20 +2390,20 @@ impl App {
                     });
                 }
             }
-            KeyCode::Backspace => {
-                self.forward_filter.pop();
-                self.update_forward_filter();
-            }
-            KeyCode::Esc => {
+            ListKeyAction::Close => {
                 self.show_forward = false;
             }
-            KeyCode::Char(c) => {
+            ListKeyAction::FilterPush(c) => {
                 if !c.is_control() {
                     self.forward_filter.push(c);
                     self.update_forward_filter();
                 }
             }
-            _ => {}
+            ListKeyAction::FilterPop => {
+                self.forward_filter.pop();
+                self.update_forward_filter();
+            }
+            ListKeyAction::None => {}
         }
         None
     }
