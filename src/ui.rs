@@ -3228,15 +3228,7 @@ fn draw_theme_picker(frame: &mut Frame, app: &App, area: Rect) {
     );
 
     let inner_height = popup_area.height.saturating_sub(2) as usize;
-    let footer_lines = 2;
-    let visible_rows = inner_height.saturating_sub(footer_lines);
-
-    // Scroll the list so the selected item is always visible
-    let scroll_offset = if app.theme_index >= visible_rows {
-        app.theme_index - visible_rows + 1
-    } else {
-        0
-    };
+    let (visible_rows, scroll_offset) = list_overlay::scroll_layout(inner_height, 2, app.theme_index);
 
     let mut lines: Vec<Line> = Vec::new();
 
@@ -3248,7 +3240,7 @@ fn draw_theme_picker(frame: &mut Frame, app: &App, area: Rect) {
 
         let marker = if is_active { "[*]" } else { "[ ]" };
         let row_style = if is_selected {
-            Style::default().bg(theme.bg_selected).fg(theme.fg).add_modifier(Modifier::BOLD)
+            list_overlay::selection_style(theme.bg_selected, theme.fg)
         } else {
             Style::default().fg(theme.fg)
         };
@@ -3281,16 +3273,7 @@ fn draw_theme_picker(frame: &mut Frame, app: &App, area: Rect) {
         ]));
     }
 
-    // Pad to fill visible rows
-    while lines.len() < visible_rows {
-        lines.push(Line::from(""));
-    }
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "  j/k navigate  |  Enter apply  |  Esc cancel",
-        Style::default().fg(theme.fg_muted),
-    )));
+    list_overlay::append_footer(&mut lines, visible_rows, "  j/k navigate  |  Enter apply  |  Esc cancel", theme.fg_muted);
 
     let popup = Paragraph::new(lines).block(block);
     frame.render_widget(popup, popup_area);
@@ -4346,6 +4329,15 @@ mod snapshot_tests {
         app.sidebar_filter_active = true;
         app.sidebar_filter = "ali".to_string();
         app.refresh_sidebar_filter();
+        let output = render_to_string(&mut app, 100, 30);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn test_theme_picker_overlay() {
+        let mut app = demo_app();
+        app.show_theme_picker = true;
+        app.theme_index = 1;
         let output = render_to_string(&mut app, 100, 30);
         insta::assert_snapshot!(output);
     }

@@ -1287,23 +1287,29 @@ impl App {
 
     /// Handle a key press while the theme picker overlay is open.
     pub fn handle_theme_key(&mut self, code: KeyCode) {
-        match code {
-            KeyCode::Char('j') | KeyCode::Down => {
+        // Theme-specific: space selects, q closes
+        let code = match code {
+            KeyCode::Char(' ') => KeyCode::Enter,
+            KeyCode::Char('q') => KeyCode::Esc,
+            other => other,
+        };
+        match classify_list_key(code, false) {
+            ListKeyAction::Down => {
                 if self.theme_index < self.available_themes.len().saturating_sub(1) {
                     self.theme_index += 1;
                 }
             }
-            KeyCode::Char('k') | KeyCode::Up => {
+            ListKeyAction::Up => {
                 self.theme_index = self.theme_index.saturating_sub(1);
             }
-            KeyCode::Char(' ') | KeyCode::Enter => {
+            ListKeyAction::Select => {
                 if let Some(selected) = self.available_themes.get(self.theme_index) {
                     self.theme = selected.clone();
                     self.save_settings();
                 }
                 self.show_theme_picker = false;
             }
-            KeyCode::Esc | KeyCode::Char('q') => {
+            ListKeyAction::Close => {
                 self.show_theme_picker = false;
             }
             _ => {}
