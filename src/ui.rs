@@ -1918,7 +1918,7 @@ fn draw_emoji_picker(frame: &mut Frame, app: &mut App, area: Rect) {
     let footer = if app.emoji_picker.filtered.is_empty() {
         " no matches | Tab: category | Esc: close"
     } else {
-        " Tab: category | h/j/k/l: nav | type to filter | Esc"
+        " Tab: category | arrows/hjkl: nav | type to filter | Esc"
     };
     lines.push(Line::from(Span::styled(
         footer.to_string(),
@@ -4253,6 +4253,7 @@ mod snapshot_tests {
     use super::*;
     use crate::app::{App, InputMode, PinPending};
     use crate::db::Database;
+    use crate::domain::EmojiPickerSource;
     use crate::image_render::ImageProtocol;
     use chrono::NaiveDate;
     use ratatui::{backend::TestBackend, Terminal};
@@ -4518,6 +4519,14 @@ mod snapshot_tests {
             ("+15559876543".to_string(), "Bob".to_string()),
         ];
         app.forward.body = "Hello world".to_string();
+        let output = render_to_string(&mut app, 100, 30);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn test_emoji_picker_overlay() {
+        let mut app = demo_app();
+        app.emoji_picker.open(EmojiPickerSource::Input);
         let output = render_to_string(&mut app, 100, 30);
         insta::assert_snapshot!(output);
     }
