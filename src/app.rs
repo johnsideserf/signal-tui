@@ -410,9 +410,9 @@ pub struct App {
     pub native_images: bool,
     /// Cache of pre-resized PNGs for native protocol (path → (base64, pixel_w, pixel_h)).
     /// Populated: on-demand during native image rendering (get_or_cache_png in main.rs).
-    /// Invalidation: cleared on conversation switch or terminal resize (clear_kitty_state).
-    /// Stale data: if an image file changes on disk, the cached version persists until
-    /// the next conversation switch. Keyed by path only (no modification time check).
+    /// Invalidation: cleared on terminal resize (clear_kitty_state). Persists across
+    /// conversation switches so revisiting a chat doesn't re-decode images.
+    /// Keyed by path only (no modification time check).
     pub native_image_cache: HashMap<String, (String, u32, u32)>,
     /// Previous active conversation ID, for detecting chat switches
     pub prev_active_conversation: Option<String>,
@@ -600,14 +600,14 @@ pub struct App {
     /// IDs are assigned during placeholder patching in ui.rs and never reclaimed.
     pub kitty_image_ids: HashMap<String, u32>,
     /// Set of image IDs already transmitted to the terminal.
-    /// Cleared on conversation switch or resize (clear_kitty_state).
+    /// Cleared on conversation switch (clear_kitty_placements) and resize (clear_kitty_state).
     pub kitty_transmitted: HashSet<u32>,
     /// Images to transmit this frame: (id, path, cell_cols, cell_rows).
     /// Populated during ui.rs rendering, drained by emit_native_images() in main.rs.
     pub kitty_pending_transmits: Vec<(u32, String, u16, u16)>,
     /// Cache of cropped image base64 for iTerm2: (path, crop_top, height) -> base64.
     /// Populated on-demand during iTerm2 rendering. Grows unbounded during session.
-    /// Cleared on conversation switch or resize (clear_kitty_state).
+    /// Cleared on terminal resize (clear_kitty_state). Persists across conversation switches.
     pub iterm2_crop_cache: HashMap<(String, u16, u16), String>,
     /// Current settings profile name
     pub settings_profile_name: String,
@@ -3086,11 +3086,19 @@ impl App {
         }
     }
 
-    /// Clear image state so images are retransmitted.
-    /// Call on conversation switch (different images) and resize (different cell dimensions).
-    pub fn clear_kitty_state(&mut self) {
+    /// Clear terminal image placement state so images are retransmitted on the next frame.
+    /// The expensive base64 caches (native_image_cache, iterm2_crop_cache) are preserved
+    /// so switching back to a conversation doesn't re-decode images from disk.
+    /// Call on conversation switch.
+    pub fn clear_kitty_placements(&mut self) {
         self.kitty_transmitted.clear();
         self.kitty_pending_transmits.clear();
+    }
+
+    /// Full image state reset: clear both terminal placements and base64 caches.
+    /// Call on terminal resize (cell dimensions change, so cached PNGs need re-encoding).
+    pub fn clear_kitty_state(&mut self) {
+        self.clear_kitty_placements();
         self.native_image_cache.clear();
         self.iterm2_crop_cache.clear();
     }
@@ -6197,7 +6205,7 @@ impl App {
         self.save_scroll_position();
         self.pending_attachment = None;
         self.reset_typing_with_stop();
-        self.clear_kitty_state();
+        self.clear_kitty_placements();
 
         // Try exact match first
         if self.conversations.contains_key(target) {
@@ -6255,7 +6263,7 @@ impl App {
         self.save_scroll_position();
         self.pending_attachment = None;
         self.reset_typing_with_stop();
-        self.clear_kitty_state();
+        self.clear_kitty_placements();
         let idx = self
             .active_conversation
             .as_ref()
@@ -6283,7 +6291,7 @@ impl App {
         self.save_scroll_position();
         self.pending_attachment = None;
         self.reset_typing_with_stop();
-        self.clear_kitty_state();
+        self.clear_kitty_placements();
         let len = self.conversation_order.len();
         let idx = self
             .active_conversation
