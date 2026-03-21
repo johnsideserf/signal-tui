@@ -616,12 +616,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     // Profile editor overlay
-    if app.show_profile {
+    if app.profile.show {
         draw_profile(frame, app, size);
     }
 
     // Forward message picker overlay
-    if app.show_forward {
+    if app.forward.show {
         draw_forward(frame, app, size);
     }
 
@@ -3759,8 +3759,8 @@ fn draw_profile(frame: &mut Frame, app: &App, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
 
     for (i, label) in labels.iter().enumerate() {
-        let is_selected = i == app.profile_index;
-        let is_editing = is_selected && app.profile_editing;
+        let is_selected = i == app.profile.index;
+        let is_editing = is_selected && app.profile.editing;
 
         let label_style = if is_selected {
             Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
@@ -3769,15 +3769,15 @@ fn draw_profile(frame: &mut Frame, app: &App, area: Rect) {
         };
 
         let value = if is_editing {
-            format!("{}\u{2588}", app.profile_edit_buffer) // block cursor
+            format!("{}\u{2588}", app.profile.edit_buffer) // block cursor
         } else {
-            let v = &app.profile_fields[i];
+            let v = &app.profile.fields[i];
             if v.is_empty() { "(empty)".to_string() } else { v.clone() }
         };
 
         let value_style = if is_editing || is_selected {
             Style::default().bg(theme.bg_selected).fg(theme.fg)
-        } else if app.profile_fields[i].is_empty() {
+        } else if app.profile.fields[i].is_empty() {
             Style::default().fg(theme.fg_muted)
         } else {
             Style::default().fg(theme.fg)
@@ -3801,7 +3801,7 @@ fn draw_profile(frame: &mut Frame, app: &App, area: Rect) {
     lines.push(Line::from(""));
 
     // Save button
-    let save_selected = app.profile_index == 4;
+    let save_selected = app.profile.index == 4;
     let save_style = if save_selected {
         Style::default().bg(theme.bg_selected).fg(theme.accent).add_modifier(Modifier::BOLD)
     } else {
@@ -3811,7 +3811,7 @@ fn draw_profile(frame: &mut Frame, app: &App, area: Rect) {
 
     // Footer
     lines.push(Line::from(""));
-    let footer = if app.profile_editing {
+    let footer = if app.profile.editing {
         "  Type to edit | Enter confirm | Esc cancel"
     } else {
         "  j/k navigate | Enter edit | Esc close"
@@ -3833,7 +3833,7 @@ fn draw_profile(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_forward(frame: &mut Frame, app: &App, area: Rect) {
     let theme = &app.theme;
     let max_rows = 10usize;
-    let list_height = app.forward_filtered.len().min(max_rows);
+    let list_height = app.forward.filtered.len().min(max_rows);
     let pref_height = (list_height + 4) as u16; // filter line + blank + list + footer
     let (popup_area, block) = centered_popup(
         frame, area, 45, pref_height, " Forward to ", theme,
@@ -3843,12 +3843,12 @@ fn draw_forward(frame: &mut Frame, app: &App, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
 
     // Filter input
-    let filter_display = if app.forward_filter.is_empty() {
+    let filter_display = if app.forward.filter.is_empty() {
         "type to filter...".to_string()
     } else {
-        app.forward_filter.clone()
+        app.forward.filter.clone()
     };
-    let filter_style = if app.forward_filter.is_empty() {
+    let filter_style = if app.forward.filter.is_empty() {
         Style::default().fg(theme.fg_muted)
     } else {
         Style::default().fg(theme.fg)
@@ -3858,22 +3858,22 @@ fn draw_forward(frame: &mut Frame, app: &App, area: Rect) {
 
     // Conversation list
     let visible_rows = inner.height.saturating_sub(3) as usize;
-    let scroll_offset = if app.forward_index >= visible_rows {
-        app.forward_index - visible_rows + 1
+    let scroll_offset = if app.forward.index >= visible_rows {
+        app.forward.index - visible_rows + 1
     } else {
         0
     };
-    let end = (scroll_offset + visible_rows).min(app.forward_filtered.len());
+    let end = (scroll_offset + visible_rows).min(app.forward.filtered.len());
 
-    if app.forward_filtered.is_empty() {
+    if app.forward.filtered.is_empty() {
         lines.push(Line::from(Span::styled(
             "  No conversations found",
             Style::default().fg(theme.fg_muted),
         )));
     } else {
-        for (i, (_id, name)) in app.forward_filtered[scroll_offset..end].iter().enumerate() {
+        for (i, (_id, name)) in app.forward.filtered[scroll_offset..end].iter().enumerate() {
             let actual_idx = scroll_offset + i;
-            let is_selected = actual_idx == app.forward_index;
+            let is_selected = actual_idx == app.forward.index;
             let prefix = if is_selected { "> " } else { "  " };
             let style = if is_selected {
                 list_overlay::selection_style(theme.bg_selected, theme.fg)
@@ -4385,13 +4385,13 @@ mod snapshot_tests {
     #[test]
     fn test_forward_overlay() {
         let mut app = demo_app();
-        app.show_forward = true;
-        app.forward_index = 0;
-        app.forward_filtered = vec![
+        app.forward.show = true;
+        app.forward.index = 0;
+        app.forward.filtered = vec![
             ("+15551234567".to_string(), "Alice".to_string()),
             ("+15559876543".to_string(), "Bob".to_string()),
         ];
-        app.forward_body = "Hello world".to_string();
+        app.forward.body = "Hello world".to_string();
         let output = render_to_string(&mut app, 100, 30);
         insta::assert_snapshot!(output);
     }

@@ -10,7 +10,7 @@ use std::time::Instant;
 use crate::db::Database;
 use crate::image_render;
 use crate::list_overlay::{self, classify_list_key, ListKeyAction};
-use crate::domain::{ActionMenuState, ContactsOverlayState, FilePickerState, ImageState, NotificationState, PinDurationOverlayState, ReactionState, SearchAction, SearchState, TypingState, VerifyOverlayState};
+use crate::domain::{ActionMenuState, ContactsOverlayState, FilePickerState, ForwardOverlayState, ImageState, NotificationState, PinDurationOverlayState, ProfileOverlayState, ReactionState, SearchAction, SearchState, TypingState, VerifyOverlayState};
 use crate::image_render::ImageProtocol;
 use crate::input::{self, InputAction, COMMANDS};
 use crate::keybindings::{self, BindingMode, KeyAction, KeyBindings};
@@ -455,16 +455,8 @@ pub struct App {
     pub pending_read_receipts: Vec<(String, Vec<i64>)>,
     /// Action menu overlay state
     pub action_menu: ActionMenuState,
-    /// Forward message picker overlay
-    pub show_forward: bool,
-    /// Forward picker cursor index
-    pub forward_index: usize,
-    /// Forward picker type-to-filter text
-    pub forward_filter: String,
-    /// Forward picker filtered list of (conv_id, display_name)
-    pub forward_filtered: Vec<(String, String)>,
-    /// Body of the message being forwarded
-    pub forward_body: String,
+    /// Forward message picker overlay state
+    pub forward: ForwardOverlayState,
     /// Group management menu state (None = closed)
     pub group_menu_state: Option<GroupMenuState>,
     /// Cursor position in group menu / member lists
@@ -530,16 +522,8 @@ pub struct App {
     pub expiring_msg_count: usize,
     /// About overlay visible
     pub show_about: bool,
-    /// Profile editor overlay visible
-    pub show_profile: bool,
-    /// Cursor position in profile editor (0-3 = fields, 4 = Save)
-    pub profile_index: usize,
-    /// Whether currently editing a profile field
-    pub profile_editing: bool,
-    /// Profile fields: [given_name, family_name, about, about_emoji]
-    pub profile_fields: [String; 4],
-    /// Temp buffer while editing a profile field
-    pub profile_edit_buffer: String,
+    /// Profile editor overlay state
+    pub profile: ProfileOverlayState,
     /// Current settings profile name
     pub settings_profile_name: String,
     /// Settings profile manager overlay visible
@@ -2156,7 +2140,7 @@ impl App {
                 // Forward — open conversation picker
                 if let Some(msg) = self.selected_message() {
                     if !msg.is_system && !msg.is_deleted {
-                        self.forward_body = msg.body.clone();
+                        self.forward.body = msg.body.clone();
                         self.open_forward_picker();
                     }
                 }
@@ -2290,15 +2274,15 @@ impl App {
     }
 
     fn open_forward_picker(&mut self) {
-        self.show_forward = true;
-        self.forward_index = 0;
-        self.forward_filter.clear();
+        self.forward.show = true;
+        self.forward.index = 0;
+        self.forward.filter.clear();
         self.update_forward_filter();
     }
 
     fn update_forward_filter(&mut self) {
-        let filter = self.forward_filter.to_lowercase();
-        self.forward_filtered = self.conversation_order.iter()
+        let filter = self.forward.filter.to_lowercase();
+        self.forward.filtered = self.conversation_order.iter()
             .filter_map(|id| {
                 let conv = self.conversations.get(id)?;
                 if !conv.accepted { return None; }
@@ -2312,27 +2296,27 @@ impl App {
                 }
             })
             .collect();
-        list_overlay::clamp_index(&mut self.forward_index, self.forward_filtered.len());
+        list_overlay::clamp_index(&mut self.forward.index, self.forward.filtered.len());
     }
 
     pub fn handle_forward_key(&mut self, code: KeyCode) -> Option<SendRequest> {
         match classify_list_key(code, true) {
             ListKeyAction::Down => {
-                if !self.forward_filtered.is_empty()
-                    && self.forward_index < self.forward_filtered.len() - 1
+                if !self.forward.filtered.is_empty()
+                    && self.forward.index < self.forward.filtered.len() - 1
                 {
-                    self.forward_index += 1;
+                    self.forward.index += 1;
                 }
             }
             ListKeyAction::Up => {
-                self.forward_index = self.forward_index.saturating_sub(1);
+                self.forward.index = self.forward.index.saturating_sub(1);
             }
             ListKeyAction::Select => {
-                if let Some((conv_id, name)) = self.forward_filtered.get(self.forward_index).cloned() {
+                if let Some((conv_id, name)) = self.forward.filtered.get(self.forward.index).cloned() {
                     let is_group = self.conversations.get(&conv_id).map(|c| c.is_group).unwrap_or(false);
-                    let body = format!("[Forwarded]\n{}", self.forward_body);
+                    let body = format!("[Forwarded]\n{}", self.forward.body);
                     let local_ts_ms = chrono::Utc::now().timestamp_millis();
-                    self.show_forward = false;
+                    self.forward.show = false;
                     self.status_message = format!("Forwarded to {name}");
                     self.move_conversation_to_top(&conv_id);
                     return Some(SendRequest::Message {
@@ -2349,16 +2333,16 @@ impl App {
                 }
             }
             ListKeyAction::Close => {
-                self.show_forward = false;
+                self.forward.show = false;
             }
             ListKeyAction::FilterPush(c) => {
                 if !c.is_control() {
-                    self.forward_filter.push(c);
+                    self.forward.filter.push(c);
                     self.update_forward_filter();
                 }
             }
             ListKeyAction::FilterPop => {
-                self.forward_filter.pop();
+                self.forward.filter.pop();
                 self.update_forward_filter();
             }
             ListKeyAction::None => {}
@@ -2663,11 +2647,7 @@ impl App {
             send_read_receipts: true,
             pending_read_receipts: Vec::new(),
             action_menu: ActionMenuState::default(),
-            show_forward: false,
-            forward_index: 0,
-            forward_filter: String::new(),
-            forward_filtered: Vec::new(),
-            forward_body: String::new(),
+            forward: ForwardOverlayState::default(),
             group_menu_state: None,
             group_menu_index: 0,
             group_menu_filter: String::new(),
@@ -2700,11 +2680,7 @@ impl App {
             pending_polls: HashMap::new(),
             expiring_msg_count: 0,
             show_about: false,
-            show_profile: false,
-            profile_index: 0,
-            profile_editing: false,
-            profile_fields: [String::new(), String::new(), String::new(), String::new()],
-            profile_edit_buffer: String::new(),
+            profile: ProfileOverlayState::default(),
             settings_profile_name: "Default".to_string(),
             show_settings_profile_manager: false,
             settings_profile_manager_index: 0,
@@ -3139,7 +3115,7 @@ impl App {
             self.show_about = false;
             return (true, None);
         }
-        if self.show_profile {
+        if self.profile.show {
             let send = self.handle_profile_key(code);
             return (true, send);
         }
@@ -3151,7 +3127,7 @@ impl App {
             let send = self.handle_verify_key(code);
             return (true, send);
         }
-        if self.show_forward {
+        if self.forward.show {
             let send = self.handle_forward_key(code);
             return (true, send);
         }
@@ -3341,7 +3317,7 @@ impl App {
             Some(KeyAction::ForwardMessage) => {
                 if let Some(msg) = self.selected_message() {
                     if !msg.is_system && !msg.is_deleted {
-                        self.forward_body = msg.body.clone();
+                        self.forward.body = msg.body.clone();
                         self.open_forward_picker();
                     }
                 }
@@ -3488,7 +3464,7 @@ impl App {
             Some(KeyAction::ForwardMessage) => {
                 if let Some(msg) = self.selected_message() {
                     if !msg.is_system && !msg.is_deleted {
-                        self.forward_body = msg.body.clone();
+                        self.forward.body = msg.body.clone();
                         self.open_forward_picker();
                     }
                 }
@@ -4376,23 +4352,23 @@ impl App {
         const FIELD_COUNT: usize = 4;
         const SAVE_INDEX: usize = FIELD_COUNT;
 
-        if self.profile_editing {
+        if self.profile.editing {
             // Editing a field
             match code {
                 KeyCode::Esc => {
                     // Cancel edit, discard buffer
-                    self.profile_editing = false;
+                    self.profile.editing = false;
                 }
                 KeyCode::Enter => {
                     // Confirm edit, write buffer back to field
-                    self.profile_fields[self.profile_index] = self.profile_edit_buffer.clone();
-                    self.profile_editing = false;
+                    self.profile.fields[self.profile.index] = self.profile.edit_buffer.clone();
+                    self.profile.editing = false;
                 }
                 KeyCode::Backspace => {
-                    self.profile_edit_buffer.pop();
+                    self.profile.edit_buffer.pop();
                 }
                 KeyCode::Char(c) => {
-                    self.profile_edit_buffer.push(c);
+                    self.profile.edit_buffer.push(c);
                 }
                 _ => {}
             }
@@ -4402,28 +4378,28 @@ impl App {
         // Navigation mode
         match code {
             KeyCode::Char('j') | KeyCode::Down => {
-                if self.profile_index < SAVE_INDEX {
-                    self.profile_index += 1;
+                if self.profile.index < SAVE_INDEX {
+                    self.profile.index += 1;
                 }
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                if self.profile_index > 0 {
-                    self.profile_index -= 1;
+                if self.profile.index > 0 {
+                    self.profile.index -= 1;
                 }
             }
             KeyCode::Enter => {
-                if self.profile_index < FIELD_COUNT {
+                if self.profile.index < FIELD_COUNT {
                     // Start editing the selected field
-                    self.profile_editing = true;
-                    self.profile_edit_buffer = self.profile_fields[self.profile_index].clone();
+                    self.profile.editing = true;
+                    self.profile.edit_buffer = self.profile.fields[self.profile.index].clone();
                 } else {
                     // Save button
-                    let [given_name, family_name, about, about_emoji] = self.profile_fields.clone();
+                    let [given_name, family_name, about, about_emoji] = self.profile.fields.clone();
                     if given_name.trim().is_empty() {
                         self.status_message = "Given name is required".to_string();
                         return None;
                     }
-                    self.show_profile = false;
+                    self.profile.show = false;
                     return Some(SendRequest::UpdateProfile {
                         given_name,
                         family_name,
@@ -4433,7 +4409,7 @@ impl App {
                 }
             }
             KeyCode::Esc => {
-                self.show_profile = false;
+                self.profile.show = false;
             }
             _ => {}
         }
@@ -5490,9 +5466,9 @@ impl App {
                 }
             }
             InputAction::Profile => {
-                self.show_profile = true;
-                self.profile_index = 0;
-                self.profile_editing = false;
+                self.profile.show = true;
+                self.profile.index = 0;
+                self.profile.editing = false;
             }
             InputAction::About => {
                 self.show_about = true;
@@ -6405,8 +6381,8 @@ impl App {
             || self.pin_duration.show
             || self.show_poll_vote
             || self.show_about
-            || self.show_profile
-            || self.show_forward
+            || self.profile.show
+            || self.forward.show
             || self.autocomplete_visible
     }
 
@@ -9641,13 +9617,13 @@ mod tests {
         assert!(app.has_overlay());
         app.show_about = false;
 
-        app.show_profile = true;
+        app.profile.show = true;
         assert!(app.has_overlay());
-        app.show_profile = false;
+        app.profile.show = false;
 
-        app.show_forward = true;
+        app.forward.show = true;
         assert!(app.has_overlay());
-        app.show_forward = false;
+        app.forward.show = false;
 
         assert!(!app.has_overlay());
     }
