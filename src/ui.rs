@@ -586,12 +586,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     // Theme picker overlay
-    if app.show_theme_picker {
+    if app.theme_picker.show {
         draw_theme_picker(frame, app, size);
     }
 
     // Keybindings overlay
-    if app.show_keybindings {
+    if app.keybindings_overlay.show {
         draw_keybindings(frame, app, size);
     }
 
@@ -3222,7 +3222,7 @@ fn draw_file_browser(frame: &mut Frame, app: &App, area: Rect) {
 
 fn draw_theme_picker(frame: &mut Frame, app: &App, area: Rect) {
     let theme = &app.theme;
-    let max_visible = 12usize.min(app.available_themes.len());
+    let max_visible = 12usize.min(app.theme_picker.available_themes.len());
     let pref_height = max_visible as u16 + 5; // border + title + footer
 
     let (popup_area, block) = centered_popup(
@@ -3230,14 +3230,14 @@ fn draw_theme_picker(frame: &mut Frame, app: &App, area: Rect) {
     );
 
     let inner_height = popup_area.height.saturating_sub(2) as usize;
-    let (visible_rows, scroll_offset) = list_overlay::scroll_layout(inner_height, 2, app.theme_index);
+    let (visible_rows, scroll_offset) = list_overlay::scroll_layout(inner_height, 2, app.theme_picker.index);
 
     let mut lines: Vec<Line> = Vec::new();
 
-    let end = (scroll_offset + visible_rows).min(app.available_themes.len());
-    for (i, t) in app.available_themes[scroll_offset..end].iter().enumerate() {
+    let end = (scroll_offset + visible_rows).min(app.theme_picker.available_themes.len());
+    for (i, t) in app.theme_picker.available_themes[scroll_offset..end].iter().enumerate() {
         let actual_index = scroll_offset + i;
-        let is_selected = actual_index == app.theme_index;
+        let is_selected = actual_index == app.theme_picker.index;
         let is_active = t.name == app.theme.name;
 
         let marker = if is_active { "[*]" } else { "[ ]" };
@@ -3285,7 +3285,7 @@ fn draw_keybindings(frame: &mut Frame, app: &App, area: Rect) {
     let theme = &app.theme;
 
     // If the profile picker sub-overlay is open, draw it instead
-    if app.keybindings_profile_picker {
+    if app.keybindings_overlay.profile_picker {
         draw_keybindings_profile_picker(frame, app, area);
         return;
     }
@@ -3303,8 +3303,8 @@ fn draw_keybindings(frame: &mut Frame, app: &App, area: Rect) {
     let footer_lines = 2;
     let visible_rows = inner_height.saturating_sub(footer_lines);
 
-    let scroll_offset = if app.keybindings_index >= visible_rows {
-        app.keybindings_index - visible_rows + 1
+    let scroll_offset = if app.keybindings_overlay.index >= visible_rows {
+        app.keybindings_overlay.index - visible_rows + 1
     } else {
         0
     };
@@ -3315,7 +3315,7 @@ fn draw_keybindings(frame: &mut Frame, app: &App, area: Rect) {
 
     let end = (scroll_offset + visible_rows).min(total_rows);
     for row in scroll_offset..end {
-        let is_selected = row == app.keybindings_index;
+        let is_selected = row == app.keybindings_overlay.index;
         let (mode, action): (BindingMode, Option<KeyAction>) = app.keybindings_overlay_item(row);
 
         if row == 0 {
@@ -3349,7 +3349,7 @@ fn draw_keybindings(frame: &mut Frame, app: &App, area: Rect) {
             // Action row
             let action = action.unwrap();
             let label = keybindings::action_label(action);
-            let key_display = if is_selected && app.keybindings_capturing {
+            let key_display = if is_selected && app.keybindings_overlay.capturing {
                 "[Press key...]".to_string()
             } else {
                 app.keybindings.display_key(action)
@@ -3391,7 +3391,7 @@ fn draw_keybindings(frame: &mut Frame, app: &App, area: Rect) {
 
 fn draw_keybindings_profile_picker(frame: &mut Frame, app: &App, area: Rect) {
     let theme = &app.theme;
-    let max_visible = 8usize.min(app.available_kb_profiles.len());
+    let max_visible = 8usize.min(app.keybindings_overlay.available_profiles.len());
     let pref_height = max_visible as u16 + 5;
 
     let (popup_area, block) = centered_popup(
@@ -3402,17 +3402,17 @@ fn draw_keybindings_profile_picker(frame: &mut Frame, app: &App, area: Rect) {
     let footer_lines = 2;
     let visible_rows = inner_height.saturating_sub(footer_lines);
 
-    let scroll_offset = if app.keybindings_profile_index >= visible_rows {
-        app.keybindings_profile_index - visible_rows + 1
+    let scroll_offset = if app.keybindings_overlay.profile_index >= visible_rows {
+        app.keybindings_overlay.profile_index - visible_rows + 1
     } else {
         0
     };
 
     let mut lines: Vec<Line> = Vec::new();
-    let end = (scroll_offset + visible_rows).min(app.available_kb_profiles.len());
+    let end = (scroll_offset + visible_rows).min(app.keybindings_overlay.available_profiles.len());
     for i in scroll_offset..end {
-        let is_selected = i == app.keybindings_profile_index;
-        let is_active = app.available_kb_profiles[i] == app.keybindings.profile_name;
+        let is_selected = i == app.keybindings_overlay.profile_index;
+        let is_active = app.keybindings_overlay.available_profiles[i] == app.keybindings.profile_name;
         let marker = if is_active { "[*]" } else { "[ ]" };
 
         let row_style = if is_selected {
@@ -3428,7 +3428,7 @@ fn draw_keybindings_profile_picker(frame: &mut Frame, app: &App, area: Rect) {
 
         lines.push(Line::from(vec![
             Span::styled(format!("  {marker} "), marker_style),
-            Span::styled(app.available_kb_profiles[i].clone(), row_style),
+            Span::styled(app.keybindings_overlay.available_profiles[i].clone(), row_style),
         ]));
     }
 
@@ -4338,8 +4338,8 @@ mod snapshot_tests {
     #[test]
     fn test_theme_picker_overlay() {
         let mut app = demo_app();
-        app.show_theme_picker = true;
-        app.theme_index = 1;
+        app.theme_picker.show = true;
+        app.theme_picker.index = 1;
         let output = render_to_string(&mut app, 100, 30);
         insta::assert_snapshot!(output);
     }

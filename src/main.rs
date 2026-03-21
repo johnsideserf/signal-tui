@@ -944,13 +944,13 @@ async fn run_app(
     if config.cell_pixel_width > 0 && config.cell_pixel_height > 0 {
         app.image.cell_px = (config.cell_pixel_width, config.cell_pixel_height);
     }
-    app.available_themes = theme::all_themes();
+    app.theme_picker.available_themes = theme::all_themes();
     app.theme = theme::find_theme(&config.theme);
     let mut kb = keybindings::find_profile(&config.keybinding_profile);
     let overrides = keybindings::load_overrides();
     kb.apply_overrides(&overrides);
     app.keybindings = kb;
-    app.available_kb_profiles = keybindings::all_profile_names();
+    app.keybindings_overlay.available_profiles = keybindings::all_profile_names();
     app.settings_profile_name = config.settings_profile.clone();
     app.available_settings_profiles = settings_profile::all_settings_profiles();
     app.load_from_db()?;
@@ -1075,7 +1075,7 @@ async fn run_app(
                     }
                     needs_redraw = true;
                     // Keybinding capture mode intercepts ALL keys before anything else
-                    if app.keybindings_capturing {
+                    if app.keybindings_overlay.capturing {
                         app.handle_keybinding_capture(key.modifiers, key.code);
                     } else if !app.handle_global_key(key.modifiers, key.code) {
                         let (overlay_handled, send_request) = app.handle_overlay_key(key.code);
