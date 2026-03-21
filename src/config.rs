@@ -100,6 +100,10 @@ pub struct Config {
     #[serde(default)]
     pub sidebar_on_right: bool,
 
+    /// Sidebar width in columns (14-40, default 22)
+    #[serde(default = "default_sidebar_width")]
+    pub sidebar_width: u16,
+
     /// Color theme name (matches a built-in or custom theme)
     #[serde(default = "default_theme")]
     pub theme: String,
@@ -141,6 +145,10 @@ fn default_clipboard_clear_seconds() -> u64 {
     30
 }
 
+fn default_sidebar_width() -> u16 {
+    22
+}
+
 fn default_signal_cli_path() -> String {
     "signal-cli".to_string()
 }
@@ -178,6 +186,7 @@ impl Default for Config {
             send_read_receipts: true,
             mouse_enabled: true,
             sidebar_on_right: false,
+            sidebar_width: default_sidebar_width(),
             theme: default_theme(),
             keybinding_profile: default_keybinding_profile(),
             settings_profile: default_settings_profile(),

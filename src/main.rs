@@ -941,6 +941,7 @@ async fn run_app(
     app.send_read_receipts = config.send_read_receipts;
     app.mouse_enabled = config.mouse_enabled;
     app.sidebar_on_right = config.sidebar_on_right;
+    app.sidebar_width = config.sidebar_width.clamp(14, 40);
     if config.cell_pixel_width > 0 && config.cell_pixel_height > 0 {
         app.image.cell_px = (config.cell_pixel_width, config.cell_pixel_height);
     }

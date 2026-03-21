@@ -795,6 +795,7 @@ impl App {
         config.settings_profile = self.settings_profiles.name.clone();
         config.notification_preview = self.notifications.notification_preview.clone();
         config.image_mode = self.image.image_mode.clone();
+        config.sidebar_width = self.sidebar_width;
         for def in SETTINGS {
             if let Some(save_fn) = def.save {
                 save_fn(&mut config, (def.get)(self));
@@ -2780,6 +2781,7 @@ impl App {
     pub fn resize_sidebar(&mut self, delta: i16) {
         let new_width = (self.sidebar_width as i16 + delta).clamp(14, 40) as u16;
         self.sidebar_width = new_width;
+        self.save_settings();
     }
 
     /// Refresh the filtered sidebar list based on the current filter text.
