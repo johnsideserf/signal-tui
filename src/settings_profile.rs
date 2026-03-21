@@ -209,8 +209,8 @@ impl SettingsProfile {
             notify_direct: app.notify_direct,
             notify_group: app.notify_group,
             desktop_notifications: app.desktop_notifications,
-            image_mode: app.image_mode.clone(),
-            show_link_previews: app.show_link_previews,
+            image_mode: app.image.image_mode.clone(),
+            show_link_previews: app.image.show_link_previews,
             date_separators: app.date_separators,
             show_receipts: app.show_receipts,
             color_receipts: app.color_receipts,
@@ -227,8 +227,8 @@ impl SettingsProfile {
         app.notify_direct = self.notify_direct;
         app.notify_group = self.notify_group;
         app.desktop_notifications = self.desktop_notifications;
-        app.image_mode = self.image_mode.clone();
-        app.show_link_previews = self.show_link_previews;
+        app.image.image_mode = self.image_mode.clone();
+        app.image.show_link_previews = self.show_link_previews;
         app.date_separators = self.date_separators;
         app.show_receipts = self.show_receipts;
         app.color_receipts = self.color_receipts;
@@ -244,8 +244,8 @@ impl SettingsProfile {
         self.notify_direct == app.notify_direct
             && self.notify_group == app.notify_group
             && self.desktop_notifications == app.desktop_notifications
-            && self.image_mode == app.image_mode
-            && self.show_link_previews == app.show_link_previews
+            && self.image_mode == app.image.image_mode
+            && self.show_link_previews == app.image.show_link_previews
             && self.date_separators == app.date_separators
             && self.show_receipts == app.show_receipts
             && self.color_receipts == app.color_receipts

@@ -10,7 +10,7 @@ use std::time::Instant;
 use crate::db::Database;
 use crate::image_render;
 use crate::list_overlay::{self, classify_list_key, ListKeyAction};
-use crate::domain::{FilePickerState, SearchAction, SearchState, TypingState};
+use crate::domain::{FilePickerState, ImageState, SearchAction, SearchState, TypingState};
 use crate::image_render::ImageProtocol;
 use crate::input::{self, InputAction, COMMANDS};
 use crate::keybindings::{self, BindingMode, KeyAction, KeyBindings};
@@ -396,31 +396,8 @@ pub struct App {
     pub identity_trust: HashMap<String, TrustLevel>,
     /// Confirmation pending for verify action (user must press v twice)
     pub verify_confirming: bool,
-    /// Image display mode: "native", "halfblock", or "none"
-    pub image_mode: String,
-    /// Show link previews (title, description, thumbnail) for URLs
-    pub show_link_previews: bool,
-    /// Link regions detected in the last rendered frame (for OSC 8 injection)
-    pub link_regions: Vec<crate::ui::LinkRegion>,
-    /// Maps display text → hidden URL for attachment links (cleared each frame)
-    pub link_url_map: HashMap<String, String>,
-    /// Detected terminal image protocol (Kitty, iTerm2, Sixel, or Halfblock)
-    pub image_protocol: ImageProtocol,
-    /// Cell pixel dimensions (width, height) for Sixel encoding
-    pub cell_px: (u16, u16),
-    /// Images visible on screen for native protocol overlay (cleared each frame)
-    pub visible_images: Vec<VisibleImage>,
-    /// Previous scroll offset for Sixel stale pixel detection.
-    /// When scroll changes with Sixel visible, force full redraw to clear stale pixels.
-    pub sixel_prev_scroll: usize,
-    /// Previous frame's visible images, for skipping redundant image redraws
-    pub prev_visible_images: Vec<VisibleImage>,
-    /// Cache of pre-resized PNGs for native protocol (path → (base64, pixel_w, pixel_h)).
-    /// Populated: on-demand during native image rendering (get_or_cache_png in main.rs).
-    /// Invalidation: cleared on terminal resize (clear_kitty_state). Persists across
-    /// conversation switches so revisiting a chat doesn't re-decode images.
-    /// Keyed by path only (no modification time check).
-    pub native_image_cache: HashMap<String, (String, u32, u32)>,
+    /// Image rendering, caching, and link overlay state.
+    pub image: ImageState,
     /// Previous active conversation ID, for detecting chat switches
     pub prev_active_conversation: Option<String>,
     /// Incognito mode — in-memory DB, no local persistence
@@ -601,25 +578,6 @@ pub struct App {
     pub profile_fields: [String; 4],
     /// Temp buffer while editing a profile field
     pub profile_edit_buffer: String,
-    /// Next Kitty image ID to assign (monotonically increasing, starts at 1).
-    pub next_kitty_image_id: u32,
-    /// Map from image path to Kitty image ID. Grows unbounded during session.
-    /// IDs are assigned during placeholder patching in ui.rs and never reclaimed.
-    pub kitty_image_ids: HashMap<String, u32>,
-    /// Set of image IDs already transmitted to the terminal.
-    /// Cleared on conversation switch (clear_kitty_placements) and resize (clear_kitty_state).
-    pub kitty_transmitted: HashSet<u32>,
-    /// Images to transmit this frame: (id, path, cell_cols, cell_rows).
-    /// Populated during ui.rs rendering, drained by emit_native_images() in main.rs.
-    pub kitty_pending_transmits: Vec<(u32, String, u16, u16)>,
-    /// Cache of cropped image base64 for iTerm2: (path, crop_top, height) -> base64.
-    /// Populated on-demand during iTerm2 rendering. Grows unbounded during session.
-    /// Cleared on terminal resize (clear_kitty_state). Persists across conversation switches.
-    pub iterm2_crop_cache: HashMap<(String, u16, u16), String>,
-    /// Cache of full Sixel-encoded images: path -> sixel_string.
-    /// Populated by pre-cache in ensure_active_images. Cleared on resize.
-    /// Partial crops are obtained instantly via `slice_sixel_bands()`.
-    pub sixel_cache: HashMap<String, String>,
     /// Current settings profile name
     pub settings_profile_name: String,
     /// Settings profile manager overlay visible
@@ -634,12 +592,6 @@ pub struct App {
     pub settings_profile_save_as_input: String,
     /// Mouse enabled state when settings overlay opened (for deferred toggle)
     pub settings_mouse_snapshot: bool,
-    /// Background image render channel (sender, cloned into spawn_blocking tasks)
-    pub image_render_tx: mpsc::Sender<ImageRenderResult>,
-    /// Background image render channel (receiver, polled each frame)
-    pub image_render_rx: mpsc::Receiver<ImageRenderResult>,
-    /// In-flight background renders: (conv_id, timestamp_ms, is_preview)
-    pub image_render_in_flight: HashSet<(String, i64, bool)>,
 }
 
 pub const QUICK_REACTIONS: &[&str] = &["\u{1f44d}", "\u{1f44e}", "\u{2764}\u{fe0f}", "\u{1f602}", "\u{1f62e}", "\u{1f622}", "\u{1f64f}", "\u{1f525}"];
@@ -826,8 +778,8 @@ pub const SETTINGS: &[SettingDef] = &[
     SettingDef {
         label: "Link previews",
         hint: "Show title and thumbnail for URLs",
-        get: |a| a.show_link_previews,
-        set: |a, v| a.show_link_previews = v,
+        get: |a| a.image.show_link_previews,
+        set: |a, v| a.image.show_link_previews = v,
         save: Some(|c, v| c.show_link_previews = v),
         on_toggle: None, // UI checks the flag; cached lines stay in memory
     },
@@ -939,7 +891,7 @@ impl App {
         config.keybinding_profile = self.keybindings.profile_name.clone();
         config.settings_profile = self.settings_profile_name.clone();
         config.notification_preview = self.notification_preview.clone();
-        config.image_mode = self.image_mode.clone();
+        config.image_mode = self.image.image_mode.clone();
         for def in SETTINGS {
             if let Some(save_fn) = def.save {
                 save_fn(&mut config, (def.get)(self));
@@ -961,8 +913,8 @@ impl App {
     pub fn ensure_active_images(&mut self) -> bool {
         // Always drain completed background renders (even if inline_images is off)
         let mut drained = false;
-        while let Ok(result) = self.image_render_rx.try_recv() {
-            self.image_render_in_flight.remove(&(
+        while let Ok(result) = self.image.image_render_rx.try_recv() {
+            self.image.image_render_in_flight.remove(&(
                 result.conv_id.clone(),
                 result.timestamp_ms,
                 result.is_preview,
@@ -982,17 +934,17 @@ impl App {
                     }
                     // Pre-populate native image caches from background task
                     if let Some((path, b64, pw, ph)) = result.pre_native_png {
-                        self.native_image_cache.entry(path).or_insert((b64, pw, ph));
+                        self.image.native_image_cache.entry(path).or_insert((b64, pw, ph));
                     }
                     if let Some((path, sixel)) = result.pre_sixel {
-                        self.sixel_cache.entry(path).or_insert(sixel);
+                        self.image.sixel_cache.entry(path).or_insert(sixel);
                     }
                     drained = true;
                 }
             }
         }
 
-        if self.image_mode == "none" {
+        if self.image.image_mode == "none" {
             return drained;
         }
         let Some(ref id) = self.active_conversation else { return drained };
@@ -1008,22 +960,22 @@ impl App {
         // Collect work items to avoid borrow conflicts: (timestamp, path, max_width, is_preview)
         let mut work: Vec<(i64, String, u32, bool)> = Vec::new();
         for msg in &conv.messages[start..end] {
-            if self.image_render_in_flight.len() + work.len() >= 4 {
+            if self.image.image_render_in_flight.len() + work.len() >= 4 {
                 break;
             }
             if msg.body.starts_with("[image:") && msg.image_lines.is_none() {
                 if let Some(ref p) = msg.image_path {
                     let key = (id.clone(), msg.timestamp_ms, false);
-                    if !self.image_render_in_flight.contains(&key) {
+                    if !self.image.image_render_in_flight.contains(&key) {
                         work.push((msg.timestamp_ms, p.clone(), 40, false));
                     }
                 }
             }
-            if self.show_link_previews && msg.preview_image_lines.is_none() {
+            if self.image.show_link_previews && msg.preview_image_lines.is_none() {
                 if let Some(ref preview) = msg.preview {
                     if let Some(ref p) = preview.image_path {
                         let key = (id.clone(), msg.timestamp_ms, true);
-                        if !self.image_render_in_flight.contains(&key) {
+                        if !self.image.image_render_in_flight.contains(&key) {
                             work.push((msg.timestamp_ms, p.clone(), 30, true));
                         }
                     }
@@ -1032,13 +984,13 @@ impl App {
         }
 
         // Spawn background render tasks
-        let native_sixel = self.image_mode == "native"
-            && self.image_protocol == image_render::ImageProtocol::Sixel;
-        let cell_px = self.cell_px;
+        let native_sixel = self.image.image_mode == "native"
+            && self.image.image_protocol == image_render::ImageProtocol::Sixel;
+        let cell_px = self.image.cell_px;
         for (ts, path, max_width, is_preview) in work {
-            self.image_render_in_flight
+            self.image.image_render_in_flight
                 .insert((id.clone(), ts, is_preview));
-            let tx = self.image_render_tx.clone();
+            let tx = self.image.image_render_tx.clone();
             let cid = id.clone();
             tokio::task::spawn_blocking(move || {
                 let lines = image_render::render_image(Path::new(&path), max_width);
@@ -1118,7 +1070,7 @@ impl App {
                         _ => "full".to_string(),
                     };
                 } else if self.settings_index == image_mode_index {
-                    self.image_mode = match self.image_mode.as_str() {
+                    self.image.image_mode = match self.image.image_mode.as_str() {
                         "native" => "halfblock".to_string(),
                         "halfblock" => "none".to_string(),
                         _ => "native".to_string(),
@@ -2714,16 +2666,7 @@ impl App {
             verify_identities: Vec::new(),
             identity_trust: HashMap::new(),
             verify_confirming: false,
-            image_mode: "halfblock".to_string(),
-            show_link_previews: true,
-            link_regions: Vec::new(),
-            link_url_map: HashMap::new(),
-            image_protocol: image_render::detect_protocol(),
-            cell_px: image_render::detect_cell_pixel_size(),
-            visible_images: Vec::new(),
-            prev_visible_images: Vec::new(),
-            sixel_prev_scroll: 0,
-            native_image_cache: HashMap::new(),
+            image: ImageState::new(image_render_tx, image_render_rx),
             prev_active_conversation: None,
             incognito: false,
             has_more_messages: HashSet::new(),
@@ -2819,12 +2762,6 @@ impl App {
             profile_editing: false,
             profile_fields: [String::new(), String::new(), String::new(), String::new()],
             profile_edit_buffer: String::new(),
-            next_kitty_image_id: 1,
-            kitty_image_ids: HashMap::new(),
-            kitty_transmitted: HashSet::new(),
-            kitty_pending_transmits: Vec::new(),
-            iterm2_crop_cache: HashMap::new(),
-            sixel_cache: HashMap::new(),
             settings_profile_name: "Default".to_string(),
             show_settings_profile_manager: false,
             settings_profile_manager_index: 0,
@@ -2832,9 +2769,6 @@ impl App {
             settings_profile_save_as: false,
             settings_profile_save_as_input: String::new(),
             settings_mouse_snapshot: true,
-            image_render_tx,
-            image_render_rx,
-            image_render_in_flight: HashSet::new(),
         }
     }
 
@@ -3137,8 +3071,8 @@ impl App {
     /// sixel_cache) are preserved so switching back to a conversation doesn't
     /// re-decode images from disk. Call on conversation switch.
     pub fn clear_kitty_placements(&mut self) {
-        self.kitty_transmitted.clear();
-        self.kitty_pending_transmits.clear();
+        self.image.kitty_transmitted.clear();
+        self.image.kitty_pending_transmits.clear();
     }
 
     /// Full image state reset: clear both terminal placements and base64 caches.
@@ -3149,9 +3083,9 @@ impl App {
     /// Only screen positions change, which ratatui recomputes automatically.
     pub fn clear_kitty_state(&mut self) {
         self.clear_kitty_placements();
-        if self.image_protocol != ImageProtocol::Sixel {
-            self.native_image_cache.clear();
-            self.iterm2_crop_cache.clear();
+        if self.image.image_protocol != ImageProtocol::Sixel {
+            self.image.native_image_cache.clear();
+            self.image.iterm2_crop_cache.clear();
         }
     }
 
@@ -3987,7 +3921,7 @@ impl App {
                 if let Some(dm) = conv.messages.iter_mut().rev()
                     .find(|m| m.timestamp_ms == msg_ts_ms && !m.body.starts_with('['))
                 {
-                    let (img_lines, img_path) = if self.show_link_previews && self.image_mode != "none" {
+                    let (img_lines, img_path) = if self.image.show_link_previews && self.image.image_mode != "none" {
                         if let Some(ref p) = preview.image_path {
                             (image_render::render_image(Path::new(p), 30), Some(p.clone()))
                         } else {
@@ -5323,7 +5257,7 @@ impl App {
                         let is_image = matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp");
                         let prefix = if is_image { "image" } else { "attachment" };
                         let body = if text.is_empty() { format!("[{prefix}: {fname}]") } else { format!("[{prefix}: {fname}] {text}") };
-                        let (img_lines, img_path) = if is_image && self.image_mode != "none" {
+                        let (img_lines, img_path) = if is_image && self.image.image_mode != "none" {
                             (image_render::render_image(path, 40), Some(path.to_string_lossy().into_owned()))
                         } else {
                             (None, None)
@@ -6572,7 +6506,7 @@ impl App {
 
     fn handle_left_click(&mut self, col: u16, row: u16) {
         // 1. Check link regions first (highest priority — links overlay everything)
-        for link in &self.link_regions {
+        for link in &self.image.link_regions {
             if row == link.y && col >= link.x && col < link.x + link.width {
                 let url = link.url.clone();
                 self.open_url(&url);

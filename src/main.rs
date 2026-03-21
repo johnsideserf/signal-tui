@@ -497,7 +497,7 @@ fn emit_native_images(
     backend: &mut CrosstermBackend<io::Stdout>,
     app: &mut App,
 ) -> Result<()> {
-    let protocol = app.image_protocol;
+    let protocol = app.image.image_protocol;
     if protocol == image_render::ImageProtocol::Halfblock {
         return Ok(());
     }
@@ -507,13 +507,13 @@ fn emit_native_images(
     if protocol == image_render::ImageProtocol::Kitty {
         // Kitty Unicode Placeholders: transmit pending images and create virtual placements.
         // The placeholder cells (U+10EEEE) are already in the ratatui buffer.
-        let pending = std::mem::take(&mut app.kitty_pending_transmits);
+        let pending = std::mem::take(&mut app.image.kitty_pending_transmits);
         if pending.is_empty() {
             return Ok(());
         }
 
         for (id, path, cols, rows) in &pending {
-            let b64 = match get_or_cache_png(&mut app.native_image_cache, path, *cols as u32, *rows as u32) {
+            let b64 = match get_or_cache_png(&mut app.image.native_image_cache, path, *cols as u32, *rows as u32) {
                 Some(b) => b,
                 None => continue,
             };
@@ -539,7 +539,7 @@ fn emit_native_images(
                 "\x1b_Ga=p,U=1,i={id},c={cols},r={rows},q=2\x1b\\",
             )?;
 
-            app.kitty_transmitted.insert(*id);
+            app.image.kitty_transmitted.insert(*id);
         }
 
         backend.flush()?;
@@ -548,26 +548,26 @@ fn emit_native_images(
 
     // Sixel: slice the cached full Sixel to the visible region (instant string op).
     if protocol == image_render::ImageProtocol::Sixel {
-        if app.has_overlay() || app.visible_images.is_empty() {
-            app.visible_images.clear();
+        if app.has_overlay() || app.image.visible_images.is_empty() {
+            app.image.visible_images.clear();
             return Ok(());
         }
 
         // Dedup: skip Sixel emit when images haven't moved (avoids cursor
         // flash from large Sixel writes on every mouse-move/redraw).
-        if app.visible_images == app.prev_visible_images {
-            app.visible_images.clear();
+        if app.image.visible_images == app.image.prev_visible_images {
+            app.image.visible_images.clear();
             return Ok(());
         }
 
-        let images = std::mem::take(&mut app.visible_images);
+        let images = std::mem::take(&mut app.image.visible_images);
         queue!(backend, Hide, SavePosition)?;
 
         for img in &images {
-            if let Some(full_sixel) = app.sixel_cache.get(&img.path) {
+            if let Some(full_sixel) = app.image.sixel_cache.get(&img.path) {
                 let sliced = image_render::slice_sixel_bands(
                     full_sixel,
-                    app.cell_px.1,
+                    app.image.cell_px.1,
                     img.full_height,
                     img.crop_top,
                     img.height,
@@ -580,26 +580,26 @@ fn emit_native_images(
         }
 
         queue!(backend, RestorePosition, Show)?;
-        app.prev_visible_images = images;
+        app.image.prev_visible_images = images;
         return Ok(());
     }
 
     // iTerm2: only re-render when images change (dedup avoids flicker).
-    if app.visible_images == app.prev_visible_images {
+    if app.image.visible_images == app.image.prev_visible_images {
         return Ok(());
     }
 
-    if app.visible_images.is_empty() {
-        app.prev_visible_images.clear();
+    if app.image.visible_images.is_empty() {
+        app.image.prev_visible_images.clear();
         return Ok(());
     }
 
-    let images = std::mem::take(&mut app.visible_images);
+    let images = std::mem::take(&mut app.image.visible_images);
 
     queue!(backend, SavePosition)?;
 
     for img in &images {
-        let b64 = match get_or_cache_png(&mut app.native_image_cache, &img.path, img.width as u32, img.full_height as u32) {
+        let b64 = match get_or_cache_png(&mut app.image.native_image_cache, &img.path, img.width as u32, img.full_height as u32) {
             Some(b) => b,
             None => continue,
         };
@@ -608,13 +608,13 @@ fn emit_native_images(
         // re-encoding every frame (which causes flicker in iTerm2).
         let b64 = if img.crop_top > 0 || img.height < img.full_height {
             let crop_key = (img.path.clone(), img.crop_top, img.height);
-            if let Some(cached) = app.iterm2_crop_cache.get(&crop_key) {
+            if let Some(cached) = app.image.iterm2_crop_cache.get(&crop_key) {
                 cached.clone()
             } else {
-                let px_h = app.native_image_cache.get(&img.path).map(|c| c.2).unwrap_or(0);
+                let px_h = app.image.native_image_cache.get(&img.path).map(|c| c.2).unwrap_or(0);
                 let cropped = image_render::crop_png_vertical(&b64, px_h, img.full_height, img.crop_top, img.height)
                     .unwrap_or(b64);
-                app.iterm2_crop_cache.insert(crop_key, cropped.clone());
+                app.image.iterm2_crop_cache.insert(crop_key, cropped.clone());
                 cropped
             }
         } else {
@@ -633,7 +633,7 @@ fn emit_native_images(
     queue!(backend, RestorePosition)?;
     // No flush - let EndSynchronizedUpdate send everything atomically.
 
-    app.prev_visible_images = images;
+    app.image.prev_visible_images = images;
     Ok(())
 }
 
@@ -928,8 +928,8 @@ async fn run_app(
     app.desktop_notifications = config.desktop_notifications;
     app.notification_preview = config.notification_preview.clone();
     app.clipboard_clear_seconds = config.clipboard_clear_seconds;
-    app.image_mode = config.image_mode.clone();
-    app.show_link_previews = config.show_link_previews;
+    app.image.image_mode = config.image_mode.clone();
+    app.image.show_link_previews = config.show_link_previews;
     app.incognito = incognito;
     app.date_separators = config.date_separators;
     app.show_receipts = config.show_receipts;
@@ -942,7 +942,7 @@ async fn run_app(
     app.mouse_enabled = config.mouse_enabled;
     app.sidebar_on_right = config.sidebar_on_right;
     if config.cell_pixel_width > 0 && config.cell_pixel_height > 0 {
-        app.cell_px = (config.cell_pixel_width, config.cell_pixel_height);
+        app.image.cell_px = (config.cell_pixel_width, config.cell_pixel_height);
     }
     app.available_themes = theme::all_themes();
     app.theme = theme::find_theme(&config.theme);
@@ -995,9 +995,9 @@ async fn run_app(
     loop {
         // Only redraw when state has changed (avoids resetting cursor blink timer every 50ms)
         if needs_redraw {
-            let native = app.image_mode == "native";
+            let native = app.image.image_mode == "native";
             let sixel_mode = native
-                && app.image_protocol == image_render::ImageProtocol::Sixel;
+                && app.image.image_protocol == image_render::ImageProtocol::Sixel;
 
             // Always start sync update for atomic rendering (prevents cursor flicker).
             queue!(terminal.backend_mut(), BeginSynchronizedUpdate)?;
@@ -1012,21 +1012,21 @@ async fn run_app(
             // buffer, then after EndSync our Sixel overlays at the new positions.
             // Without this, stale Sixel pixels persist at old image positions
             // because ratatui's diff only sends changed cells.
-            if sixel_mode && app.scroll_offset != app.sixel_prev_scroll {
-                app.sixel_prev_scroll = app.scroll_offset;
-                app.prev_visible_images.clear();
+            if sixel_mode && app.scroll_offset != app.image.sixel_prev_scroll {
+                app.image.sixel_prev_scroll = app.scroll_offset;
+                app.image.prev_visible_images.clear();
                 terminal.clear()?;
             }
             terminal.draw(|frame| ui::draw(frame, &mut app))?;
             // Post-draw work that needs cursor hidden: OSC8 links use MoveTo,
             // and non-Sixel native images write escape sequences. Sixel emit
             // happens outside sync and handles its own cursor.
-            let has_post_draw = !app.link_regions.is_empty()
+            let has_post_draw = !app.image.link_regions.is_empty()
                 || (native && !sixel_mode);
             if has_post_draw && app.mode == InputMode::Insert {
                 queue!(terminal.backend_mut(), Hide)?;
             }
-            emit_osc8_links(terminal.backend_mut(), &app.link_regions, app.theme.link)?;
+            emit_osc8_links(terminal.backend_mut(), &app.image.link_regions, app.theme.link)?;
             if native && !sixel_mode {
                 emit_native_images(terminal.backend_mut(), &mut app)?;
             }

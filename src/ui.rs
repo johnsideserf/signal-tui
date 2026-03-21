@@ -477,8 +477,8 @@ fn styled_uri_spans(
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
-    app.link_url_map.clear();
-    app.visible_images.clear();
+    app.image.link_url_map.clear();
+    app.image.visible_images.clear();
     let size = frame.area();
     let terminal_width = size.width;
 
@@ -627,12 +627,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     // Collect link regions from the rendered buffer for OSC 8 injection
     let area = frame.area();
-    app.link_regions = collect_link_regions(frame.buffer_mut(), area, app.theme.link);
+    app.image.link_regions = collect_link_regions(frame.buffer_mut(), area, app.theme.link);
 
     // Resolve hidden URLs for attachment links (display text has no URI scheme)
-    for link in &mut app.link_regions {
+    for link in &mut app.image.link_regions {
         if !link.url.contains("://") {
-            if let Some(url) = app.link_url_map.get(&link.text) {
+            if let Some(url) = app.image.link_url_map.get(&link.text) {
                 link.url = url.clone();
             }
         }
@@ -929,7 +929,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut line_msg_idx: Vec<Option<usize>> = Vec::new();
 
     // Track images for native protocol overlay: (first_line_index, line_count, path)
-    let use_native = app.image_mode == "native" && app.image_protocol != ImageProtocol::Halfblock;
+    let use_native = app.image.image_mode == "native" && app.image.image_protocol != ImageProtocol::Halfblock;
     let mut image_records: Vec<(usize, usize, String)> = Vec::new();
 
     for (i, msg) in visible.iter().enumerate() {
@@ -1057,7 +1057,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                 if let Some(url) = hidden_url {
                     // Collect display text for link_url_map lookup
                     let display_text: String = body_spans.iter().map(|s| s.content.as_ref()).collect();
-                    app.link_url_map.insert(display_text, url);
+                    app.image.link_url_map.insert(display_text, url);
                 }
                 spans.push(Span::raw(" ".to_string()));
                 if app.emoji_to_text {
@@ -1073,7 +1073,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             line_msg_idx.push(Some(msg_index));
 
             // Render inline image preview if available (skip for deleted, skip if images disabled)
-            if !msg.is_deleted && app.image_mode != "none" {
+            if !msg.is_deleted && app.image.image_mode != "none" {
                 if let Some(ref image_lines) = msg.image_lines {
                     let first_idx = lines.len();
                     let count = image_lines.len();
@@ -1091,7 +1091,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             }
 
             // Render link preview block
-            if !msg.is_deleted && app.show_link_previews {
+            if !msg.is_deleted && app.image.show_link_previews {
                 if let Some(ref preview) = msg.preview {
                     if let Some(ref title) = preview.title {
                         lines.push(Line::from(vec![
@@ -1124,7 +1124,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     line_msg_idx.push(Some(msg_index));
 
                     // Render link preview thumbnail (only when images enabled)
-                    if app.image_mode != "none" {
+                    if app.image.image_mode != "none" {
                         if let Some(ref img_lines) = msg.preview_image_lines {
                             let first_idx = lines.len();
                             let count = img_lines.len();
@@ -1307,7 +1307,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                 let full_height = (img_end - img_start) as u16;
                 let crop_top = (vis_start as i64 - screen_start) as u16;
 
-                app.visible_images.push(VisibleImage {
+                app.image.visible_images.push(VisibleImage {
                     x: inner.x + 2, // account for 2-char indent
                     y: inner.y + vis_start,
                     width: img_width,
@@ -1338,7 +1338,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         .scroll((scroll_y as u16, 0));
     frame.render_widget(paragraph, inner);
 
-    if use_native && app.image_protocol == ImageProtocol::Kitty {
+    if use_native && app.image.image_protocol == ImageProtocol::Kitty {
         patch_kitty_placeholders(frame, app);
     }
     // Note: Sixel does NOT use set_skip. ratatui writes halfblock at image cells,
@@ -1366,13 +1366,13 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 /// Replaces the halfblock cells with U+10EEEE + row/column diacritics so the
 /// terminal renders image data at the cell level (instead of GPU overlays).
 fn patch_kitty_placeholders(frame: &mut Frame, app: &mut App) {
-    for img in &app.visible_images {
-        let id = if let Some(&existing) = app.kitty_image_ids.get(&img.path) {
+    for img in &app.image.visible_images {
+        let id = if let Some(&existing) = app.image.kitty_image_ids.get(&img.path) {
             existing
         } else {
-            let new_id = app.next_kitty_image_id;
-            app.next_kitty_image_id += 1;
-            app.kitty_image_ids.insert(img.path.clone(), new_id);
+            let new_id = app.image.next_kitty_image_id;
+            app.image.next_kitty_image_id += 1;
+            app.image.kitty_image_ids.insert(img.path.clone(), new_id);
             new_id
         };
         let fg = image_render::kitty_id_color(id);
@@ -1390,8 +1390,8 @@ fn patch_kitty_placeholders(frame: &mut Frame, app: &mut App) {
             }
         }
 
-        if !app.kitty_transmitted.contains(&id) {
-            app.kitty_pending_transmits.push((
+        if !app.image.kitty_transmitted.contains(&id) {
+            app.image.kitty_pending_transmits.push((
                 id,
                 img.path.clone(),
                 img.width,
@@ -2401,7 +2401,7 @@ fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
     };
     lines.push(Line::from(vec![
         Span::styled("  Image mode: ", image_mode_style),
-        Span::styled(app.image_mode.clone(), image_mode_value_style),
+        Span::styled(app.image.image_mode.clone(), image_mode_value_style),
     ]));
 
     // Theme selector entry (index == SETTINGS.len() + 2)
@@ -4144,7 +4144,7 @@ mod snapshot_tests {
         app.loading = false;
         app.is_demo = true;
         app.date_separators = false;
-        app.image_protocol = ImageProtocol::Halfblock;
+        app.image.image_protocol = ImageProtocol::Halfblock;
         app.populate_demo_data(fixed_date());
         app
     }
