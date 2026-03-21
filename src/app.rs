@@ -10,7 +10,7 @@ use std::time::Instant;
 use crate::db::Database;
 use crate::image_render;
 use crate::list_overlay::{self, classify_list_key, ListKeyAction};
-use crate::domain::{FilePickerState, ImageState, SearchAction, SearchState, TypingState};
+use crate::domain::{FilePickerState, ImageState, NotificationState, SearchAction, SearchState, TypingState};
 use crate::image_render::ImageProtocol;
 use crate::input::{self, InputAction, COMMANDS};
 use crate::keybindings::{self, BindingMode, KeyAction, KeyBindings};
@@ -346,20 +346,8 @@ pub struct App {
     /// a message arrives with the new sourceName. signal-cli's listContacts may return
     /// name=None for contacts whose profile isn't cached, so envelope names fill the gaps.
     pub contact_names: HashMap<String, String>,
-    /// Bell pending — set by handle_message, drained by main loop
-    pub pending_bell: bool,
-    /// Terminal bell for 1:1 messages in background conversations
-    pub notify_direct: bool,
-    /// Terminal bell for group messages in background conversations
-    pub notify_group: bool,
-    /// OS-level desktop notifications for incoming messages
-    pub desktop_notifications: bool,
-    /// Notification preview level: "full", "sender", or "minimal"
-    pub notification_preview: String,
-    /// Seconds before clipboard is auto-cleared after copying (0 = disabled)
-    pub clipboard_clear_seconds: u64,
-    /// Timestamp when clipboard was last set (for auto-clear)
-    pub clipboard_set_at: Option<std::time::Instant>,
+    /// Notification preferences and clipboard auto-clear state
+    pub notifications: NotificationState,
     /// Conversations muted from notifications
     pub muted_conversations: HashSet<String>,
     /// Conversations blocked via signal-cli
@@ -746,24 +734,24 @@ pub const SETTINGS: &[SettingDef] = &[
     SettingDef {
         label: "Direct message notifications",
         hint: "Play a sound for incoming direct messages",
-        get: |a| a.notify_direct,
-        set: |a, v| a.notify_direct = v,
+        get: |a| a.notifications.notify_direct,
+        set: |a, v| a.notifications.notify_direct = v,
         save: Some(|c, v| c.notify_direct = v),
         on_toggle: None,
     },
     SettingDef {
         label: "Group message notifications",
         hint: "Play a sound for incoming group messages",
-        get: |a| a.notify_group,
-        set: |a, v| a.notify_group = v,
+        get: |a| a.notifications.notify_group,
+        set: |a, v| a.notifications.notify_group = v,
         save: Some(|c, v| c.notify_group = v),
         on_toggle: None,
     },
     SettingDef {
         label: "Desktop notifications",
         hint: "Show system notifications for new messages",
-        get: |a| a.desktop_notifications,
-        set: |a, v| a.desktop_notifications = v,
+        get: |a| a.notifications.desktop_notifications,
+        set: |a, v| a.notifications.desktop_notifications = v,
         save: Some(|c, v| c.desktop_notifications = v),
         on_toggle: None,
     },
@@ -890,7 +878,7 @@ impl App {
         config.theme = self.theme.name.clone();
         config.keybinding_profile = self.keybindings.profile_name.clone();
         config.settings_profile = self.settings_profile_name.clone();
-        config.notification_preview = self.notification_preview.clone();
+        config.notification_preview = self.notifications.notification_preview.clone();
         config.image_mode = self.image.image_mode.clone();
         for def in SETTINGS {
             if let Some(save_fn) = def.save {
@@ -1064,7 +1052,7 @@ impl App {
             }
             KeyCode::Char(' ') | KeyCode::Enter | KeyCode::Tab => {
                 if self.settings_index == preview_index {
-                    self.notification_preview = match self.notification_preview.as_str() {
+                    self.notifications.notification_preview = match self.notifications.notification_preview.as_str() {
                         "full" => "sender".to_string(),
                         "sender" => "minimal".to_string(),
                         _ => "full".to_string(),
@@ -2642,13 +2630,7 @@ impl App {
             db,
             connection_error: None,
             contact_names: HashMap::new(),
-            pending_bell: false,
-            notify_direct: true,
-            notify_group: true,
-            desktop_notifications: false,
-            notification_preview: "full".to_string(),
-            clipboard_clear_seconds: 30,
-            clipboard_set_at: None,
+            notifications: NotificationState::new(),
             muted_conversations: HashSet::new(),
             blocked_conversations: HashSet::new(),
             autocomplete_visible: false,
@@ -3952,11 +3934,11 @@ impl App {
             let not_muted_or_blocked = conv_accepted
                 && !self.muted_conversations.contains(&conv_id)
                 && !self.blocked_conversations.contains(&conv_id);
-            let type_enabled = if is_group { self.notify_group } else { self.notify_direct };
+            let type_enabled = if is_group { self.notifications.notify_group } else { self.notifications.notify_direct };
             if type_enabled && not_muted_or_blocked {
-                self.pending_bell = true;
+                self.notifications.pending_bell = true;
             }
-            if self.desktop_notifications && not_muted_or_blocked {
+            if self.notifications.desktop_notifications && not_muted_or_blocked {
                 let notif_body = msg.body.as_deref().unwrap_or("");
                 let notif_group = if is_group {
                     self.conversations.get(&conv_id).map(|c| c.name.clone())
@@ -3968,7 +3950,7 @@ impl App {
                     notif_body,
                     is_group,
                     notif_group.as_deref(),
-                    &self.notification_preview,
+                    &self.notifications.notification_preview,
                 );
             }
         }
@@ -5390,20 +5372,20 @@ impl App {
                 match target.as_deref() {
                     None => {
                         // Toggle both together
-                        let new_state = !(self.notify_direct && self.notify_group);
-                        self.notify_direct = new_state;
-                        self.notify_group = new_state;
+                        let new_state = !(self.notifications.notify_direct && self.notifications.notify_group);
+                        self.notifications.notify_direct = new_state;
+                        self.notifications.notify_group = new_state;
                         let state = if new_state { "on" } else { "off" };
                         self.status_message = format!("notifications {state}");
                     }
                     Some("direct" | "dm" | "1:1") => {
-                        self.notify_direct = !self.notify_direct;
-                        let state = if self.notify_direct { "on" } else { "off" };
+                        self.notifications.notify_direct = !self.notifications.notify_direct;
+                        let state = if self.notifications.notify_direct { "on" } else { "off" };
                         self.status_message = format!("direct notifications {state}");
                     }
                     Some("group" | "groups") => {
-                        self.notify_group = !self.notify_group;
-                        let state = if self.notify_group { "on" } else { "off" };
+                        self.notifications.notify_group = !self.notifications.notify_group;
+                        let state = if self.notifications.notify_group { "on" } else { "off" };
                         self.status_message = format!("group notifications {state}");
                     }
                     Some(other) => {
@@ -6403,8 +6385,8 @@ impl App {
             Ok(mut clipboard) => match clipboard.set_text(&text) {
                 Ok(()) => {
                     self.status_message = "Copied to clipboard".to_string();
-                    if self.clipboard_clear_seconds > 0 {
-                        self.clipboard_set_at = Some(std::time::Instant::now());
+                    if self.notifications.clipboard_clear_seconds > 0 {
+                        self.notifications.clipboard_set_at = Some(std::time::Instant::now());
                     }
                 }
                 Err(e) => {
@@ -6419,9 +6401,9 @@ impl App {
 
     /// Clear the clipboard if auto-clear timer has expired.
     pub fn check_clipboard_clear(&mut self) {
-        if let Some(set_at) = self.clipboard_set_at {
-            if set_at.elapsed().as_secs() >= self.clipboard_clear_seconds {
-                self.clipboard_set_at = None;
+        if let Some(set_at) = self.notifications.clipboard_set_at {
+            if set_at.elapsed().as_secs() >= self.notifications.clipboard_clear_seconds {
+                self.notifications.clipboard_set_at = None;
                 if let Ok(mut clipboard) = arboard::Clipboard::new() {
                     let _ = clipboard.set_text("");
                 }
@@ -9426,7 +9408,7 @@ mod tests {
     #[rstest]
     fn bell_skipped_for_unaccepted_conversation(mut app: App) {
         app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
-        assert!(!app.pending_bell);
+        assert!(!app.notifications.pending_bell);
     }
 
     #[rstest]
@@ -9437,7 +9419,7 @@ mod tests {
         }
         app.blocked_conversations.insert("+1".to_string());
         app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
-        assert!(!app.pending_bell);
+        assert!(!app.notifications.pending_bell);
     }
 
     #[rstest]
@@ -9830,33 +9812,33 @@ mod tests {
         app.contact_names.insert("+1".to_string(), "Alice".to_string());
         app.get_or_create_conversation("+other", "Other", false);
         app.active_conversation = Some("+other".to_string());
-        app.notify_direct = true;
+        app.notifications.notify_direct = true;
 
         let msg = make_msg("+1", Some("hey"), None, false);
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
-        assert!(app.pending_bell);
+        assert!(app.notifications.pending_bell);
     }
 
     #[rstest]
     fn bell_not_set_for_active_conversation(mut app: App) {
         app.get_or_create_conversation("+1", "Alice", false);
         app.active_conversation = Some("+1".to_string());
-        app.notify_direct = true;
+        app.notifications.notify_direct = true;
 
         let msg = make_msg("+1", Some("hey"), None, false);
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
-        assert!(!app.pending_bell);
+        assert!(!app.notifications.pending_bell);
     }
 
     #[rstest]
     fn bell_skipped_when_notify_disabled(mut app: App) {
         app.get_or_create_conversation("+other", "Other", false);
         app.active_conversation = Some("+other".to_string());
-        app.notify_direct = false;
+        app.notifications.notify_direct = false;
 
         let msg = make_msg("+1", Some("hey"), None, false);
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
-        assert!(!app.pending_bell);
+        assert!(!app.notifications.pending_bell);
     }
 
     #[rstest]
@@ -9868,17 +9850,17 @@ mod tests {
         app.active_conversation = Some("+other".to_string());
 
         // group notifications enabled
-        app.notify_group = true;
+        app.notifications.notify_group = true;
         let msg = make_msg("+1", Some("hi team"), Some("g1"), false);
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
-        assert!(app.pending_bell);
+        assert!(app.notifications.pending_bell);
 
         // reset and disable
-        app.pending_bell = false;
-        app.notify_group = false;
+        app.notifications.pending_bell = false;
+        app.notifications.notify_group = false;
         let msg2 = make_msg("+2", Some("again"), Some("g1"), false);
         app.handle_signal_event(SignalEvent::MessageReceived(msg2));
-        assert!(!app.pending_bell);
+        assert!(!app.notifications.pending_bell);
     }
 
     // --- Unread count tests ---

@@ -923,11 +923,11 @@ async fn run_app(
     incognito: bool,
 ) -> Result<()> {
     let mut app = App::new(config.account.clone(), db);
-    app.notify_direct = config.notify_direct;
-    app.notify_group = config.notify_group;
-    app.desktop_notifications = config.desktop_notifications;
-    app.notification_preview = config.notification_preview.clone();
-    app.clipboard_clear_seconds = config.clipboard_clear_seconds;
+    app.notifications.notify_direct = config.notify_direct;
+    app.notifications.notify_group = config.notify_group;
+    app.notifications.desktop_notifications = config.desktop_notifications;
+    app.notifications.notification_preview = config.notification_preview.clone();
+    app.notifications.clipboard_clear_seconds = config.clipboard_clear_seconds;
     app.image.image_mode = config.image_mode.clone();
     app.image.show_link_previews = config.show_link_previews;
     app.incognito = incognito;
@@ -1148,8 +1148,8 @@ async fn run_app(
         }
 
         // Terminal bell on new messages in background conversations
-        if app.pending_bell {
-            app.pending_bell = false;
+        if app.notifications.pending_bell {
+            app.notifications.pending_bell = false;
             execute!(terminal.backend_mut(), Print("\x07"))?;
         }
 

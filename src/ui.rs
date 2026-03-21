@@ -2383,7 +2383,7 @@ fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
     };
     lines.push(Line::from(vec![
         Span::styled("  Notification preview: ", preview_style),
-        Span::styled(app.notification_preview.clone(), preview_value_style),
+        Span::styled(app.notifications.notification_preview.clone(), preview_value_style),
     ]));
 
     // Image mode cycle entry (index == SETTINGS.len() + 1)
