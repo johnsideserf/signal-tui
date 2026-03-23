@@ -6644,18 +6644,22 @@ fn extract_file_uri(body: &str) -> Option<String> {
 }
 
 /// Extract the first `https://` or `http://` URL from a message body.
-/// Skips `file:///` URIs. Stops at whitespace or `)`.
+/// Stops at whitespace or `)`.
 fn extract_http_url(body: &str) -> Option<String> {
+    let mut best: Option<(usize, &str)> = None;
     for scheme in &["https://", "http://"] {
         if let Some(pos) = body.find(scheme) {
-            let rest = &body[pos..];
-            let end = rest
-                .find(|c: char| c.is_whitespace() || c == ')')
-                .unwrap_or(rest.len());
-            return Some(rest[..end].to_string());
+            if best.is_none() || pos < best.unwrap().0 {
+                best = Some((pos, scheme));
+            }
         }
     }
-    None
+    let (pos, _) = best?;
+    let rest = &body[pos..];
+    let end = rest
+        .find(|c: char| c.is_whitespace() || c == ')')
+        .unwrap_or(rest.len());
+    Some(rest[..end].to_string())
 }
 
 impl App {
