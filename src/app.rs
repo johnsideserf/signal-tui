@@ -10174,4 +10174,24 @@ mod tests {
         assert!(!items.iter().any(|a| a.label == "Open attachment"), "should not have Open attachment");
         assert!(!items.iter().any(|a| a.label == "Open link"), "should not have Open link");
     }
+
+    #[rstest]
+    fn action_menu_respects_focused_msg_index(mut app: App) {
+        // Message 0: has a URL
+        let msg1 = make_msg("+1", Some("check https://example.com"), None, false);
+        app.handle_signal_event(SignalEvent::MessageReceived(msg1));
+        // Message 1: plain text (last/newest)
+        let msg2 = make_msg("+1", Some("just text"), None, false);
+        app.handle_signal_event(SignalEvent::MessageReceived(msg2));
+        app.active_conversation = Some("+1".to_string());
+
+        // Without focus, defaults to last message (plain text) — no Open link
+        let items = app.action_menu_items();
+        assert!(!items.iter().any(|a| a.label == "Open link"), "last msg has no URL");
+
+        // Focus the first message (the one with a URL)
+        app.focused_msg_index = Some(0);
+        let items = app.action_menu_items();
+        assert!(items.iter().any(|a| a.label == "Open link"), "focused msg has URL, should show Open link");
+    }
 }
