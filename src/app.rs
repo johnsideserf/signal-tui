@@ -6580,6 +6580,32 @@ fn file_uri_to_path(uri: &str) -> String {
     }
 }
 
+/// Extract the first `file:///` URI from a message body.
+/// Stops at whitespace or `)` to handle `[image: name](file:///path)` format.
+fn extract_file_uri(body: &str) -> Option<String> {
+    let pos = body.find("file:///")?;
+    let rest = &body[pos..];
+    let end = rest
+        .find(|c: char| c.is_whitespace() || c == ')')
+        .unwrap_or(rest.len());
+    Some(rest[..end].to_string())
+}
+
+/// Extract the first `https://` or `http://` URL from a message body.
+/// Skips `file:///` URIs. Stops at whitespace or `)`.
+fn extract_http_url(body: &str) -> Option<String> {
+    for scheme in &["https://", "http://"] {
+        if let Some(pos) = body.find(scheme) {
+            let rest = &body[pos..];
+            let end = rest
+                .find(|c: char| c.is_whitespace() || c == ')')
+                .unwrap_or(rest.len());
+            return Some(rest[..end].to_string());
+        }
+    }
+    None
+}
+
 impl App {
     /// Populate the app with demo conversations for `--demo` mode and snapshot tests.
     /// `base_date` is used for deterministic timestamps instead of `Utc::now()`.
@@ -9975,5 +10001,60 @@ mod tests {
             accepted: true,
         };
         assert!(uuid_contact.is_stale(), "contact with UUID-only name is stale");
+    }
+
+    #[test]
+    fn extract_file_uri_from_image_body() {
+        let body = "[image: photo.jpg](file:///home/user/photo.jpg)";
+        assert_eq!(
+            extract_file_uri(body),
+            Some("file:///home/user/photo.jpg".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_file_uri_from_attachment_body() {
+        let body = "[attachment: doc.pdf](file:///home/user/doc.pdf)";
+        assert_eq!(
+            extract_file_uri(body),
+            Some("file:///home/user/doc.pdf".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_file_uri_none_for_plain_text() {
+        assert_eq!(extract_file_uri("hello world"), None);
+    }
+
+    #[test]
+    fn extract_http_url_from_body() {
+        let body = "check this out https://example.com/page and more text";
+        assert_eq!(
+            extract_http_url(body),
+            Some("https://example.com/page".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_http_url_skips_file_uri() {
+        let body = "[image: photo.jpg](file:///home/user/photo.jpg) see https://example.com";
+        assert_eq!(
+            extract_http_url(body),
+            Some("https://example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_http_url_none_for_plain_text() {
+        assert_eq!(extract_http_url("hello world"), None);
+    }
+
+    #[test]
+    fn extract_http_url_with_trailing_paren() {
+        let body = "link (https://example.com/path) here";
+        assert_eq!(
+            extract_http_url(body),
+            Some("https://example.com/path".to_string())
+        );
     }
 }
