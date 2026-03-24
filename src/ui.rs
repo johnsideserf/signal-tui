@@ -3336,7 +3336,12 @@ fn draw_keybindings(frame: &mut Frame, app: &App, area: Rect) {
             let key_display = if is_selected && app.keybindings_overlay.capturing {
                 "[Press key...]".to_string()
             } else {
-                app.keybindings.display_key(action)
+                // Multi-key sequences not in the binding map
+                match action {
+                    KeyAction::ScrollToTop => "gg".to_string(),
+                    KeyAction::DeleteMessage => "dd".to_string(),
+                    _ => app.keybindings.display_key(action),
+                }
             };
 
             let row_style = if is_selected {
