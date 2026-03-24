@@ -1263,12 +1263,8 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             app.focused_message_time = messages.get(fi).map(|m| m.timestamp);
             render_focus = Some(fi);
         } else {
-            // j/k line-scroll without J/K — derive focus from viewport for display only.
-            // Do NOT store into focused_msg_index; that would cause the "ensure visible"
-            // logic on the next frame to snap the viewport back to the bottom.
-            let idx = find_focused_msg_index(&lines, &line_msg_idx, inner_width, scroll_y, available_height);
-            app.focused_message_time = idx.and_then(|i| messages.get(i)).map(|m| m.timestamp);
-            render_focus = idx;
+            // Viewport-only scroll (Ctrl-E/Y, Ctrl-D/U) — no highlight without explicit focus.
+            render_focus = None;
         }
     } else {
         app.focused_msg_index = None;
@@ -1949,34 +1945,6 @@ fn draw_welcome(frame: &mut Frame, app: &App, area: Rect) {
 
 /// Find the message index at the bottom of the visible viewport.
 /// Returns the index into the conversation's messages Vec.
-fn find_focused_msg_index(
-    lines: &[Line], line_msg_idx: &[Option<usize>],
-    inner_width: usize, scroll_y: usize, available_height: usize,
-) -> Option<usize> {
-    let target_wrapped = scroll_y + available_height.saturating_sub(1);
-    let mut cumul = 0usize;
-    let mut focused_line_idx = None;
-    for (idx, line) in lines.iter().enumerate() {
-        let w = line.width();
-        let h = if w == 0 { 1 } else { w.div_ceil(inner_width.max(1)) };
-        if cumul + h > target_wrapped {
-            focused_line_idx = Some(idx);
-            break;
-        }
-        cumul += h;
-    }
-    let mut li = focused_line_idx?;
-    loop {
-        if let Some(Some(mi)) = line_msg_idx.get(li) {
-            return Some(*mi);
-        }
-        if li == 0 {
-            return None;
-        }
-        li -= 1;
-    }
-}
-
 fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
     let theme = &app.theme;
     let border_color = match app.mode {
@@ -2129,8 +2097,13 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect, sidebar_auto_hidden
     // Mode indicator
     match app.mode {
         InputMode::Normal => {
+            let label = if let Some(pk) = app.pending_normal_key {
+                format!(" [NORMAL] {pk}")
+            } else {
+                " [NORMAL] ".to_string()
+            };
             segments.push(Span::styled(
-                " [NORMAL] ",
+                label,
                 Style::default().fg(theme.accent_secondary).add_modifier(Modifier::BOLD),
             ));
         }
