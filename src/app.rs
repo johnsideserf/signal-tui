@@ -420,6 +420,8 @@ pub struct App {
     pub focused_message_time: Option<DateTime<Utc>>,
     /// Index of the focused message in the active conversation (set during draw)
     pub focused_msg_index: Option<usize>,
+    /// Pending normal-mode prefix key (e.g. first `g` of `gg`, first `d` of `dd`)
+    pub pending_normal_key: Option<char>,
     /// Jump-back stack: saved (scroll_offset, focused_msg_index) before quote jumps
     pub jump_stack: Vec<(usize, Option<usize>)>,
     /// Reaction display preferences and picker overlay state
@@ -2625,6 +2627,7 @@ impl App {
             pending_receipts: Vec::new(),
             focused_message_time: None,
             focused_msg_index: None,
+            pending_normal_key: None,
             jump_stack: Vec::new(),
             reactions: ReactionState::new(),
             groups: HashMap::new(),
@@ -3165,6 +3168,38 @@ impl App {
 
     /// Handle Normal mode key. Dispatches to scroll, edit, or action sub-handlers.
     pub fn handle_normal_key(&mut self, modifiers: KeyModifiers, code: KeyCode) -> Option<SendRequest> {
+        // Handle pending prefix key (gg, dd sequences)
+        if let Some(prev) = self.pending_normal_key.take() {
+            match (prev, code) {
+                ('g', KeyCode::Char('g')) => {
+                    // gg = scroll to top
+                    if let Some(ref id) = self.active_conversation {
+                        if let Some(conv) = self.conversations.get(id) {
+                            self.scroll_offset = conv.messages.len();
+                        }
+                    }
+                    self.focused_msg_index = None;
+                    return None;
+                }
+                ('d', KeyCode::Char('d')) => {
+                    // dd = delete message
+                    if let Some(msg) = self.selected_message() {
+                        if !msg.is_system && !msg.is_deleted {
+                            self.show_delete_confirm = true;
+                        }
+                    }
+                    return None;
+                }
+                (_, KeyCode::Esc) => {
+                    // Esc cancels pending prefix
+                    return None;
+                }
+                _ => {
+                    // Not a valid sequence -- fall through to process this key normally
+                }
+            }
+        }
+
         match self.keybindings.resolve(modifiers, code, BindingMode::Normal) {
             // Scroll
             Some(KeyAction::ScrollDown) => { self.scroll_offset = self.scroll_offset.saturating_sub(1); self.focused_msg_index = None; None }
@@ -3173,15 +3208,6 @@ impl App {
             Some(KeyAction::FocusPrevMessage) => { self.jump_to_adjacent_message(true); None }
             Some(KeyAction::HalfPageDown) => { self.scroll_offset = self.scroll_offset.saturating_sub(10); self.focused_msg_index = None; None }
             Some(KeyAction::HalfPageUp) => { self.scroll_offset = self.scroll_offset.saturating_add(10); self.focused_msg_index = None; None }
-            Some(KeyAction::ScrollToTop) => {
-                if let Some(ref id) = self.active_conversation {
-                    if let Some(conv) = self.conversations.get(id) {
-                        self.scroll_offset = conv.messages.len();
-                    }
-                }
-                self.focused_msg_index = None;
-                None
-            }
             Some(KeyAction::ScrollToBottom) => { self.scroll_offset = 0; self.focused_msg_index = None; None }
             // Edit/mode-switch
             Some(KeyAction::InsertAtCursor) => { self.mode = InputMode::Insert; None }
@@ -3324,14 +3350,6 @@ impl App {
                 }
                 None
             }
-            Some(KeyAction::DeleteMessage) => {
-                if let Some(msg) = self.selected_message() {
-                    if !msg.is_system && !msg.is_deleted {
-                        self.show_delete_confirm = true;
-                    }
-                }
-                None
-            }
             Some(KeyAction::NextSearchResult) => {
                 if !self.search.results.is_empty() { self.jump_to_search_result(true); }
                 None
@@ -3350,7 +3368,15 @@ impl App {
             Some(KeyAction::PinMessage) => self.execute_pin_toggle(),
             Some(KeyAction::JumpToQuote) => { self.jump_to_quote(); None }
             Some(KeyAction::JumpBack) => { self.jump_back(); None }
-            _ => None,
+            _ => {
+                // Handle prefix keys that aren't in the binding map
+                if let KeyCode::Char(c @ ('g' | 'd')) = code {
+                    if modifiers.is_empty() {
+                        self.pending_normal_key = Some(c);
+                    }
+                }
+                None
+            }
         }
     }
 
@@ -3360,6 +3386,7 @@ impl App {
         match self.keybindings.resolve(modifiers, code, BindingMode::Insert) {
             Some(KeyAction::ExitInsert) => {
                 self.mode = InputMode::Normal;
+                self.pending_normal_key = None; // defensive reset
                 self.autocomplete_visible = false;
                 self.reply_target = None;
                 self.editing_message = None;
