@@ -23,7 +23,7 @@ rusqlite = { version = "0.39", features = ["bundled"] }
 qrcode = "0.14"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 base64 = "0.22"
-arboard = "3"
+arboard = { version = "3", features = ["wayland-data-control"] }
 open = "5"
 notify-rust = "4"
 
