@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Instant;
 
+use crate::autocomplete::AutocompleteState;
+pub use crate::autocomplete::AutocompleteMode;
 use crate::conversation_store::{ConversationStore, db_warn, short_name};
 pub use crate::conversation_store::{Conversation, DisplayMessage, Quote};
 use crate::db::Database;
@@ -128,13 +130,6 @@ pub enum InputMode {
     Insert,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AutocompleteMode {
-    Command,
-    Mention,
-    Join,
-}
-
 /// Which sub-overlay of the /group menu is currently active.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GroupMenuState {
@@ -235,12 +230,8 @@ pub struct App {
     pub muted_conversations: HashSet<String>,
     /// Conversations blocked via signal-cli
     pub blocked_conversations: HashSet<String>,
-    /// Autocomplete popup visible
-    pub autocomplete_visible: bool,
-    /// Indices into COMMANDS for current matches
-    pub autocomplete_candidates: Vec<usize>,
-    /// Selected item in autocomplete popup
-    pub autocomplete_index: usize,
+    /// Autocomplete popup state: candidates, selection, pending mentions.
+    pub autocomplete: AutocompleteState,
     /// Settings overlay visible
     pub show_settings: bool,
     /// Cursor position in settings list
@@ -295,16 +286,6 @@ pub struct App {
     pub reactions: ReactionState,
         /// Emoji picker overlay state
     pub emoji_picker: EmojiPickerState,
-    /// Current autocomplete mode (Command vs Mention)
-    pub autocomplete_mode: AutocompleteMode,
-    /// Mention autocomplete candidates: (phone, display_name, uuid)
-    pub mention_candidates: Vec<(String, String, Option<String>)>,
-    /// Join autocomplete candidates: (display_text, completion_value)
-    pub join_candidates: Vec<(String, String)>,
-    /// Byte offset of the '@' trigger in input_buffer
-    pub mention_trigger_pos: usize,
-    /// Completed mentions for the current input: (display_name, uuid)
-    pub pending_mentions: Vec<(String, Option<String>)>,
     /// Demo mode — prevents config writes
     pub is_demo: bool,
     /// File browser overlay state
@@ -2425,38 +2406,30 @@ impl App {
     /// Returns `Some(SendRequest)` when the user submits a command
     /// that requires sending a message. Returns `None` otherwise.
     pub fn handle_autocomplete_key(&mut self, code: KeyCode) -> Option<SendRequest> {
-        let list_len = match self.autocomplete_mode {
-            AutocompleteMode::Command => self.autocomplete_candidates.len(),
-            AutocompleteMode::Mention => self.mention_candidates.len(),
-            AutocompleteMode::Join => self.join_candidates.len(),
-        };
+        let list_len = self.autocomplete.len();
         match code {
             KeyCode::Up => {
                 if list_len > 0 {
-                    self.autocomplete_index = if self.autocomplete_index == 0 {
+                    self.autocomplete.index = if self.autocomplete.index == 0 {
                         list_len - 1
                     } else {
-                        self.autocomplete_index - 1
+                        self.autocomplete.index - 1
                     };
                 }
             }
             KeyCode::Down => {
                 if list_len > 0 {
-                    self.autocomplete_index = (self.autocomplete_index + 1) % list_len;
+                    self.autocomplete.index = (self.autocomplete.index + 1) % list_len;
                 }
             }
             KeyCode::Tab => {
                 self.apply_autocomplete();
             }
             KeyCode::Esc => {
-                self.autocomplete_visible = false;
-                self.autocomplete_candidates.clear();
-                self.mention_candidates.clear();
-                self.join_candidates.clear();
-                self.autocomplete_index = 0;
+                self.autocomplete.clear();
             }
             KeyCode::Enter => {
-                if self.autocomplete_mode == AutocompleteMode::Mention {
+                if self.autocomplete.mode == AutocompleteMode::Mention {
                     self.apply_autocomplete();
                     // Don't submit on Enter for mentions — just complete
                 } else {
@@ -2506,9 +2479,7 @@ impl App {
             notifications: NotificationState::new(),
             muted_conversations: HashSet::new(),
             blocked_conversations: HashSet::new(),
-            autocomplete_visible: false,
-            autocomplete_candidates: Vec::new(),
-            autocomplete_index: 0,
+            autocomplete: AutocompleteState::new(),
             show_settings: false,
             settings_index: 0,
             show_customize: false,
@@ -2533,11 +2504,6 @@ impl App {
             jump_stack: Vec::new(),
             reactions: ReactionState::new(),
             emoji_picker: EmojiPickerState::default(),
-            autocomplete_mode: AutocompleteMode::Command,
-            mention_candidates: Vec::new(),
-            join_candidates: Vec::new(),
-            mention_trigger_pos: 0,
-            pending_mentions: Vec::new(),
             is_demo: false,
             file_picker: FilePickerState::default(),
             pending_attachment: None,
@@ -2937,7 +2903,7 @@ impl App {
                 }
                 true
             }
-            Some(KeyAction::NextConversation) if !self.autocomplete_visible => {
+            Some(KeyAction::NextConversation) if !self.autocomplete.visible => {
                 self.next_conversation();
                 true
             }
@@ -3091,7 +3057,7 @@ impl App {
             self.handle_settings_key(code);
             return (true, None);
         }
-        if self.autocomplete_visible {
+        if self.autocomplete.visible {
             let send = self.handle_autocomplete_key(code);
             return (true, send);
         }
@@ -3229,7 +3195,7 @@ impl App {
                 if !self.input_buffer.is_empty() {
                     self.input_buffer.clear();
                     self.input_cursor = 0;
-                    self.pending_mentions.clear();
+                    self.autocomplete.pending_mentions.clear();
                 }
                 None
             }
@@ -3326,7 +3292,7 @@ impl App {
             Some(KeyAction::ExitInsert) => {
                 self.mode = InputMode::Normal;
                 self.pending_normal_key = None; // defensive reset
-                self.autocomplete_visible = false;
+                self.autocomplete.visible = false;
                 self.reply_target = None;
                 self.editing_message = None;
                 if self.typing.reset() {
@@ -3337,7 +3303,7 @@ impl App {
             Some(KeyAction::InsertNewline) => {
                 self.input_buffer.insert(self.input_cursor, '\n');
                 self.input_cursor += 1;
-                self.autocomplete_visible = false;
+                self.autocomplete.visible = false;
                 self.typing.last_keypress = Some(Instant::now());
                 if !self.typing.sent
                     && !self.input_buffer.starts_with('/')
@@ -4642,7 +4608,7 @@ impl App {
     /// Prepare outgoing mentions: replace @Name with U+FFFC and compute UTF-16 offsets.
     /// Returns (wire_body, mentions_for_rpc).
     fn prepare_outgoing_mentions(&self, text: &str) -> (String, Vec<(usize, String)>) {
-        if self.pending_mentions.is_empty() {
+        if self.autocomplete.pending_mentions.is_empty() {
             return (text.to_string(), Vec::new());
         }
 
@@ -4652,7 +4618,7 @@ impl App {
         // Process mentions in reverse order of their position in the string
         // to avoid offset invalidation
         let mut found: Vec<(usize, usize, String)> = Vec::new(); // (byte_start, byte_end, uuid)
-        for (name, uuid) in &self.pending_mentions {
+        for (name, uuid) in &self.autocomplete.pending_mentions {
             let pattern = format!("@{name}");
             if let Some(uuid) = uuid {
                 if let Some(pos) = wire.find(&pattern) {
@@ -4857,7 +4823,7 @@ impl App {
                             }
                             let is_group = conv.is_group;
                             let (wire_body, wire_mentions) = self.prepare_outgoing_mentions(&text);
-                            self.pending_mentions.clear();
+                            self.autocomplete.pending_mentions.clear();
                             self.db_warn_visible(
                                 self.db.update_message_body(&edit_conv_id, edit_ts, &text),
                                 "update_message_body",
@@ -4909,7 +4875,7 @@ impl App {
 
                     // Compute mention byte ranges for display styling
                     let mut mention_ranges = Vec::new();
-                    for (name, _uuid) in &self.pending_mentions {
+                    for (name, _uuid) in &self.autocomplete.pending_mentions {
                         let needle = format!("@{name}");
                         if let Some(pos) = display_body.find(&needle) {
                             mention_ranges.push((pos, pos + needle.len()));
@@ -4918,7 +4884,7 @@ impl App {
 
                     // Prepare outgoing mentions (replace @Name with U+FFFC for wire)
                     let (wire_body, wire_mentions) = self.prepare_outgoing_mentions(&text);
-                    self.pending_mentions.clear();
+                    self.autocomplete.pending_mentions.clear();
 
                     // Add our own message to the display
                     let now = Utc::now();
@@ -5331,11 +5297,11 @@ impl App {
             }
 
             if !candidates.is_empty() {
-                self.autocomplete_visible = true;
-                self.autocomplete_mode = AutocompleteMode::Command;
-                self.autocomplete_candidates = candidates;
-                if self.autocomplete_index >= self.autocomplete_candidates.len() {
-                    self.autocomplete_index = 0;
+                self.autocomplete.visible = true;
+                self.autocomplete.mode = AutocompleteMode::Command;
+                self.autocomplete.command_candidates = candidates;
+                if self.autocomplete.index >= self.autocomplete.command_candidates.len() {
+                    self.autocomplete.index = 0;
                 }
                 return;
             }
@@ -5403,11 +5369,11 @@ impl App {
             candidates.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
 
             if !candidates.is_empty() {
-                self.autocomplete_visible = true;
-                self.autocomplete_mode = AutocompleteMode::Join;
-                self.join_candidates = candidates;
-                if self.autocomplete_index >= self.join_candidates.len() {
-                    self.autocomplete_index = 0;
+                self.autocomplete.visible = true;
+                self.autocomplete.mode = AutocompleteMode::Join;
+                self.autocomplete.join_candidates = candidates;
+                if self.autocomplete.index >= self.autocomplete.join_candidates.len() {
+                    self.autocomplete.index = 0;
                 }
                 return;
             }
@@ -5457,12 +5423,12 @@ impl App {
                     candidates.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
 
                     if !candidates.is_empty() {
-                        self.autocomplete_visible = true;
-                        self.autocomplete_mode = AutocompleteMode::Mention;
-                        self.mention_candidates = candidates;
-                        self.mention_trigger_pos = trigger_pos;
-                        if self.autocomplete_index >= self.mention_candidates.len() {
-                            self.autocomplete_index = 0;
+                        self.autocomplete.visible = true;
+                        self.autocomplete.mode = AutocompleteMode::Mention;
+                        self.autocomplete.mention_candidates = candidates;
+                        self.autocomplete.mention_trigger_pos = trigger_pos;
+                        if self.autocomplete.index >= self.autocomplete.mention_candidates.len() {
+                            self.autocomplete.index = 0;
                         }
                         return;
                     }
@@ -5471,11 +5437,7 @@ impl App {
         }
 
         // No autocomplete match
-        self.autocomplete_visible = false;
-        self.autocomplete_candidates.clear();
-        self.mention_candidates.clear();
-        self.join_candidates.clear();
-        self.autocomplete_index = 0;
+        self.autocomplete.clear();
     }
 
     /// Find the byte position of the `@` trigger for mention autocomplete.
@@ -5770,9 +5732,9 @@ impl App {
 
     /// Accept the currently selected autocomplete candidate.
     pub fn apply_autocomplete(&mut self) {
-        match self.autocomplete_mode {
+        match self.autocomplete.mode {
             AutocompleteMode::Command => {
-                if let Some(&cmd_idx) = self.autocomplete_candidates.get(self.autocomplete_index) {
+                if let Some(&cmd_idx) = self.autocomplete.command_candidates.get(self.autocomplete.index) {
                     let cmd = &COMMANDS[cmd_idx];
                     if cmd.args.is_empty() {
                         self.input_buffer = cmd.name.to_string();
@@ -5780,37 +5742,37 @@ impl App {
                         self.input_buffer = format!("{} ", cmd.name);
                     }
                     self.input_cursor = self.input_buffer.len();
-                    self.autocomplete_visible = false;
-                    self.autocomplete_candidates.clear();
-                    self.autocomplete_index = 0;
+                    self.autocomplete.visible = false;
+                    self.autocomplete.command_candidates.clear();
+                    self.autocomplete.index = 0;
                 }
             }
             AutocompleteMode::Mention => {
                 if let Some((_phone, name, uuid)) =
-                    self.mention_candidates.get(self.autocomplete_index).cloned()
+                    self.autocomplete.mention_candidates.get(self.autocomplete.index).cloned()
                 {
                     // Replace @partial with @FullName followed by a space
                     let replacement = format!("@{name} ");
-                    let before = &self.input_buffer[..self.mention_trigger_pos];
+                    let before = &self.input_buffer[..self.autocomplete.mention_trigger_pos];
                     let after = &self.input_buffer[self.input_cursor..];
                     self.input_buffer = format!("{before}{replacement}{after}");
-                    self.input_cursor = self.mention_trigger_pos + replacement.len();
+                    self.input_cursor = self.autocomplete.mention_trigger_pos + replacement.len();
                     // Record for outgoing mention
-                    self.pending_mentions.push((name, uuid));
-                    self.autocomplete_visible = false;
-                    self.mention_candidates.clear();
-                    self.autocomplete_index = 0;
+                    self.autocomplete.pending_mentions.push((name, uuid));
+                    self.autocomplete.visible = false;
+                    self.autocomplete.mention_candidates.clear();
+                    self.autocomplete.index = 0;
                 }
             }
             AutocompleteMode::Join => {
                 if let Some((_display, value)) =
-                    self.join_candidates.get(self.autocomplete_index).cloned()
+                    self.autocomplete.join_candidates.get(self.autocomplete.index).cloned()
                 {
                     self.input_buffer = format!("/join {value}");
                     self.input_cursor = self.input_buffer.len();
-                    self.autocomplete_visible = false;
-                    self.join_candidates.clear();
-                    self.autocomplete_index = 0;
+                    self.autocomplete.visible = false;
+                    self.autocomplete.join_candidates.clear();
+                    self.autocomplete.index = 0;
                 }
             }
         }
@@ -6106,7 +6068,7 @@ impl App {
             || self.show_about
             || self.profile.show
             || self.forward.show
-            || self.autocomplete_visible
+            || self.autocomplete.visible
     }
 
     /// Handle a mouse event. Returns an optional SendRequest (currently unused but future-proof).
@@ -6998,9 +6960,9 @@ mod tests {
     ) {
         app.input_buffer = input.to_string();
         app.update_autocomplete();
-        assert_eq!(app.autocomplete_visible, expected_visible, "visibility for {input:?}");
+        assert_eq!(app.autocomplete.visible, expected_visible, "visibility for {input:?}");
         if let Some(count) = expected_count {
-            assert_eq!(app.autocomplete_candidates.len(), count, "count for {input:?}");
+            assert_eq!(app.autocomplete.command_candidates.len(), count, "count for {input:?}");
         }
     }
 
@@ -7028,10 +6990,10 @@ mod tests {
     fn apply_autocomplete_index_clamped(mut app: App) {
         app.input_buffer = "/".to_string();
         app.update_autocomplete();
-        let len = app.autocomplete_candidates.len();
-        app.autocomplete_index = len + 5; // way out of bounds
+        let len = app.autocomplete.command_candidates.len();
+        app.autocomplete.index = len + 5; // way out of bounds
         app.update_autocomplete(); // should clamp
-        assert!(app.autocomplete_index < app.autocomplete_candidates.len());
+        assert!(app.autocomplete.index < app.autocomplete.command_candidates.len());
     }
 
     // --- Join autocomplete tests ---
@@ -7042,9 +7004,9 @@ mod tests {
         app.store.contact_names.insert("+2".to_string(), "Bob".to_string());
         app.input_buffer = "/join ".to_string();
         app.update_autocomplete();
-        assert!(app.autocomplete_visible);
-        assert_eq!(app.autocomplete_mode, AutocompleteMode::Join);
-        assert_eq!(app.join_candidates.len(), 2);
+        assert!(app.autocomplete.visible);
+        assert_eq!(app.autocomplete.mode, AutocompleteMode::Join);
+        assert_eq!(app.autocomplete.join_candidates.len(), 2);
     }
 
     #[rstest]
@@ -7057,10 +7019,10 @@ mod tests {
         });
         app.input_buffer = "/join ".to_string();
         app.update_autocomplete();
-        assert!(app.autocomplete_visible);
-        assert_eq!(app.autocomplete_mode, AutocompleteMode::Join);
-        assert_eq!(app.join_candidates.len(), 1);
-        assert!(app.join_candidates[0].0.starts_with('#'));
+        assert!(app.autocomplete.visible);
+        assert_eq!(app.autocomplete.mode, AutocompleteMode::Join);
+        assert_eq!(app.autocomplete.join_candidates.len(), 1);
+        assert!(app.autocomplete.join_candidates[0].0.starts_with('#'));
     }
 
     #[rstest]
@@ -7069,9 +7031,9 @@ mod tests {
         app.store.contact_names.insert("+2".to_string(), "Bob".to_string());
         app.input_buffer = "/join al".to_string();
         app.update_autocomplete();
-        assert!(app.autocomplete_visible);
-        assert_eq!(app.join_candidates.len(), 1);
-        assert!(app.join_candidates[0].0.contains("Alice"));
+        assert!(app.autocomplete.visible);
+        assert_eq!(app.autocomplete.join_candidates.len(), 1);
+        assert!(app.autocomplete.join_candidates[0].0.contains("Alice"));
     }
 
     #[rstest]
@@ -7080,9 +7042,9 @@ mod tests {
         app.store.contact_names.insert("+5678".to_string(), "Bob".to_string());
         app.input_buffer = "/join +123".to_string();
         app.update_autocomplete();
-        assert!(app.autocomplete_visible);
-        assert_eq!(app.join_candidates.len(), 1);
-        assert!(app.join_candidates[0].1 == "+1234");
+        assert!(app.autocomplete.visible);
+        assert_eq!(app.autocomplete.join_candidates.len(), 1);
+        assert!(app.autocomplete.join_candidates[0].1 == "+1234");
     }
 
     #[rstest]
@@ -7090,9 +7052,9 @@ mod tests {
         app.store.contact_names.insert("+1".to_string(), "Alice".to_string());
         app.input_buffer = "/j ".to_string();
         app.update_autocomplete();
-        assert!(app.autocomplete_visible);
-        assert_eq!(app.autocomplete_mode, AutocompleteMode::Join);
-        assert_eq!(app.join_candidates.len(), 1);
+        assert!(app.autocomplete.visible);
+        assert_eq!(app.autocomplete.mode, AutocompleteMode::Join);
+        assert_eq!(app.autocomplete.join_candidates.len(), 1);
     }
 
     #[rstest]
@@ -7100,7 +7062,7 @@ mod tests {
         app.store.contact_names.insert("+1".to_string(), "Alice".to_string());
         app.input_buffer = "/join zzz".to_string();
         app.update_autocomplete();
-        assert!(!app.autocomplete_visible);
+        assert!(!app.autocomplete.visible);
     }
 
     #[rstest]
@@ -7108,11 +7070,11 @@ mod tests {
         app.store.contact_names.insert("+1".to_string(), "Alice".to_string());
         app.input_buffer = "/join al".to_string();
         app.update_autocomplete();
-        assert!(app.autocomplete_visible);
+        assert!(app.autocomplete.visible);
         app.apply_autocomplete();
         assert_eq!(app.input_buffer, "/join +1");
         assert_eq!(app.input_cursor, 8);
-        assert!(!app.autocomplete_visible);
+        assert!(!app.autocomplete.visible);
     }
 
     #[rstest]
@@ -7125,7 +7087,7 @@ mod tests {
         });
         app.input_buffer = "/join fam".to_string();
         app.update_autocomplete();
-        assert!(app.autocomplete_visible);
+        assert!(app.autocomplete.visible);
         app.apply_autocomplete();
         assert_eq!(app.input_buffer, "/join g1");
         assert_eq!(app.input_cursor, 8);
@@ -7137,8 +7099,8 @@ mod tests {
         app.store.get_or_create_conversation("+9999", "+9999", false, &app.db);
         app.input_buffer = "/join +999".to_string();
         app.update_autocomplete();
-        assert!(app.autocomplete_visible);
-        assert_eq!(app.join_candidates.len(), 1);
+        assert!(app.autocomplete.visible);
+        assert_eq!(app.autocomplete.join_candidates.len(), 1);
     }
 
     #[rstest]
@@ -7148,9 +7110,9 @@ mod tests {
         app.store.contact_names.insert("+1".to_string(), "Alice".to_string());
         app.input_buffer = "/join ".to_string();
         app.update_autocomplete();
-        assert!(app.autocomplete_visible);
+        assert!(app.autocomplete.visible);
         // Only Alice should appear from contact_names (g1 is skipped as non-phone)
-        let contact_entries: Vec<_> = app.join_candidates.iter()
+        let contact_entries: Vec<_> = app.autocomplete.join_candidates.iter()
             .filter(|(_, v)| v == "+1")
             .collect();
         assert_eq!(contact_entries.len(), 1);
@@ -7161,9 +7123,9 @@ mod tests {
         app.store.contact_names.insert("+1".to_string(), "Alice".to_string());
         app.input_buffer = "/join ".to_string();
         app.update_autocomplete();
-        app.autocomplete_index = 100; // way out of bounds
+        app.autocomplete.index = 100; // way out of bounds
         app.update_autocomplete(); // should clamp
-        assert!(app.autocomplete_index < app.join_candidates.len());
+        assert!(app.autocomplete.index < app.autocomplete.join_candidates.len());
     }
 
     // --- apply_input_edit tests ---
@@ -8322,10 +8284,10 @@ mod tests {
         app.update_autocomplete();
 
         // Should trigger mention autocomplete in 1:1 with the contact
-        assert!(app.autocomplete_visible);
-        assert_eq!(app.autocomplete_mode, AutocompleteMode::Mention);
-        assert_eq!(app.mention_candidates.len(), 1);
-        assert_eq!(app.mention_candidates[0].1, "Alice");
+        assert!(app.autocomplete.visible);
+        assert_eq!(app.autocomplete.mode, AutocompleteMode::Mention);
+        assert_eq!(app.autocomplete.mention_candidates.len(), 1);
+        assert_eq!(app.autocomplete.mention_candidates[0].1, "Alice");
     }
 
     #[rstest]
@@ -8347,10 +8309,10 @@ mod tests {
         app.input_cursor = 3;
         app.update_autocomplete();
 
-        assert!(app.autocomplete_visible);
-        assert_eq!(app.autocomplete_mode, AutocompleteMode::Mention);
-        assert_eq!(app.mention_candidates.len(), 1);
-        assert_eq!(app.mention_candidates[0].1, "Alice");
+        assert!(app.autocomplete.visible);
+        assert_eq!(app.autocomplete.mode, AutocompleteMode::Mention);
+        assert_eq!(app.autocomplete.mention_candidates.len(), 1);
+        assert_eq!(app.autocomplete.mention_candidates[0].1, "Alice");
     }
 
     #[rstest]
@@ -8371,19 +8333,19 @@ mod tests {
         app.input_buffer = "Hey @Al".to_string();
         app.input_cursor = 7;
         app.update_autocomplete();
-        assert!(app.autocomplete_visible);
+        assert!(app.autocomplete.visible);
 
         app.apply_autocomplete();
         assert_eq!(app.input_buffer, "Hey @Alice ");
-        assert_eq!(app.pending_mentions.len(), 1);
-        assert_eq!(app.pending_mentions[0].0, "Alice");
-        assert_eq!(app.pending_mentions[0].1.as_deref(), Some("uuid-alice"));
+        assert_eq!(app.autocomplete.pending_mentions.len(), 1);
+        assert_eq!(app.autocomplete.pending_mentions[0].0, "Alice");
+        assert_eq!(app.autocomplete.pending_mentions[0].1.as_deref(), Some("uuid-alice"));
     }
 
     #[rstest]
     fn prepare_outgoing_mentions(mut app: App) {
 
-        app.pending_mentions = vec![
+        app.autocomplete.pending_mentions = vec![
             ("Alice".to_string(), Some("uuid-alice".to_string())),
         ];
 
@@ -9350,9 +9312,9 @@ mod tests {
         assert!(app.has_overlay());
         app.show_message_request = false;
 
-        app.autocomplete_visible = true;
+        app.autocomplete.visible = true;
         assert!(app.has_overlay());
-        app.autocomplete_visible = false;
+        app.autocomplete.visible = false;
 
         app.pin_duration.show = true;
         assert!(app.has_overlay());

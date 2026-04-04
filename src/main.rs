@@ -1,5 +1,6 @@
 mod app;
 mod config;
+mod autocomplete;
 mod conversation_store;
 mod db;
 mod debug_log;
