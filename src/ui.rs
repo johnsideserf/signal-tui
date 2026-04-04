@@ -522,12 +522,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_status_bar(frame, app, status_area, sidebar_auto_hidden);
 
     // Autocomplete popup (overlays everything)
-    if app.autocomplete_visible {
-        let has_items = match app.autocomplete_mode {
-            AutocompleteMode::Command => !app.autocomplete_candidates.is_empty(),
-            AutocompleteMode::Mention => !app.mention_candidates.is_empty(),
-            AutocompleteMode::Join => !app.join_candidates.is_empty(),
-        };
+    if app.autocomplete.visible {
+        let has_items = app.autocomplete.len() > 0;
         if has_items {
             draw_autocomplete(frame, app, input_area);
         }
@@ -2326,9 +2322,9 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
     let mut max_content_width: usize = 0;
 
-    match app.autocomplete_mode {
+    match app.autocomplete.mode {
         AutocompleteMode::Command => {
-            for (i, &cmd_idx) in app.autocomplete_candidates.iter().enumerate() {
+            for (i, &cmd_idx) in app.autocomplete.command_candidates.iter().enumerate() {
                 let cmd = &COMMANDS[cmd_idx];
                 let args_part = if cmd.args.is_empty() {
                     String::new()
@@ -2342,7 +2338,7 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect) {
                     max_content_width = total_len;
                 }
 
-                let is_selected = i == app.autocomplete_index;
+                let is_selected = i == app.autocomplete.index;
                 let style = if is_selected {
                     Style::default().bg(theme.bg_selected).fg(theme.fg).add_modifier(Modifier::BOLD)
                 } else {
@@ -2361,7 +2357,7 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect) {
             }
         }
         AutocompleteMode::Mention => {
-            for (i, (phone, name, _uuid)) in app.mention_candidates.iter().enumerate() {
+            for (i, (phone, name, _uuid)) in app.autocomplete.mention_candidates.iter().enumerate() {
                 let left = format!("  @{name}");
                 let right = format!("  {phone}");
                 let total_len = left.len() + right.len() + 2;
@@ -2369,7 +2365,7 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect) {
                     max_content_width = total_len;
                 }
 
-                let is_selected = i == app.autocomplete_index;
+                let is_selected = i == app.autocomplete.index;
                 let style = if is_selected {
                     Style::default().bg(theme.bg_selected).fg(theme.accent).add_modifier(Modifier::BOLD)
                 } else {
@@ -2388,14 +2384,14 @@ fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect) {
             }
         }
         AutocompleteMode::Join => {
-            for (i, (display, _value)) in app.join_candidates.iter().enumerate() {
+            for (i, (display, _value)) in app.autocomplete.join_candidates.iter().enumerate() {
                 let left = format!("  {display}");
                 let total_len = left.len() + 2;
                 if total_len > max_content_width {
                     max_content_width = total_len;
                 }
 
-                let is_selected = i == app.autocomplete_index;
+                let is_selected = i == app.autocomplete.index;
                 let style = if is_selected {
                     Style::default().bg(theme.bg_selected).fg(theme.success).add_modifier(Modifier::BOLD)
                 } else {
