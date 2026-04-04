@@ -3672,6 +3672,7 @@ impl App {
         if self.sync.active {
             self.sync.message_count += 1;
             self.sync.last_message_time = Some(Instant::now());
+            self.status_message = format!("Syncing... ({} messages received)", self.sync.message_count);
         }
 
         // Store source_name in contact lookup for future resolution (typing indicators, etc.)
