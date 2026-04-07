@@ -11,7 +11,7 @@ expression: output
 ▸   Alice            │││  /search <query>     Search messages               │d before 7            │
     Dave             │││  /sidebar            Toggle sidebar visibility     │habit                 │
                      │││  /bell [type]        Toggle notifications          │                      │
-                     │││  /mute               Mute/unmute conversation      │matic                 │
+                     │││  /mute [duration]    Mute/unmute conversation (e.g.│matic                 │
                      │││  /contacts           Browse contacts               │                      │
                      │││  /settings           Open settings                 │too                   │
                      │││  /keybindings        Configure keybindings         │                      │
