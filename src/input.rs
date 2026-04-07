@@ -34,8 +34,8 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "/mute",
         alias: "",
-        args: "",
-        description: "Mute/unmute current chat",
+        args: "[duration]",
+        description: "Mute/unmute conversation (e.g. /mute, /mute 1h, /mute 1d)",
     },
     CommandInfo {
         name: "/block",
@@ -168,8 +168,8 @@ pub enum InputAction {
     ToggleSidebar,
     /// Toggle terminal bell notifications (None = both, Some("direct"/"group") = specific)
     ToggleBell(Option<String>),
-    /// Mute/unmute the current conversation
-    ToggleMute,
+    /// Mute/unmute the current conversation (None = toggle permanent, Some(secs) = timed)
+    Mute(Option<u64>),
     /// Block the current contact/group
     Block,
     /// Unblock the current contact/group
@@ -214,6 +214,22 @@ pub enum InputAction {
     Unknown(String),
 }
 
+/// Parse a mute duration string like "1h", "8h", "1d", "1w" → seconds.
+/// Returns None if the format is invalid.
+fn parse_mute_duration(s: &str) -> Option<u64> {
+    if s.is_empty() {
+        return None;
+    }
+    let (num_str, suffix) = s.split_at(s.len() - 1);
+    let n: u64 = num_str.parse().ok()?;
+    match suffix {
+        "h" => Some(n * 3_600),
+        "d" => Some(n * 86_400),
+        "w" => Some(n * 7 * 86_400),
+        _ => None,
+    }
+}
+
 /// Parse a line of input into an action
 pub fn parse_input(input: &str) -> InputAction {
     let trimmed = input.trim();
@@ -251,7 +267,18 @@ pub fn parse_input(input: &str) -> InputAction {
                 InputAction::ToggleBell(Some(arg))
             }
         }
-        "/mute" => InputAction::ToggleMute,
+        "/mute" => {
+            if arg.is_empty() {
+                InputAction::Mute(None)
+            } else {
+                match parse_mute_duration(&arg) {
+                    Some(secs) => InputAction::Mute(Some(secs)),
+                    None => InputAction::Unknown(
+                        "invalid duration: use e.g. 1h, 8h, 1d, 1w".to_string(),
+                    ),
+                }
+            }
+        }
         "/block" => InputAction::Block,
         "/unblock" => InputAction::Unblock,
         "/attach" | "/a" => InputAction::Attach,
@@ -453,7 +480,7 @@ mod tests {
     #[case("/q", InputAction::Quit)]
     #[case("/sidebar", InputAction::ToggleSidebar)]
     #[case("/sb", InputAction::ToggleSidebar)]
-    #[case("/mute", InputAction::ToggleMute)]
+    #[case("/mute", InputAction::Mute(None))]
     #[case("/settings", InputAction::Settings)]
     #[case("/attach", InputAction::Attach)]
     #[case("/a", InputAction::Attach)]
@@ -511,6 +538,26 @@ mod tests {
             s.contains("requires"),
             "error for {input} should mention 'requires': {s}"
         );
+    }
+
+    // --- Mute duration parsing ---
+
+    #[rstest]
+    #[case("/mute", InputAction::Mute(None))]
+    #[case("/mute 1h", InputAction::Mute(Some(3_600)))]
+    #[case("/mute 8h", InputAction::Mute(Some(28_800)))]
+    #[case("/mute 1d", InputAction::Mute(Some(86_400)))]
+    #[case("/mute 1w", InputAction::Mute(Some(604_800)))]
+    fn mute_parses_duration(#[case] input: &str, #[case] expected: InputAction) {
+        assert_eq!(parse_input(input), expected);
+    }
+
+    #[test]
+    fn mute_invalid_duration_returns_unknown() {
+        match parse_input("/mute 2x") {
+            InputAction::Unknown(_) => {}
+            other => panic!("expected Unknown, got {other:?}"),
+        }
     }
 
     // --- SendText variants ---
