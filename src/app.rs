@@ -302,6 +302,8 @@ pub struct App {
     pub reply_target: Option<(String, String, i64)>,
     /// Delete confirmation overlay visible
     pub show_delete_confirm: bool,
+    /// Conversation delete confirmation overlay visible
+    pub show_conversation_delete_confirm: bool,
     /// Message being edited: (timestamp_ms, conv_id)
     pub editing_message: Option<(i64, String)>,
     /// Search overlay state
@@ -2522,6 +2524,7 @@ impl App {
             },
             reply_target: None,
             show_delete_confirm: false,
+            show_conversation_delete_confirm: false,
             editing_message: None,
             search: SearchState::default(),
             pending_typing_stop: None,
@@ -2959,6 +2962,10 @@ impl App {
         }
         if self.action_menu.show {
             let send = self.handle_action_menu_key(code);
+            return (true, send);
+        }
+        if self.show_conversation_delete_confirm {
+            let send = self.handle_conversation_delete_confirm_key(code);
             return (true, send);
         }
         if self.show_delete_confirm {
@@ -4070,6 +4077,21 @@ impl App {
         }
     }
 
+    /// Handle a key press in the conversation delete confirmation overlay.
+    pub fn handle_conversation_delete_confirm_key(&mut self, code: KeyCode) -> Option<SendRequest> {
+        match code {
+            KeyCode::Char('y') => {
+                self.show_conversation_delete_confirm = false;
+                self.delete_active_conversation()
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                self.show_conversation_delete_confirm = false;
+                None
+            }
+            _ => None,
+        }
+    }
+
     fn handle_edit_received(&mut self, conv_id: &str, target_timestamp: i64, new_body: &str) {
         if let Some(conv) = self.store.conversations.get_mut(conv_id) {
             if let Some(idx) = conv.find_msg_idx(target_timestamp) {
@@ -4984,6 +5006,13 @@ impl App {
                 self.reset_typing_with_stop();
                 self.update_status();
             }
+            InputAction::DeleteConversation => {
+                if self.active_conversation.is_some() {
+                    self.show_conversation_delete_confirm = true;
+                } else {
+                    self.status_message = "No active conversation to delete".to_string();
+                }
+            }
             InputAction::Quit => {
                 if self.input_buffer.is_empty() || self.quit_confirm {
                     self.should_quit = true;
@@ -5848,6 +5877,60 @@ impl App {
         }
     }
 
+    fn delete_active_conversation(&mut self) -> Option<SendRequest> {
+        let conv_id = match self.active_conversation.clone() {
+            Some(id) => id,
+            None => {
+                self.status_message = "No active conversation to delete".to_string();
+                return None;
+            }
+        };
+
+        let (name, is_group, accepted) = match self.store.conversations.get(&conv_id) {
+            Some(conv) => (conv.name.clone(), conv.is_group, conv.accepted),
+            None => {
+                self.status_message = "Active conversation no longer exists".to_string();
+                self.active_conversation = None;
+                return None;
+            }
+        };
+
+        self.store.conversations.remove(&conv_id);
+        self.store.conversation_order.retain(|id| id != &conv_id);
+        self.store.last_read_index.remove(&conv_id);
+        self.store.has_more_messages.remove(&conv_id);
+        self.store.groups.remove(&conv_id);
+        self.scroll_positions.remove(&conv_id);
+        self.muted_conversations.remove(&conv_id);
+        self.blocked_conversations.remove(&conv_id);
+        self.db_warn_visible(self.db.delete_conversation(&conv_id), "delete_conversation");
+
+        self.active_conversation = None;
+        self.scroll_offset = 0;
+        self.focused_msg_index = None;
+        self.pending_attachment = None;
+        self.reply_target = None;
+        self.editing_message = None;
+        self.show_message_request = false;
+        self.reset_typing_with_stop();
+        self.clear_kitty_placements();
+        if self.sidebar_filter_active {
+            self.refresh_sidebar_filter();
+        }
+
+        self.status_message = format!("Deleted conversation \"{name}\"");
+
+        if !accepted {
+            Some(SendRequest::MessageRequestResponse {
+                recipient: conv_id,
+                is_group,
+                response_type: "delete".to_string(),
+            })
+        } else {
+            None
+        }
+    }
+
     pub fn next_conversation(&mut self) {
         if self.store.conversation_order.is_empty() {
             return;
@@ -6057,6 +6140,7 @@ impl App {
             || self.action_menu.show
             || self.reactions.show_picker
             || self.emoji_picker.visible
+            || self.show_conversation_delete_confirm
             || self.show_delete_confirm
             || self.group_menu.state.is_some()
             || self.show_message_request
@@ -8481,6 +8565,66 @@ mod tests {
     }
 
     #[rstest]
+    fn delete_command_removes_active_conversation(mut app: App) {
+        app.store.get_or_create_conversation("+1", "Alice", false, &app.db);
+        app.active_conversation = Some("+1".to_string());
+        app.scroll_positions.insert("+1".to_string(), (3, Some(0)));
+        app.store.last_read_index.insert("+1".to_string(), 1);
+        app.store.has_more_messages.insert("+1".to_string());
+        app.db.insert_message("+1", "Alice", "2025-01-01T00:00:00Z", "hello world", false, None, 1000).unwrap();
+        app.input_buffer = "/delete".to_string();
+        app.input_cursor = 7;
+
+        let result = app.handle_input();
+
+        assert!(result.is_none());
+        assert!(!app.store.conversations.contains_key("+1"));
+        assert!(!app.store.conversation_order.iter().any(|id| id == "+1"));
+        assert!(!app.scroll_positions.contains_key("+1"));
+        assert!(!app.store.last_read_index.contains_key("+1"));
+        assert!(!app.store.has_more_messages.contains("+1"));
+        assert_eq!(app.active_conversation, None);
+        assert!(app.status_message.contains("Deleted conversation"));
+        assert!(app.db.load_messages_page("+1", 10, 0).unwrap().is_empty());
+    }
+
+    #[rstest]
+    fn delete_command_on_message_request_returns_remote_delete(mut app: App) {
+        app.store.get_or_create_conversation("+15550007777", "+15550007777", false, &app.db);
+        if let Some(conv) = app.store.conversations.get_mut("+15550007777") {
+            conv.accepted = false;
+        }
+        app.db.update_accepted("+15550007777", false).unwrap();
+        app.active_conversation = Some("+15550007777".to_string());
+        app.input_buffer = "/delete".to_string();
+        app.input_cursor = 7;
+
+        let result = app.handle_input();
+
+        match result {
+            Some(SendRequest::MessageRequestResponse { recipient, is_group, response_type }) => {
+                assert_eq!(recipient, "+15550007777");
+                assert!(!is_group);
+                assert_eq!(response_type, "delete");
+            }
+            _ => panic!("expected message request delete send request"),
+        }
+        assert!(!app.store.conversations.contains_key("+15550007777"));
+        assert_eq!(app.active_conversation, None);
+    }
+
+    #[rstest]
+    fn delete_command_without_active_conversation_sets_error(mut app: App) {
+        app.input_buffer = "/delete".to_string();
+        app.input_cursor = 7;
+
+        let result = app.handle_input();
+
+        assert!(result.is_none());
+        assert!(app.status_message.contains("No active conversation"));
+    }
+
+    #[rstest]
     fn search_opens_overlay(mut app: App) {
 
         app.store.get_or_create_conversation("+1", "Alice", false, &app.db);
@@ -9300,6 +9444,10 @@ mod tests {
         assert!(app.has_overlay());
         app.emoji_picker.visible = false;
 
+        app.show_conversation_delete_confirm = true;
+        assert!(app.has_overlay());
+        app.show_conversation_delete_confirm = false;
+
         app.show_delete_confirm = true;
         assert!(app.has_overlay());
         app.show_delete_confirm = false;
@@ -9377,6 +9525,48 @@ mod tests {
         app.handle_normal_key(KeyModifiers::NONE, KeyCode::Char('d'));
         assert_eq!(app.pending_normal_key, None);
         assert!(app.show_delete_confirm);
+    }
+
+    #[rstest]
+    fn slash_delete_shows_conversation_delete_confirm(mut app: App) {
+        app.store.get_or_create_conversation("+1", "Alice", false, &app.db);
+        app.active_conversation = Some("+1".to_string());
+        app.input_buffer = "/delete".to_string();
+
+        let req = app.handle_input();
+
+        assert!(req.is_none());
+        assert!(app.show_conversation_delete_confirm);
+        assert!(app.active_conversation.is_some());
+        assert!(app.store.conversations.contains_key("+1"));
+    }
+
+    #[rstest]
+    fn conversation_delete_confirm_yes_deletes_conversation(mut app: App) {
+        app.store.get_or_create_conversation("+1", "Alice", false, &app.db);
+        app.active_conversation = Some("+1".to_string());
+        app.show_conversation_delete_confirm = true;
+
+        let req = app.handle_overlay_key(KeyCode::Char('y')).1;
+
+        assert!(req.is_none());
+        assert!(!app.show_conversation_delete_confirm);
+        assert_eq!(app.active_conversation, None);
+        assert!(!app.store.conversations.contains_key("+1"));
+    }
+
+    #[rstest]
+    fn conversation_delete_confirm_cancel_keeps_conversation(mut app: App) {
+        app.store.get_or_create_conversation("+1", "Alice", false, &app.db);
+        app.active_conversation = Some("+1".to_string());
+        app.show_conversation_delete_confirm = true;
+
+        let req = app.handle_overlay_key(KeyCode::Char('n')).1;
+
+        assert!(req.is_none());
+        assert!(!app.show_conversation_delete_confirm);
+        assert_eq!(app.active_conversation.as_deref(), Some("+1"));
+        assert!(app.store.conversations.contains_key("+1"));
     }
 
     #[rstest]

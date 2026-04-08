@@ -589,6 +589,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_emoji_picker(frame, app, size);
     }
 
+    // Conversation delete confirmation overlay
+    if app.show_conversation_delete_confirm {
+        draw_conversation_delete_confirm(frame, app, size);
+    }
+
     // Delete confirmation overlay
     if app.show_delete_confirm {
         draw_delete_confirm(frame, app, size);
@@ -1950,6 +1955,23 @@ fn draw_delete_confirm(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(popup, popup_area);
 }
 
+fn draw_conversation_delete_confirm(frame: &mut Frame, app: &App, area: Rect) {
+    let theme = &app.theme;
+    let (popup_area, block) = centered_popup(
+        frame, area, 50, 5, " Delete Conversation ", theme,
+    );
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Delete conversation locally? (y)es / (n)o",
+            Style::default().fg(theme.fg),
+        )),
+    ];
+    let popup = Paragraph::new(lines).block(block);
+    frame.render_widget(popup, popup_area);
+}
+
 /// Render the welcome/empty-state screen when no conversation is active.
 fn draw_welcome(frame: &mut Frame, app: &App, area: Rect) {
     let theme = &app.theme;
@@ -2563,6 +2585,7 @@ fn draw_help(frame: &mut Frame, app: &App, area: Rect) {
     let commands: &[(&str, &str)] = &[
         ("/join <name>", "Switch to a conversation"),
         ("/part", "Leave current conversation"),
+        ("/delete", "Delete current conversation"),
         ("/attach", "Attach a file"),
         ("/search <query>", "Search messages"),
         ("/sidebar", "Toggle sidebar visibility"),
@@ -4300,6 +4323,15 @@ mod snapshot_tests {
         app.show_help = true;
         let output = render_to_string(&mut app, 100, 30);
         insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn test_conversation_delete_confirm_overlay() {
+        let mut app = demo_app();
+        app.show_conversation_delete_confirm = true;
+        let output = render_to_string(&mut app, 100, 30);
+        assert!(output.contains("Delete Conversation"));
+        assert!(output.contains("Delete conversation locally? (y)es / (n)o"));
     }
 
     #[test]

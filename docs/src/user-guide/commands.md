@@ -8,6 +8,7 @@ All commands start with `/`. Type `/` in Insert mode to open the autocomplete po
 |---|---|---|---|
 | `/join` | `/j` | `<name>` | Switch to a conversation by contact name, number, or group |
 | `/part` | `/p` | | Leave current conversation |
+| `/delete` | | | Delete current conversation |
 | `/search` | `/s` | `<query>` | Search messages across all conversations |
 | `/attach` | `/a` | | Open file browser to attach a file |
 | `/paste` | `/pa` | | Paste from clipboard (text or image) |
@@ -73,6 +74,14 @@ complete the selection.
 ```
 /mute
 ```
+
+**Delete the current conversation:**
+```
+/delete
+```
+
+Deletes the conversation from Siggy locally. For pending message requests, this
+also sends Signal's request-delete response.
 
 **Search for a message:**
 ```

@@ -117,6 +117,7 @@ All fields are optional. `signal_cli_path` defaults to `"signal-cli"` (found via
 - **Reply / quote** -- Press `q` on a focused message to reply with quoted context
 - **Edit messages** -- Press `e` to edit your own sent messages
 - **Delete messages** -- Press `d` to delete locally or remotely (for your own messages)
+- **Delete conversations** -- Use `/delete` to delete the current conversation locally
 - **Message search** -- `/search <query>` with `n`/`N` to jump between results
 - **@mentions** -- Type `@` in group chats to mention members with autocomplete
 - **Message selection** -- Focused message highlight when scrolling; `J`/`K` to jump between messages
@@ -142,6 +143,7 @@ All fields are optional. `signal_cli_path` defaults to `"signal-cli"` (found via
 |---|---|---|
 | `/join <name>` | `/j` | Switch to a conversation by contact name, number, or group |
 | `/part` | `/p` | Leave current conversation |
+| `/delete` | | Delete current conversation |
 | `/attach` | `/a` | Open file browser to attach a file |
 | `/search <query>` | `/s` | Search messages in current (or all) conversations |
 | `/sidebar` | `/sb` | Toggle sidebar visibility |
