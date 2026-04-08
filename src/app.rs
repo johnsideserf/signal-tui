@@ -302,6 +302,8 @@ pub struct App {
     pub reply_target: Option<(String, String, i64)>,
     /// Delete confirmation overlay visible
     pub show_delete_confirm: bool,
+    /// Conversation delete confirmation overlay visible
+    pub show_conversation_delete_confirm: bool,
     /// Message being edited: (timestamp_ms, conv_id)
     pub editing_message: Option<(i64, String)>,
     /// Search overlay state
@@ -2522,6 +2524,7 @@ impl App {
             },
             reply_target: None,
             show_delete_confirm: false,
+            show_conversation_delete_confirm: false,
             editing_message: None,
             search: SearchState::default(),
             pending_typing_stop: None,
@@ -2959,6 +2962,10 @@ impl App {
         }
         if self.action_menu.show {
             let send = self.handle_action_menu_key(code);
+            return (true, send);
+        }
+        if self.show_conversation_delete_confirm {
+            let send = self.handle_conversation_delete_confirm_key(code);
             return (true, send);
         }
         if self.show_delete_confirm {
@@ -4070,6 +4077,21 @@ impl App {
         }
     }
 
+    /// Handle a key press in the conversation delete confirmation overlay.
+    pub fn handle_conversation_delete_confirm_key(&mut self, code: KeyCode) -> Option<SendRequest> {
+        match code {
+            KeyCode::Char('y') => {
+                self.show_conversation_delete_confirm = false;
+                self.delete_active_conversation()
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                self.show_conversation_delete_confirm = false;
+                None
+            }
+            _ => None,
+        }
+    }
+
     fn handle_edit_received(&mut self, conv_id: &str, target_timestamp: i64, new_body: &str) {
         if let Some(conv) = self.store.conversations.get_mut(conv_id) {
             if let Some(idx) = conv.find_msg_idx(target_timestamp) {
@@ -4985,7 +5007,11 @@ impl App {
                 self.update_status();
             }
             InputAction::DeleteConversation => {
-                return self.delete_active_conversation();
+                if self.active_conversation.is_some() {
+                    self.show_conversation_delete_confirm = true;
+                } else {
+                    self.status_message = "No active conversation to delete".to_string();
+                }
             }
             InputAction::Quit => {
                 if self.input_buffer.is_empty() || self.quit_confirm {
@@ -6114,6 +6140,7 @@ impl App {
             || self.action_menu.show
             || self.reactions.show_picker
             || self.emoji_picker.visible
+            || self.show_conversation_delete_confirm
             || self.show_delete_confirm
             || self.group_menu.state.is_some()
             || self.show_message_request
@@ -9417,6 +9444,10 @@ mod tests {
         assert!(app.has_overlay());
         app.emoji_picker.visible = false;
 
+        app.show_conversation_delete_confirm = true;
+        assert!(app.has_overlay());
+        app.show_conversation_delete_confirm = false;
+
         app.show_delete_confirm = true;
         assert!(app.has_overlay());
         app.show_delete_confirm = false;
@@ -9494,6 +9525,48 @@ mod tests {
         app.handle_normal_key(KeyModifiers::NONE, KeyCode::Char('d'));
         assert_eq!(app.pending_normal_key, None);
         assert!(app.show_delete_confirm);
+    }
+
+    #[rstest]
+    fn slash_delete_shows_conversation_delete_confirm(mut app: App) {
+        app.store.get_or_create_conversation("+1", "Alice", false, &app.db);
+        app.active_conversation = Some("+1".to_string());
+        app.input_buffer = "/delete".to_string();
+
+        let req = app.handle_input();
+
+        assert!(req.is_none());
+        assert!(app.show_conversation_delete_confirm);
+        assert!(app.active_conversation.is_some());
+        assert!(app.store.conversations.contains_key("+1"));
+    }
+
+    #[rstest]
+    fn conversation_delete_confirm_yes_deletes_conversation(mut app: App) {
+        app.store.get_or_create_conversation("+1", "Alice", false, &app.db);
+        app.active_conversation = Some("+1".to_string());
+        app.show_conversation_delete_confirm = true;
+
+        let req = app.handle_overlay_key(KeyCode::Char('y')).1;
+
+        assert!(req.is_none());
+        assert!(!app.show_conversation_delete_confirm);
+        assert_eq!(app.active_conversation, None);
+        assert!(!app.store.conversations.contains_key("+1"));
+    }
+
+    #[rstest]
+    fn conversation_delete_confirm_cancel_keeps_conversation(mut app: App) {
+        app.store.get_or_create_conversation("+1", "Alice", false, &app.db);
+        app.active_conversation = Some("+1".to_string());
+        app.show_conversation_delete_confirm = true;
+
+        let req = app.handle_overlay_key(KeyCode::Char('n')).1;
+
+        assert!(req.is_none());
+        assert!(!app.show_conversation_delete_confirm);
+        assert_eq!(app.active_conversation.as_deref(), Some("+1"));
+        assert!(app.store.conversations.contains_key("+1"));
     }
 
     #[rstest]
