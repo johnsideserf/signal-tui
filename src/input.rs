@@ -9,6 +9,7 @@ pub struct CommandInfo {
 pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { name: "/join",     alias: "/j",  args: "<name>",  description: "Switch to a conversation" },
     CommandInfo { name: "/part",     alias: "/p",  args: "",        description: "Leave current conversation" },
+    CommandInfo { name: "/delete",   alias: "",    args: "",        description: "Delete current conversation" },
     CommandInfo { name: "/sidebar",  alias: "/sb", args: "",        description: "Toggle sidebar" },
     CommandInfo { name: "/bell",     alias: "",    args: "[type]",  description: "Toggle notifications (direct/group)" },
     CommandInfo { name: "/mute",     alias: "",    args: "",        description: "Mute/unmute current chat" },
@@ -42,6 +43,8 @@ pub enum InputAction {
     Join(String),
     /// Leave current conversation (go back to no selection)
     Part,
+    /// Delete the current conversation
+    DeleteConversation,
     /// Quit the application
     Quit,
     /// Toggle sidebar visibility
@@ -118,6 +121,7 @@ pub fn parse_input(input: &str) -> InputAction {
             }
         }
         "/part" | "/p" => InputAction::Part,
+        "/delete" => InputAction::DeleteConversation,
         "/quit" | "/q" => InputAction::Quit,
         "/sidebar" | "/sb" => InputAction::ToggleSidebar,
         "/bell" | "/notify" => {
@@ -315,11 +319,12 @@ mod tests {
     use super::*;
     use rstest::rstest;
 
-    // --- No-arg commands: 19 cases → 1 parameterized test ---
+    // --- No-arg commands: 30 cases → 1 parameterized test ---
 
     #[rstest]
     #[case("/part", InputAction::Part)]
     #[case("/p", InputAction::Part)]
+    #[case("/delete", InputAction::DeleteConversation)]
     #[case("/quit", InputAction::Quit)]
     #[case("/q", InputAction::Quit)]
     #[case("/sidebar", InputAction::ToggleSidebar)]

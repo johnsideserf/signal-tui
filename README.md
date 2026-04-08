@@ -83,6 +83,7 @@ On first launch, the setup wizard guides you through locating signal-cli, enteri
 ## Configuration
 
 Config is loaded from:
+
 - **Linux/macOS:** `~/.config/siggy/config.toml`
 - **Windows:** `%APPDATA%\siggy\config.toml`
 
@@ -117,6 +118,7 @@ All fields are optional. `signal_cli_path` defaults to `"signal-cli"` (found via
 - **Reply / quote** -- Press `q` on a focused message to reply with quoted context
 - **Edit messages** -- Press `e` to edit your own sent messages
 - **Delete messages** -- Press `d` to delete locally or remotely (for your own messages)
+- **Delete conversations** -- Use `/delete` to remove the current conversation
 - **Message search** -- `/search <query>` with `n`/`N` to jump between results
 - **@mentions** -- Type `@` in group chats to mention members with autocomplete
 - **Message selection** -- Focused message highlight when scrolling; `J`/`K` to jump between messages
@@ -138,24 +140,25 @@ All fields are optional. `signal_cli_path` defaults to `"signal-cli"` (found via
 
 ## Commands
 
-| Command | Alias | Description |
-|---|---|---|
-| `/join <name>` | `/j` | Switch to a conversation by contact name, number, or group |
-| `/part` | `/p` | Leave current conversation |
-| `/attach` | `/a` | Open file browser to attach a file |
-| `/search <query>` | `/s` | Search messages in current (or all) conversations |
-| `/sidebar` | `/sb` | Toggle sidebar visibility |
-| `/bell [type]` | `/notify` | Toggle notifications (`direct`, `group`, or both) |
-| `/mute` | | Mute/unmute current conversation |
-| `/block` | | Block current contact or group |
-| `/unblock` | | Unblock current contact or group |
-| `/disappearing <dur>` | `/dm` | Set disappearing message timer (`off`, `30s`, `5m`, `1h`, `1d`, `1w`) |
-| `/group` | `/g` | Open group management menu |
-| `/theme` | `/t` | Open theme picker |
-| `/contacts` | `/c` | Browse synced contacts |
-| `/settings` | | Open settings overlay |
-| `/help` | `/h` | Show help overlay |
-| `/quit` | `/q` | Exit siggy |
+| Command               | Alias     | Description                                                           |
+| --------------------- | --------- | --------------------------------------------------------------------- |
+| `/join <name>`        | `/j`      | Switch to a conversation by contact name, number, or group            |
+| `/part`               | `/p`      | Leave current conversation                                            |
+| `/delete`             |           | Delete current conversation                                           |
+| `/attach`             | `/a`      | Open file browser to attach a file                                    |
+| `/search <query>`     | `/s`      | Search messages in current (or all) conversations                     |
+| `/sidebar`            | `/sb`     | Toggle sidebar visibility                                             |
+| `/bell [type]`        | `/notify` | Toggle notifications (`direct`, `group`, or both)                     |
+| `/mute`               |           | Mute/unmute current conversation                                      |
+| `/block`              |           | Block current contact or group                                        |
+| `/unblock`            |           | Unblock current contact or group                                      |
+| `/disappearing <dur>` | `/dm`     | Set disappearing message timer (`off`, `30s`, `5m`, `1h`, `1d`, `1w`) |
+| `/group`              | `/g`      | Open group management menu                                            |
+| `/theme`              | `/t`      | Open theme picker                                                     |
+| `/contacts`           | `/c`      | Browse synced contacts                                                |
+| `/settings`           |           | Open settings overlay                                                 |
+| `/help`               | `/h`      | Show help overlay                                                     |
+| `/quit`               | `/q`      | Exit siggy                                                            |
 
 Type `/` to open the autocomplete popup. Use `Tab` to complete, arrow keys to navigate.
 
@@ -167,50 +170,50 @@ The app uses vim-style modal editing with two modes: **Insert** (default) and **
 
 ### Global (both modes)
 
-| Key | Action |
-|---|---|
-| `Ctrl+C` | Quit |
-| `Tab` / `Shift+Tab` | Next / previous conversation |
-| `PgUp` / `PgDn` | Scroll messages (5 lines) |
-| `Ctrl+Left` / `Ctrl+Right` | Resize sidebar |
+| Key                        | Action                       |
+| -------------------------- | ---------------------------- |
+| `Ctrl+C`                   | Quit                         |
+| `Tab` / `Shift+Tab`        | Next / previous conversation |
+| `PgUp` / `PgDn`            | Scroll messages (5 lines)    |
+| `Ctrl+Left` / `Ctrl+Right` | Resize sidebar               |
 
 ### Normal mode
 
 Press `Esc` to enter Normal mode.
 
-| Key | Action |
-|---|---|
-| `j` / `k` | Scroll down / up 1 line |
-| `J` / `K` | Jump to previous / next message |
-| `Ctrl+D` / `Ctrl+U` | Scroll down / up half page |
-| `g` / `G` | Scroll to top / bottom |
-| `h` / `l` | Move cursor left / right |
-| `w` / `b` | Word forward / back |
-| `0` / `$` | Start / end of line |
-| `x` | Delete character at cursor |
-| `D` | Delete from cursor to end |
-| `y` / `Y` | Copy message body / full line |
-| `r` | React to focused message |
-| `q` | Reply / quote focused message |
-| `e` | Edit own sent message |
-| `d` | Delete message (local or remote) |
-| `n` / `N` | Jump to next / previous search match |
-| `i` | Enter Insert mode |
-| `a` | Enter Insert mode (cursor right 1) |
-| `I` / `A` | Enter Insert mode at start / end of line |
-| `o` | Enter Insert mode (clear buffer) |
-| `/` | Enter Insert mode with `/` pre-typed |
+| Key                 | Action                                   |
+| ------------------- | ---------------------------------------- |
+| `j` / `k`           | Scroll down / up 1 line                  |
+| `J` / `K`           | Jump to previous / next message          |
+| `Ctrl+D` / `Ctrl+U` | Scroll down / up half page               |
+| `g` / `G`           | Scroll to top / bottom                   |
+| `h` / `l`           | Move cursor left / right                 |
+| `w` / `b`           | Word forward / back                      |
+| `0` / `$`           | Start / end of line                      |
+| `x`                 | Delete character at cursor               |
+| `D`                 | Delete from cursor to end                |
+| `y` / `Y`           | Copy message body / full line            |
+| `r`                 | React to focused message                 |
+| `q`                 | Reply / quote focused message            |
+| `e`                 | Edit own sent message                    |
+| `d`                 | Delete message (local or remote)         |
+| `n` / `N`           | Jump to next / previous search match     |
+| `i`                 | Enter Insert mode                        |
+| `a`                 | Enter Insert mode (cursor right 1)       |
+| `I` / `A`           | Enter Insert mode at start / end of line |
+| `o`                 | Enter Insert mode (clear buffer)         |
+| `/`                 | Enter Insert mode with `/` pre-typed     |
 
 ### Insert mode (default)
 
-| Key | Action |
-|---|---|
-| `Esc` | Switch to Normal mode |
-| `Enter` | Send message / execute command |
-| `Backspace` / `Delete` | Delete characters |
-| `Up` / `Down` | Recall input history |
-| `Left` / `Right` | Move cursor |
-| `Home` / `End` | Jump to start / end of line |
+| Key                    | Action                         |
+| ---------------------- | ------------------------------ |
+| `Esc`                  | Switch to Normal mode          |
+| `Enter`                | Send message / execute command |
+| `Backspace` / `Delete` | Delete characters              |
+| `Up` / `Down`          | Recall input history           |
+| `Left` / `Right`       | Move cursor                    |
+| `Home` / `End`         | Jump to start / end of line    |
 
 ## Architecture
 

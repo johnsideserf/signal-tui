@@ -7,9 +7,10 @@ expression: output
   • ##Family (2)     │││  Commands                                          │                      │
   • Carol (1)        │││  /join <name>        Switch to a conversation      │                      │
     ##Rust Devs      │││  /part               Leave current conversation    │                      │
-    Bob              │││  /attach             Attach a file                 │ run                  │
-▸   Alice            │││  /search <query>     Search messages               │d before 7            │
-    Dave             │││  /sidebar            Toggle sidebar visibility     │habit                 │
+    Bob              │││  /delete             Delete current conversation   │ run                  │
+▸   Alice            │││  /attach             Attach a file                 │d before 7            │
+    Dave             │││  /search <query>     Search messages               │habit                 │
+                     │││  /sidebar            Toggle sidebar visibility     │                      │
                      │││  /bell [type]        Toggle notifications          │                      │
                      │││  /mute               Mute/unmute conversation      │matic                 │
                      │││  /contacts           Browse contacts               │                      │
