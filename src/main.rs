@@ -10,6 +10,7 @@ mod input;
 mod keybindings;
 mod link;
 mod list_overlay;
+mod mute;
 mod settings_profile;
 mod setup;
 mod signal;

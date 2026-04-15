@@ -406,7 +406,9 @@ pub fn parse_duration_to_seconds(s: &str) -> Result<i64, String> {
         return Err(format!("Invalid duration: {s}. Use off/30s/5m/1h/1d/1w/4w"));
     };
     match num_str.parse::<i64>() {
-        Ok(n) if n > 0 => Ok(n * multiplier),
+        Ok(n) if n > 0 => n
+            .checked_mul(multiplier)
+            .ok_or_else(|| format!("Duration too large: {s}")),
         _ => Err(format!("Invalid duration: {s}. Use off/30s/5m/1h/1d/1w/4w")),
     }
 }

@@ -717,6 +717,7 @@ fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
             .collect()
     };
 
+    let now = chrono::Utc::now();
     let items: Vec<ListItem> = display_order
         .iter()
         .map(|id| {
@@ -759,13 +760,12 @@ fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
             }
 
             // Conversation name
-            let mute_expiry = app.muted_conversations.get(id);
-            let is_muted = mute_expiry.is_some();
+            let mute_state = app.active_mute(id, now);
             let name_style = if is_active {
                 Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)
             } else if has_unread {
                 Style::default().fg(theme.warning)
-            } else if is_muted {
+            } else if mute_state.is_some() {
                 Style::default().fg(theme.fg_muted)
             } else {
                 Style::default().fg(theme.fg_secondary)
@@ -779,23 +779,8 @@ fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
                 ));
             }
 
-            if is_muted {
-                let indicator = match mute_expiry {
-                    Some(Some(expiry)) => {
-                        let remaining = expiry
-                            .signed_duration_since(chrono::Utc::now())
-                            .num_seconds();
-                        if remaining > 0 {
-                            format!(" {}", crate::input::format_mute_remaining(remaining))
-                        } else {
-                            String::new() // expired, sweep will clean up
-                        }
-                    }
-                    _ => " ~".to_string(), // permanent mute
-                };
-                if !indicator.is_empty() {
-                    spans.push(Span::styled(indicator, Style::default().fg(theme.fg_muted)));
-                }
+            if let Some(indicator) = mute_state.and_then(|m| m.sidebar_indicator(now)) {
+                spans.push(Span::styled(indicator, Style::default().fg(theme.fg_muted)));
             }
             if app.blocked_conversations.contains(id) {
                 spans.push(Span::styled(" x", Style::default().fg(theme.error)));
