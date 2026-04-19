@@ -317,6 +317,34 @@ fn collect_link_regions(buf: &Buffer, area: Rect, link_color: Color) -> Vec<Link
     regions
 }
 
+/// Split a list of body spans into sub-lists, one per output line, using `\n`
+/// in any span's content as the line break. Styles are preserved when splitting
+/// a span. Empty lines (consecutive `\n`) produce an empty sub-list.
+fn split_spans_by_newline(spans: Vec<Span<'static>>) -> Vec<Vec<Span<'static>>> {
+    let mut lines: Vec<Vec<Span<'static>>> = vec![Vec::new()];
+    for span in spans {
+        if !span.content.contains('\n') {
+            lines.last_mut().unwrap().push(span);
+            continue;
+        }
+        let style = span.style;
+        let content = span.content.into_owned();
+        let mut parts = content.split('\n').peekable();
+        while let Some(part) = parts.next() {
+            if !part.is_empty() {
+                lines
+                    .last_mut()
+                    .unwrap()
+                    .push(Span::styled(part.to_string(), style));
+            }
+            if parts.peek().is_some() {
+                lines.push(Vec::new());
+            }
+        }
+    }
+    lines
+}
+
 /// Split a message body into spans, styling any URI (https://, http://, file:///) as
 /// underlined blue text. Non-URI text is rendered as plain spans.
 ///
@@ -939,7 +967,8 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             0 => None,
             1 => {
                 let m = pinned[0];
-                let body: String = m.body.chars().take(80).collect();
+                // Collapse newlines to spaces for the single-line banner.
+                let body: String = m.body.replace('\n', " ").chars().take(80).collect();
                 Some(format!("\u{1f4cc} {}: {body}", m.sender))
             }
             n => Some(format!("\u{1f4cc} {n} pinned messages")),
@@ -1076,6 +1105,8 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                 } else {
                     quote.body.clone()
                 };
+                // Quotes render on a single line; collapse any newlines to spaces.
+                let raw_body = raw_body.replace('\n', " ");
                 let quote_body = truncate(&raw_body, 50);
                 lines.push(Line::from(vec![
                     Span::styled("  \u{256D} ", Style::default().fg(theme.quote)),
@@ -1153,6 +1184,8 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                         .fg(theme.fg_muted)
                         .add_modifier(Modifier::ITALIC),
                 ));
+                lines.push(Line::from(spans));
+                line_msg_idx.push(Some(msg_index));
             } else {
                 // Style URIs and @mentions
                 let (body_spans, hidden_url) =
@@ -1163,20 +1196,32 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                         body_spans.iter().map(|s| s.content.as_ref()).collect();
                     app.image.link_url_map.insert(display_text, url);
                 }
-                spans.push(Span::raw(" ".to_string()));
-                if app.reactions.emoji_to_text {
-                    spans.extend(
-                        body_spans
-                            .into_iter()
-                            .map(|s| Span::styled(emoji_to_text(&s.content), s.style)),
-                    );
+                let body_spans: Vec<Span<'static>> = if app.reactions.emoji_to_text {
+                    body_spans
+                        .into_iter()
+                        .map(|s| Span::styled(emoji_to_text(&s.content), s.style))
+                        .collect()
                 } else {
-                    spans.extend(body_spans);
+                    body_spans
+                };
+                // Multi-line bodies: first line joins the header, each subsequent
+                // line gets a continuation indent.
+                let body_lines = split_spans_by_newline(body_spans);
+                spans.push(Span::raw(" ".to_string()));
+                if let Some(first) = body_lines.first() {
+                    spans.extend(first.iter().cloned());
+                }
+                lines.push(Line::from(spans));
+                line_msg_idx.push(Some(msg_index));
+                const CONT_INDENT: &str = "  ";
+                for body_line in body_lines.iter().skip(1) {
+                    let mut cont_spans: Vec<Span<'static>> =
+                        vec![Span::raw(CONT_INDENT.to_string())];
+                    cont_spans.extend(body_line.iter().cloned());
+                    lines.push(Line::from(cont_spans));
+                    line_msg_idx.push(Some(msg_index));
                 }
             }
-
-            lines.push(Line::from(spans));
-            line_msg_idx.push(Some(msg_index));
 
             // Render inline image preview if available (skip for deleted, skip if images disabled)
             if !msg.is_deleted && app.image.image_mode != "none" {
@@ -3485,6 +3530,9 @@ fn draw_search(frame: &mut Frame, app: &App, area: Rect) {
 
 /// Extract a snippet of text centered around the first match of `query`.
 pub(crate) fn search_snippet(body: &str, query: &str, max_len: usize) -> String {
+    // Search results display on a single line; collapse newlines.
+    let body = body.replace('\n', " ");
+    let body = body.as_str();
     let char_count = body.chars().count();
     if char_count <= max_len {
         return body.to_string();
@@ -4931,6 +4979,54 @@ mod snapshot_tests {
         assert_eq!(app.active_conversation.as_deref(), Some("+15550001111"));
         let output = render_to_string(&mut app, 100, 30);
         insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn body_newlines_render_as_separate_lines() {
+        use crate::conversation_store::DisplayMessage;
+        let mut app = demo_app();
+        let conv_id = app.active_conversation.clone().unwrap();
+        if let Some(conv) = app.store.conversations.get_mut(&conv_id) {
+            conv.messages.clear();
+            conv.messages.push(DisplayMessage {
+                sender: "Alice".to_string(),
+                timestamp: chrono::Utc::now(),
+                body: "line one\nline two".to_string(),
+                is_system: false,
+                image_lines: None,
+                image_path: None,
+                status: None,
+                timestamp_ms: 1_700_000_000_000,
+                reactions: Vec::new(),
+                mention_ranges: Vec::new(),
+                style_ranges: Vec::new(),
+                body_raw: None,
+                mentions: Vec::new(),
+                quote: None,
+                is_edited: false,
+                is_deleted: false,
+                is_pinned: false,
+                sender_id: "+15550001111".to_string(),
+                expires_in_seconds: 0,
+                expiration_start_ms: 0,
+                poll_data: None,
+                poll_votes: Vec::new(),
+                preview: None,
+                preview_image_lines: None,
+                preview_image_path: None,
+            });
+        }
+        let output = render_to_string(&mut app, 100, 30);
+        for row in output.lines() {
+            assert!(
+                !(row.contains("line one") && row.contains("line two")),
+                "body text should split across rows; got row: {row:?}\nfull output:\n{output}"
+            );
+        }
+        assert!(
+            output.contains("line one") && output.contains("line two"),
+            "expected both body lines to appear; got:\n{output}"
+        );
     }
 
     #[test]
