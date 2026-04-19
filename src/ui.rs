@@ -1215,11 +1215,19 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
-    // Compute actual content height accounting for line wrapping
-    let content_height: usize = lines.iter().map(|line| {
-        let w = line.width();
-        if w == 0 { 1 } else { w.div_ceil(inner_width.max(1)) }
-    }).sum();
+    // Compute actual content height using ratatui's word-wrap algorithm so that
+    // image-position calculations below align with how the Paragraph widget
+    // actually renders. A character-based div_ceil approximation diverges from
+    // WordWrapper on realistic text and shifts Kitty placeholder cells off their
+    // halfblock origins, which caused images to clip into neighboring messages.
+    let inner_w_u16 = inner.width.max(1);
+    let line_heights: Vec<usize> = lines.iter().map(|line| {
+        Paragraph::new(line.clone())
+            .wrap(Wrap { trim: false })
+            .line_count(inner_w_u16)
+            .max(1)
+    }).collect();
+    let content_height: usize = line_heights.iter().sum();
 
     // Bottom-align by default; scroll_offset shifts the view upward
     let base_scroll = content_height.saturating_sub(available_height);
@@ -1243,13 +1251,10 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.mode == InputMode::Normal && (app.scroll_offset > 0 || app.focused_msg_index.is_some()) {
         if let Some(fi) = app.focused_msg_index {
             // J/K already set focused_msg_index — ensure it's visible by adjusting scroll.
-            let iw = inner_width.max(1);
             let mut msg_start: Option<usize> = None;
             let mut msg_end = 0usize;
             let mut cumul = 0usize;
-            for (idx, line) in lines.iter().enumerate() {
-                let w = line.width();
-                let h = if w == 0 { 1 } else { w.div_ceil(iw) };
+            for (idx, &h) in line_heights.iter().enumerate() {
                 if line_msg_idx.get(idx) == Some(&Some(fi)) {
                     if msg_start.is_none() {
                         msg_start = Some(cumul);
@@ -1284,13 +1289,13 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Compute screen positions for native protocol image overlay (before lines is consumed)
     if !image_records.is_empty() {
-        // Build cumulative wrapped-line positions
+        // Build cumulative wrapped-line positions from the pre-computed heights so
+        // that image placements line up exactly with Paragraph's rendered rows.
         let mut wrapped_positions: Vec<usize> = Vec::with_capacity(lines.len() + 1);
         let mut cumulative = 0usize;
-        for line in &lines {
+        for &h in &line_heights {
             wrapped_positions.push(cumulative);
-            let w = line.width();
-            cumulative += if w == 0 { 1 } else { w.div_ceil(inner_width.max(1)) };
+            cumulative += h;
         }
 
         for (first_idx, count, path) in &image_records {

@@ -9,7 +9,7 @@ keywords = ["signal", "tui", "terminal", "messenger", "ratatui"]
 categories = ["command-line-utilities"]
 
 [dependencies]
-ratatui = "0.30"
+ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 crossterm = "0.29"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
