@@ -1319,6 +1319,35 @@ pub fn parse_signal_event(
     }
 }
 
+/// Extract the canonical sender identifier from a signal-cli envelope.
+/// Prefers `sourceNumber` (phone), falls back to `sourceUuid` for contacts
+/// with phone-number privacy enabled, and finally to "unknown" if neither is
+/// present. Returning a phone or UUID means conversations keyed off this
+/// identifier route through signal-cli's recipient field correctly (it
+/// accepts both formats). (#315)
+fn envelope_source(envelope: &serde_json::Value) -> String {
+    envelope
+        .get("sourceNumber")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .or_else(|| envelope.get("sourceUuid").and_then(|v| v.as_str()))
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+/// Extract the canonical destination identifier from a sent (sync) message.
+/// Prefers `destinationNumber`, falls back to `destination`, then
+/// `destinationUuid`. Returns None for group sends or messages with no
+/// resolvable recipient.
+fn sent_destination(sent: &serde_json::Value) -> Option<String> {
+    sent.get("destinationNumber")
+        .or_else(|| sent.get("destination"))
+        .or_else(|| sent.get("destinationUuid"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
 fn parse_receive_event(
     params: &serde_json::Value,
     download_dir: &std::path::Path,
@@ -1337,11 +1366,14 @@ fn parse_receive_event(
         if exc_type == "UntrustedIdentityException" {
             let envelope = params.get("envelope");
             let conv_id = envelope
-                .and_then(|e| e.get("sourceNumber"))
-                .and_then(|v| v.as_str())
-                .or_else(|| exc.get("sender").and_then(|v| v.as_str()))
-                .unwrap_or("unknown")
-                .to_string();
+                .map(envelope_source)
+                .filter(|s| s != "unknown")
+                .or_else(|| {
+                    exc.get("sender")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                })
+                .unwrap_or_else(|| "unknown".to_string());
             let timestamp_ms = envelope
                 .and_then(|e| e.get("timestamp"))
                 .and_then(|v| v.as_i64())
@@ -1378,11 +1410,7 @@ fn parse_receive_event(
             } else {
                 "voice"
             };
-            let conv_id = envelope
-                .get("sourceNumber")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
+            let conv_id = envelope_source(envelope);
             let timestamp_ms = envelope
                 .get("timestamp")
                 .and_then(|v| v.as_i64())
@@ -1407,11 +1435,8 @@ fn parse_receive_event(
         if let Some(sent) = sync.get("sentMessage") {
             // Check for edit in sync
             if let Some(edit_msg) = sent.get("editMessage") {
-                let dest = sent
-                    .get("destinationNumber")
-                    .or_else(|| sent.get("destination"))
-                    .and_then(|v| v.as_str());
-                return parse_edit_message(envelope, edit_msg, true, dest);
+                let dest = sent_destination(sent);
+                return parse_edit_message(envelope, edit_msg, true, dest.as_deref());
             }
             return parse_sent_sync(envelope, sent, download_dir);
         }
@@ -1447,11 +1472,7 @@ fn parse_read_sync(sync: &serde_json::Value) -> Option<SignalEvent> {
 
 fn parse_typing_indicator(envelope: &serde_json::Value) -> Option<SignalEvent> {
     let typing = envelope.get("typingMessage")?;
-    let sender = envelope
-        .get("sourceNumber")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
+    let sender = envelope_source(envelope);
     let sender_name = envelope
         .get("sourceName")
         .and_then(|v| v.as_str())
@@ -1476,11 +1497,7 @@ fn parse_typing_indicator(envelope: &serde_json::Value) -> Option<SignalEvent> {
 
 fn parse_receipt_message(envelope: &serde_json::Value) -> Option<SignalEvent> {
     let receipt = envelope.get("receiptMessage")?;
-    let sender = envelope
-        .get("sourceNumber")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
+    let sender = envelope_source(envelope);
     // signal-cli uses boolean fields: isDelivery, isRead, isViewed
     let receipt_type = if receipt
         .get("isRead")
@@ -1583,11 +1600,7 @@ fn parse_data_message(
             .get("targetSentTimestamp")
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
-        let sender = envelope
-            .get("sourceNumber")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
+        let sender = envelope_source(envelope);
         let sender_name = envelope
             .get("sourceName")
             .and_then(|v| v.as_str())
@@ -1620,11 +1633,7 @@ fn parse_data_message(
             .get("targetSentTimestamp")
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
-        let sender = envelope
-            .get("sourceNumber")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
+        let sender = envelope_source(envelope);
         let sender_name = envelope
             .get("sourceName")
             .and_then(|v| v.as_str())
@@ -1660,11 +1669,7 @@ fn parse_data_message(
     // Check for remote delete
     if let Some(remote_delete) = data.get("remoteDelete") {
         let target_timestamp = remote_delete.get("timestamp").and_then(|v| v.as_i64())?;
-        let sender = envelope
-            .get("sourceNumber")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
+        let sender = envelope_source(envelope);
         let group_id = data
             .get("groupInfo")
             .and_then(|g| g.get("groupId"))
@@ -1689,13 +1694,9 @@ fn parse_data_message(
             .get("groupInfo")
             .and_then(|g| g.get("groupId"))
             .and_then(|v| v.as_str());
-        let conv_id = group_id.map(|g| g.to_string()).unwrap_or_else(|| {
-            envelope
-                .get("sourceNumber")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string()
-        });
+        let conv_id = group_id
+            .map(|g| g.to_string())
+            .unwrap_or_else(|| envelope_source(envelope));
         let seconds = data
             .get("expiresInSeconds")
             .and_then(|v| v.as_i64())
@@ -1738,11 +1739,7 @@ fn parse_data_message(
         }
     }
 
-    let source = envelope
-        .get("sourceNumber")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
+    let source = envelope_source(envelope);
 
     let source_name = envelope
         .get("sourceName")
@@ -1881,11 +1878,10 @@ fn parse_poll_create(
         .get("groupInfo")
         .and_then(|g| g.get("groupId"))
         .and_then(|v| v.as_str());
-    let sender = envelope
-        .get("sourceNumber")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
-    let conv_id = group_id.unwrap_or(sender).to_string();
+    let sender = envelope_source(envelope);
+    let conv_id = group_id
+        .map(|g| g.to_string())
+        .unwrap_or_else(|| sender.clone());
     let timestamp = data.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
 
     let poll_data = crate::signal::types::PollData {
@@ -1914,9 +1910,8 @@ fn parse_poll_vote(
     let voter = poll_vote
         .get("authorNumber")
         .and_then(|v| v.as_str())
-        .or_else(|| envelope.get("sourceNumber").and_then(|v| v.as_str()))
-        .unwrap_or("unknown")
-        .to_string();
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| envelope_source(envelope));
     let voter_name = envelope
         .get("sourceName")
         .and_then(|v| v.as_str())
@@ -1936,11 +1931,10 @@ fn parse_poll_vote(
         .get("groupInfo")
         .and_then(|g| g.get("groupId"))
         .and_then(|v| v.as_str());
-    let sender = envelope
-        .get("sourceNumber")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
-    let conv_id = group_id.unwrap_or(sender).to_string();
+    let sender = envelope_source(envelope);
+    let conv_id = group_id
+        .map(|g| g.to_string())
+        .unwrap_or_else(|| sender.clone());
 
     Some(SignalEvent::PollVoteReceived {
         conv_id,
@@ -1964,11 +1958,10 @@ fn parse_poll_terminate(
         .get("groupInfo")
         .and_then(|g| g.get("groupId"))
         .and_then(|v| v.as_str());
-    let sender = envelope
-        .get("sourceNumber")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
-    let conv_id = group_id.unwrap_or(sender).to_string();
+    let sender = envelope_source(envelope);
+    let conv_id = group_id
+        .map(|g| g.to_string())
+        .unwrap_or_else(|| sender.clone());
 
     Some(SignalEvent::PollTerminated {
         conv_id,
@@ -2008,11 +2001,7 @@ fn parse_sent_sync(
             .get("targetSentTimestamp")
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
-        let sender = envelope
-            .get("sourceNumber")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
+        let sender = envelope_source(envelope);
         let sender_name = envelope
             .get("sourceName")
             .and_then(|v| v.as_str())
@@ -2024,12 +2013,7 @@ fn parse_sent_sync(
             .and_then(|v| v.as_str());
         let conv_id = group_id
             .map(|g| g.to_string())
-            .or_else(|| {
-                sent.get("destinationNumber")
-                    .or_else(|| sent.get("destination"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            })
+            .or_else(|| sent_destination(sent))
             .unwrap_or_else(|| sender.clone());
         return Some(SignalEvent::PinReceived {
             conv_id,
@@ -2051,11 +2035,7 @@ fn parse_sent_sync(
             .get("targetSentTimestamp")
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
-        let sender = envelope
-            .get("sourceNumber")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
+        let sender = envelope_source(envelope);
         let sender_name = envelope
             .get("sourceName")
             .and_then(|v| v.as_str())
@@ -2067,12 +2047,7 @@ fn parse_sent_sync(
             .and_then(|v| v.as_str());
         let conv_id = group_id
             .map(|g| g.to_string())
-            .or_else(|| {
-                sent.get("destinationNumber")
-                    .or_else(|| sent.get("destination"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            })
+            .or_else(|| sent_destination(sent))
             .unwrap_or_else(|| sender.clone());
         return Some(SignalEvent::UnpinReceived {
             conv_id,
@@ -2086,23 +2061,14 @@ fn parse_sent_sync(
     // Check for synced remote delete
     if let Some(remote_delete) = sent.get("remoteDelete") {
         let target_timestamp = remote_delete.get("timestamp").and_then(|v| v.as_i64())?;
-        let sender = envelope
-            .get("sourceNumber")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
+        let sender = envelope_source(envelope);
         let group_id = sent
             .get("groupInfo")
             .and_then(|g| g.get("groupId"))
             .and_then(|v| v.as_str());
         let conv_id = group_id
             .map(|g| g.to_string())
-            .or_else(|| {
-                sent.get("destinationNumber")
-                    .or_else(|| sent.get("destination"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            })
+            .or_else(|| sent_destination(sent))
             .unwrap_or_else(|| sender.clone());
         return Some(SignalEvent::RemoteDeleteReceived {
             conv_id,
@@ -2123,19 +2089,8 @@ fn parse_sent_sync(
             .and_then(|v| v.as_str());
         let conv_id = group_id
             .map(|g| g.to_string())
-            .or_else(|| {
-                sent.get("destinationNumber")
-                    .or_else(|| sent.get("destination"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            })
-            .unwrap_or_else(|| {
-                envelope
-                    .get("sourceNumber")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown")
-                    .to_string()
-            });
+            .or_else(|| sent_destination(sent))
+            .unwrap_or_else(|| envelope_source(envelope));
         let seconds = sent
             .get("expiresInSeconds")
             .and_then(|v| v.as_i64())
@@ -2178,17 +2133,9 @@ fn parse_sent_sync(
         }
     }
 
-    let source = envelope
-        .get("sourceNumber")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
+    let source = envelope_source(envelope);
 
-    let destination = sent
-        .get("destinationNumber")
-        .or_else(|| sent.get("destination"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    let destination = sent_destination(sent);
 
     let timestamp_ms = sent.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
 
@@ -2303,11 +2250,7 @@ fn parse_reaction(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    let sender = envelope
-        .get("sourceNumber")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
+    let sender = envelope_source(envelope);
     let sender_name = envelope
         .get("sourceName")
         .and_then(|v| v.as_str())
@@ -2347,11 +2290,7 @@ fn parse_reaction_sync(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    let sender = envelope
-        .get("sourceNumber")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
+    let sender = envelope_source(envelope);
 
     let group_id = sent
         .get("groupInfo")
@@ -2392,11 +2331,7 @@ fn parse_edit_message(
     let new_body = data.get("message").and_then(|v| v.as_str())?.to_string();
     let new_timestamp = data.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
 
-    let sender = envelope
-        .get("sourceNumber")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
+    let sender = envelope_source(envelope);
     let sender_name = envelope
         .get("sourceName")
         .and_then(|v| v.as_str())
@@ -3211,6 +3146,44 @@ mod tests {
             SignalEvent::MessageReceived(msg) => {
                 assert!(msg.mentions.is_empty());
                 assert_eq!(msg.body.unwrap(), "Hello world");
+            }
+            _ => panic!("Expected MessageReceived, got {:?}", event),
+        }
+    }
+
+    #[test]
+    fn parse_message_from_uuid_only_contact() {
+        // Regression test for #315: contacts with phone-number privacy enabled
+        // arrive with no sourceNumber, only sourceUuid. The conv_id should fall
+        // back to the UUID (not "unknown") so replies route correctly through
+        // signal-cli's UUID-accepting recipient field.
+        let uuid = "abcdef12-3456-7890-abcd-ef1234567890";
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            result: None,
+            error: None,
+            method: Some("receive".to_string()),
+            params: Some(json!({
+                "envelope": {
+                    "sourceUuid": uuid,
+                    "sourceName": "Privacy Fan",
+                    "timestamp": 1700000000000_i64,
+                    "dataMessage": {
+                        "timestamp": 1700000000000_i64,
+                        "message": "hi"
+                    }
+                }
+            })),
+        };
+        let event = parse_signal_event(&resp, std::path::Path::new("/tmp")).unwrap();
+        match event {
+            SignalEvent::MessageReceived(msg) => {
+                assert_eq!(
+                    msg.source, uuid,
+                    "expected source to fall back to UUID when sourceNumber is missing"
+                );
+                assert_eq!(msg.source_uuid.as_deref(), Some(uuid));
             }
             _ => panic!("Expected MessageReceived, got {:?}", event),
         }
