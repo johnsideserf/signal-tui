@@ -2659,11 +2659,7 @@ impl App {
                     let local_ts_ms = chrono::Utc::now().timestamp_millis();
                     self.close_overlay();
                     self.status_message = format!("Forwarded to {name}");
-                    if self.store.move_conversation_to_top(&conv_id)
-                        && self.is_overlay(OverlayKind::SidebarFilter)
-                    {
-                        self.refresh_sidebar_filter();
-                    }
+                    self.store.move_conversation_to_top(&conv_id);
                     return Some(SendRequest::Message {
                         recipient: conv_id,
                         body,
@@ -2897,6 +2893,9 @@ impl App {
             }
             KeyCode::Esc => {
                 self.autocomplete.clear();
+                if self.is_overlay(OverlayKind::Autocomplete) {
+                    self.close_overlay();
+                }
             }
             KeyCode::Enter => {
                 if self.autocomplete.mode == AutocompleteMode::Mention {
@@ -3525,13 +3524,7 @@ impl App {
         }
     }
 
-    /// Returns true if the given overlay kind is currently open via the
-    /// App-owned `current_overlay` field.
-    ///
-    /// Only meaningful for the overlays that have been migrated to
-    /// `current_overlay`; others report false here regardless of whether
-    /// their own `.show` flag is set. Use `active_overlay()` for the
-    /// unified check.
+    /// Returns true if the given overlay kind is currently active.
     pub fn is_overlay(&self, kind: OverlayKind) -> bool {
         self.current_overlay == Some(kind)
     }
@@ -6664,6 +6657,9 @@ impl App {
 
         // No autocomplete match
         self.autocomplete.clear();
+        if self.is_overlay(OverlayKind::Autocomplete) {
+            self.close_overlay();
+        }
     }
 
     /// Find the byte position of the `@` trigger for mention autocomplete.
@@ -10849,6 +10845,45 @@ mod tests {
     }
 
     #[rstest]
+    fn autocomplete_esc_closes_overlay(mut app: App) {
+        // Regression guard for PR #346: pre-fix, AutocompleteState::clear()
+        // no longer touched visibility, so Esc cleared candidates but left
+        // current_overlay = Some(Autocomplete), trapping subsequent input
+        // in the empty handler.
+        app.mode = InputMode::Insert;
+        app.input_buffer = "/j".to_string();
+        app.input_cursor = 2;
+        app.update_autocomplete();
+        assert!(app.is_overlay(OverlayKind::Autocomplete));
+
+        app.handle_autocomplete_key(KeyCode::Esc);
+        assert!(
+            !app.is_overlay(OverlayKind::Autocomplete),
+            "Esc should close the autocomplete overlay"
+        );
+    }
+
+    #[rstest]
+    fn autocomplete_no_match_closes_overlay(mut app: App) {
+        // Regression guard for PR #346: typing past any candidate match
+        // should drop visibility, not leave the empty overlay open.
+        app.mode = InputMode::Insert;
+        app.input_buffer = "/j".to_string();
+        app.input_cursor = 2;
+        app.update_autocomplete();
+        assert!(app.is_overlay(OverlayKind::Autocomplete));
+
+        // Type a string that matches no command/mention/join.
+        app.input_buffer = "/zzznothingmatches".to_string();
+        app.input_cursor = app.input_buffer.len();
+        app.update_autocomplete();
+        assert!(
+            !app.is_overlay(OverlayKind::Autocomplete),
+            "no-match autocomplete refresh should close the overlay"
+        );
+    }
+
+    #[rstest]
     fn bell_skipped_for_unaccepted_conversation(mut app: App) {
         app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
         assert!(!app.notifications.pending_bell);
@@ -11114,10 +11149,10 @@ mod tests {
 
     #[rstest]
     fn active_overlay_covers_every_variant(mut app: App) {
-        // Tripwire: `toggle_overlay`'s match is compiler-enforced exhaustive,
-        // but `ALL_OVERLAYS` is a hand-maintained slice. Adding a variant
-        // without extending this slice would silently skip it; the length
-        // check turns that into a loud test failure.
+        // Tripwire: `ALL_OVERLAYS` is a hand-maintained slice because Rust has
+        // no stable way to enumerate enum variants. Adding a variant without
+        // extending this slice would silently skip it; the length check turns
+        // that into a loud test failure.
         assert_eq!(
             ALL_OVERLAYS.len(),
             23,
