@@ -312,8 +312,8 @@ pub async fn run_setup(
 /// - `resolved_path`: the invocation the caller should store in config
 ///
 /// On Windows, `Command::new("foo")` only searches for `foo.exe` in PATH, while
-/// `where foo` also matches `.bat`/`.cmd`/`.ps1` via PATHEXT. That asymmetry used
-/// to let the wizard report success via the `where` fallback and then fail at the
+/// `where foo` also matches `.bat`/`.cmd` via PATHEXT. That asymmetry used to
+/// let the wizard report success via the `where` fallback and then fail at the
 /// linking step when it re-tried the unspawnable bare name. We now verify that
 /// whatever path we return can actually be spawned.
 async fn check_signal_cli(path: &str) -> (bool, String, String) {
@@ -322,12 +322,15 @@ async fn check_signal_cli(path: &str) -> (bool, String, String) {
         return (true, display, path.to_string());
     }
 
-    // Windows: try common scripting extensions before falling back to `where`.
-    // Scoop / manual installs commonly place `signal-cli.bat` in PATH without a
-    // matching `.exe`, so `Command::new("signal-cli")` fails but the bat file is
-    // right there.
+    // Windows: try batch-file extensions before falling back to `where`. Rust's
+    // Command invokes `.bat`/`.cmd` via cmd.exe when given the explicit extension,
+    // but it does not search PATHEXT for them by bare name. Scoop and manual
+    // installs commonly place `signal-cli.bat` in PATH without a matching `.exe`.
+    // `.exe` is intentionally omitted: the bare-name probe above already finds
+    // `.exe` via PATH, and `.ps1` is omitted because Rust's Command cannot spawn
+    // PowerShell scripts directly.
     #[cfg(windows)]
-    for ext in [".bat", ".cmd", ".ps1", ".exe"] {
+    for ext in [".bat", ".cmd"] {
         let candidate = format!("{path}{ext}");
         if let Some(display) = try_spawn_version(&candidate).await {
             return (true, display, candidate);
