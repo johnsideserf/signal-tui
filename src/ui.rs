@@ -683,7 +683,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     // Poll vote overlay
-    if app.poll_vote.show {
+    if app.is_overlay(OverlayKind::PollVote) {
         draw_poll_vote_overlay(frame, app, size);
     }
 

@@ -2471,7 +2471,7 @@ impl App {
                     });
                     self.poll_vote.selections = vec![false; option_count];
                     self.poll_vote.index = 0;
-                    self.poll_vote.show = true;
+                    self.open_overlay(OverlayKind::PollVote);
                 }
                 None
             }
@@ -3470,7 +3470,7 @@ impl App {
         if self.current_overlay == Some(OverlayKind::SidebarFilter) {
             return Some(OverlayKind::SidebarFilter);
         }
-        if self.poll_vote.show {
+        if self.current_overlay == Some(OverlayKind::PollVote) {
             return Some(OverlayKind::PollVote);
         }
         if self.pin_duration.show {
@@ -5446,7 +5446,7 @@ impl App {
                     return None;
                 }
                 let pending = self.poll_vote.pending.take()?;
-                self.poll_vote.show = false;
+                self.close_overlay();
 
                 // Optimistic local vote
                 let voter = self.account.clone();
@@ -5469,7 +5469,7 @@ impl App {
                 })
             }
             KeyCode::Esc => {
-                self.poll_vote.show = false;
+                self.close_overlay();
                 self.poll_vote.pending = None;
                 None
             }
@@ -11116,7 +11116,7 @@ mod tests {
     fn toggle_overlay(app: &mut App, kind: OverlayKind, on: bool) {
         match kind {
             OverlayKind::SidebarFilter => toggle_current_overlay(app, OverlayKind::SidebarFilter, on),
-            OverlayKind::PollVote => app.poll_vote.show = on,
+            OverlayKind::PollVote => toggle_current_overlay(app, OverlayKind::PollVote, on),
             OverlayKind::PinDuration => app.pin_duration.show = on,
             OverlayKind::ActionMenu => app.action_menu.show = on,
             OverlayKind::DeleteConfirm => {

@@ -6,8 +6,6 @@ use crate::signal::types::PollData;
 /// State for the poll vote overlay and pending poll data.
 #[derive(Default)]
 pub struct PollVoteOverlayState {
-    /// Poll vote overlay visible
-    pub show: bool,
     /// Cursor position in poll vote overlay
     pub index: usize,
     /// Multi-select tracking for poll vote options
