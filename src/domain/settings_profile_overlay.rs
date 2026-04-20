@@ -4,8 +4,6 @@ use crate::settings_profile::SettingsProfile;
 pub struct SettingsProfileOverlayState {
     /// Current settings profile name
     pub name: String,
-    /// Settings profile manager overlay visible
-    pub show: bool,
     /// Cursor position in settings profile manager
     pub index: usize,
     /// All available settings profiles
@@ -20,7 +18,6 @@ impl Default for SettingsProfileOverlayState {
     fn default() -> Self {
         Self {
             name: "Default".to_string(),
-            show: false,
             index: 0,
             available: Vec::new(),
             save_as: false,

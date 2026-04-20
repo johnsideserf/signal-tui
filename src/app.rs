@@ -176,7 +176,9 @@ impl App {
 
         // Sidebar reorder (skip for system messages, which shouldn't bump
         // conversations to the top just because someone changed the group name).
-        if !is_system && self.store.move_conversation_to_top(conv_id) && self.is_overlay(OverlayKind::SidebarFilter)
+        if !is_system
+            && self.store.move_conversation_to_top(conv_id)
+            && self.is_overlay(OverlayKind::SidebarFilter)
         {
             self.refresh_sidebar_filter();
         }
@@ -231,11 +233,10 @@ fn show_desktop_notification(
 
 /// Tag identifying which overlay is currently active.
 ///
-/// Variants are declared in priority order, matching `App::active_overlay`:
-/// when multiple overlay flags are set, the first variant listed here wins
-/// input dispatch. Adding a new overlay requires adding a variant here and
-/// handling it in both `App::active_overlay` and `App::handle_overlay_key`,
-/// which the compiler enforces via the exhaustive match.
+/// Stored on `App.current_overlay` as the single source of truth for overlay
+/// visibility. Adding a new overlay requires adding a variant here and
+/// handling it in `App::handle_overlay_key`, which the compiler enforces
+/// via the exhaustive match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayKind {
     SidebarFilter,
@@ -551,14 +552,13 @@ pub struct App {
     pub settings_mouse_snapshot: bool,
     /// Sync state: tracks the initial message burst on startup.
     pub sync: SyncState,
-    /// Currently active App-owned overlay, when one is open.
+    /// Currently active overlay, when one is open.
     ///
-    /// Migration in progress: this is the source of truth for the six
-    /// overlays that were previously standalone booleans (About, Help,
-    /// Customize, DeleteConfirm, Settings, MessageRequest). The remaining
-    /// overlays still live inside their own state structs with `.show` /
-    /// `.visible` flags. Once every overlay has been migrated, the per-overlay
-    /// flags can be removed and `active_overlay` becomes `self.current_overlay`.
+    /// Single source of truth for overlay visibility. Drive all writes
+    /// through `open_overlay`/`close_overlay`/`try_open_overlay` so callers
+    /// can't accidentally bypass the dispatch layer. Per-overlay state
+    /// (filter text, cursor index, candidate lists) lives on the per-overlay
+    /// state structs and persists across close/reopen.
     pub current_overlay: Option<OverlayKind>,
 }
 
@@ -1123,7 +1123,7 @@ impl App {
                 self.save_settings();
                 match self.customize_index {
                     0 => {
-                        self.theme_picker.show = true;
+                        self.open_overlay(OverlayKind::ThemePicker);
                         self.theme_picker.index = self
                             .theme_picker
                             .available_themes
@@ -1132,7 +1132,7 @@ impl App {
                             .unwrap_or(0);
                     }
                     1 => {
-                        self.keybindings_overlay.show = true;
+                        self.open_overlay(OverlayKind::Keybindings);
                         self.keybindings_overlay.index = 0;
                     }
                     2 => {
@@ -1174,7 +1174,7 @@ impl App {
             .iter()
             .position(|p| p.name == self.settings_profiles.name)
             .unwrap_or(0);
-        self.settings_profiles.show = true;
+        self.open_overlay(OverlayKind::SettingsProfiles);
         self.settings_profiles.save_as = false;
         self.settings_profiles.save_as_input.clear();
         // Don't overwrite settings_snapshot - keep the one from when /settings opened
@@ -1336,7 +1336,7 @@ impl App {
                 }
             }
             KeyCode::Esc | KeyCode::Char('q') => {
-                self.settings_profiles.show = false;
+                self.close_overlay();
                 self.fire_deferred_settings_hooks();
             }
             _ => {}
@@ -1370,10 +1370,10 @@ impl App {
                     self.theme = selected.clone();
                     self.save_settings();
                 }
-                self.theme_picker.show = false;
+                self.close_overlay();
             }
             ListKeyAction::Close => {
-                self.theme_picker.show = false;
+                self.close_overlay();
             }
             _ => {}
         }
@@ -1498,7 +1498,7 @@ impl App {
                 }
             }
             KeyCode::Esc | KeyCode::Char('q') => {
-                self.keybindings_overlay.show = false;
+                self.close_overlay();
                 self.save_settings();
             }
             _ => {}
@@ -1780,6 +1780,7 @@ impl App {
                     }
                     KeyCode::Esc => {
                         self.group_menu.state = None;
+                        self.close_overlay();
                     }
                     _ => {}
                 }
@@ -1797,6 +1798,7 @@ impl App {
                         self.group_menu.index = self.group_menu.index.saturating_sub(1);
                     }
                     KeyCode::Esc => {
+                        self.open_overlay(OverlayKind::GroupMenu);
                         self.group_menu.state = Some(GroupMenuState::Menu);
                         self.group_menu.index = 0;
                     }
@@ -1822,6 +1824,7 @@ impl App {
                             let phone = phone.clone();
                             let group_id = self.active_conversation.clone()?;
                             self.group_menu.state = None;
+                            self.close_overlay();
                             self.group_menu.filter.clear();
                             return Some(SendRequest::AddGroupMembers {
                                 group_id,
@@ -1830,6 +1833,7 @@ impl App {
                         }
                     }
                     KeyCode::Esc => {
+                        self.open_overlay(OverlayKind::GroupMenu);
                         self.group_menu.state = Some(GroupMenuState::Menu);
                         self.group_menu.index = 0;
                         self.group_menu.filter.clear();
@@ -1866,6 +1870,7 @@ impl App {
                             let phone = phone.clone();
                             let group_id = self.active_conversation.clone()?;
                             self.group_menu.state = None;
+                            self.close_overlay();
                             self.group_menu.filter.clear();
                             return Some(SendRequest::RemoveGroupMembers {
                                 group_id,
@@ -1874,6 +1879,7 @@ impl App {
                         }
                     }
                     KeyCode::Esc => {
+                        self.open_overlay(OverlayKind::GroupMenu);
                         self.group_menu.state = Some(GroupMenuState::Menu);
                         self.group_menu.index = 0;
                         self.group_menu.filter.clear();
@@ -1899,11 +1905,13 @@ impl App {
                         if !name.is_empty() {
                             let group_id = self.active_conversation.clone()?;
                             self.group_menu.state = None;
+                            self.close_overlay();
                             self.group_menu.input.clear();
                             return Some(SendRequest::RenameGroup { group_id, name });
                         }
                     }
                     KeyCode::Esc => {
+                        self.open_overlay(OverlayKind::GroupMenu);
                         self.group_menu.state = Some(GroupMenuState::Menu);
                         self.group_menu.index = 0;
                         self.group_menu.input.clear();
@@ -1924,12 +1932,14 @@ impl App {
                         let name = self.group_menu.input.trim().to_string();
                         if !name.is_empty() {
                             self.group_menu.state = None;
+                            self.close_overlay();
                             self.group_menu.input.clear();
                             return Some(SendRequest::CreateGroup { name });
                         }
                     }
                     KeyCode::Esc => {
                         self.group_menu.state = None;
+                        self.close_overlay();
                         self.group_menu.input.clear();
                     }
                     KeyCode::Backspace => {
@@ -1947,9 +1957,11 @@ impl App {
                     KeyCode::Char('y') => {
                         let group_id = self.active_conversation.clone()?;
                         self.group_menu.state = None;
+                        self.close_overlay();
                         return Some(SendRequest::LeaveGroup { group_id });
                     }
                     KeyCode::Char('n') | KeyCode::Esc => {
+                        self.open_overlay(OverlayKind::GroupMenu);
                         self.group_menu.state = Some(GroupMenuState::Menu);
                         self.group_menu.index = 0;
                     }
@@ -1988,14 +2000,17 @@ impl App {
                     })
                     .unwrap_or_default();
                 self.group_menu.filtered = members;
+                self.open_overlay(OverlayKind::GroupMenu);
                 self.group_menu.state = Some(GroupMenuState::Members);
             }
             "a" => {
                 self.refresh_group_add_filter();
+                self.open_overlay(OverlayKind::GroupMenu);
                 self.group_menu.state = Some(GroupMenuState::AddMember);
             }
             "r" => {
                 self.refresh_group_remove_filter();
+                self.open_overlay(OverlayKind::GroupMenu);
                 self.group_menu.state = Some(GroupMenuState::RemoveMember);
             }
             "n" => {
@@ -2007,12 +2022,15 @@ impl App {
                     .map(|c| c.name.clone())
                     .unwrap_or_default();
                 self.group_menu.input = name;
+                self.open_overlay(OverlayKind::GroupMenu);
                 self.group_menu.state = Some(GroupMenuState::Rename);
             }
             "l" => {
+                self.open_overlay(OverlayKind::GroupMenu);
                 self.group_menu.state = Some(GroupMenuState::LeaveConfirm);
             }
             "c" => {
+                self.open_overlay(OverlayKind::GroupMenu);
                 self.group_menu.state = Some(GroupMenuState::Create);
             }
             _ => {}
@@ -2091,24 +2109,24 @@ impl App {
                 let idx = (c as u8 - b'1') as usize;
                 if idx < QUICK_REACTIONS.len() {
                     self.reactions.picker_index = idx;
-                    self.reactions.show_picker = false;
+                    self.close_overlay();
                     self.prepare_reaction_send()
                 } else {
                     None
                 }
             }
             KeyCode::Enter | KeyCode::Char(' ') => {
-                self.reactions.show_picker = false;
+                self.close_overlay();
                 self.prepare_reaction_send()
             }
             KeyCode::Char('e') | KeyCode::Char('/') => {
                 // Open full emoji picker from reaction context
-                self.reactions.show_picker = false;
                 self.emoji_picker.open(EmojiPickerSource::Reaction, None);
+                self.open_overlay(OverlayKind::EmojiPicker);
                 None
             }
             KeyCode::Esc => {
-                self.reactions.show_picker = false;
+                self.close_overlay();
                 None
             }
             _ => None,
@@ -2404,7 +2422,7 @@ impl App {
             "r" => {
                 // React — open reaction picker
                 if self.selected_message().is_some_and(|m| !m.is_system) {
-                    self.reactions.show_picker = true;
+                    self.open_overlay(OverlayKind::ReactionPicker);
                     self.reactions.picker_index = 0;
                 }
                 None
@@ -2573,7 +2591,7 @@ impl App {
             }
             KeyCode::Esc => {
                 self.verify.confirming = false;
-                self.verify.show = false;
+                self.close_overlay();
             }
             _ => {
                 self.verify.confirming = false;
@@ -2583,7 +2601,7 @@ impl App {
     }
 
     fn open_forward_picker(&mut self) {
-        self.forward.show = true;
+        self.open_overlay(OverlayKind::Forward);
         self.forward.index = 0;
         self.forward.filter.clear();
         self.update_forward_filter();
@@ -2639,9 +2657,11 @@ impl App {
                         .unwrap_or(false);
                     let body = format!("[Forwarded]\n{}", self.forward.body);
                     let local_ts_ms = chrono::Utc::now().timestamp_millis();
-                    self.forward.show = false;
+                    self.close_overlay();
                     self.status_message = format!("Forwarded to {name}");
-                    if self.store.move_conversation_to_top(&conv_id) && self.is_overlay(OverlayKind::SidebarFilter) {
+                    if self.store.move_conversation_to_top(&conv_id)
+                        && self.is_overlay(OverlayKind::SidebarFilter)
+                    {
                         self.refresh_sidebar_filter();
                     }
                     return Some(SendRequest::Message {
@@ -2658,7 +2678,7 @@ impl App {
                 }
             }
             ListKeyAction::Close => {
-                self.forward.show = false;
+                self.close_overlay();
             }
             ListKeyAction::FilterPush(c) => {
                 if !c.is_control() {
@@ -2694,13 +2714,13 @@ impl App {
                     .get(self.contacts_overlay.index)
                 {
                     let number = number.clone();
-                    self.contacts_overlay.show = false;
+                    self.close_overlay();
                     self.contacts_overlay.filter.clear();
                     self.join_conversation(&number);
                 }
             }
             ListKeyAction::Close => {
-                self.contacts_overlay.show = false;
+                self.close_overlay();
                 self.contacts_overlay.filter.clear();
             }
             ListKeyAction::FilterPush(c) => {
@@ -2811,6 +2831,7 @@ impl App {
                 timestamp_ms,
                 status,
             } => {
+                self.close_overlay();
                 self.join_conversation(&conv_id);
                 self.jump_to_message_timestamp(timestamp_ms);
                 if let Some(msg) = status {
@@ -2819,6 +2840,9 @@ impl App {
             }
             SearchAction::Status(msg) => {
                 self.status_message = msg;
+            }
+            SearchAction::Cancel => {
+                self.close_overlay();
             }
             SearchAction::None => {}
         }
@@ -2831,12 +2855,20 @@ impl App {
             return;
         }
         self.file_picker.open();
+        self.open_overlay(OverlayKind::FilePicker);
     }
 
     /// Handle a key press while the file browser overlay is open.
     pub fn handle_file_browser_key(&mut self, code: KeyCode) {
-        if let Some(path) = self.file_picker.handle_key(code) {
-            self.pending_attachment = Some(path);
+        match self.file_picker.handle_key(code) {
+            crate::domain::FilePickerOutcome::Continue => {}
+            crate::domain::FilePickerOutcome::Selected(path) => {
+                self.pending_attachment = Some(path);
+                self.close_overlay();
+            }
+            crate::domain::FilePickerOutcome::Cancelled => {
+                self.close_overlay();
+            }
         }
     }
 
@@ -3416,7 +3448,7 @@ impl App {
                 }
                 true
             }
-            Some(KeyAction::NextConversation) if !self.autocomplete.visible => {
+            Some(KeyAction::NextConversation) if !self.is_overlay(OverlayKind::Autocomplete) => {
                 self.next_conversation();
                 true
             }
@@ -3459,103 +3491,38 @@ impl App {
     /// Returns `Some((recipient, body, is_group, local_ts_ms))` if an autocomplete
     /// command triggers a message send. Returns `None` otherwise.
     /// Returns `Ok(true)` if the key was consumed by an overlay.
-    /// Returns the active overlay, if any, in priority order.
+    /// Returns the currently-active overlay, if any.
     ///
-    /// If multiple overlay flags are set simultaneously (which should not
-    /// happen under normal usage), the variant earliest in `OverlayKind`'s
-    /// declaration wins. Both `has_overlay` and `handle_overlay_key` defer to
-    /// this method so dispatch, visibility checks, and any future per-overlay
-    /// logic stay in sync automatically.
+    /// All 23 overlays are now backed by `current_overlay`, so this is just
+    /// a thin accessor. Both `has_overlay` and `handle_overlay_key` defer
+    /// to it so dispatch and visibility stay in sync automatically.
     pub fn active_overlay(&self) -> Option<OverlayKind> {
-        if self.current_overlay == Some(OverlayKind::SidebarFilter) {
-            return Some(OverlayKind::SidebarFilter);
-        }
-        if self.current_overlay == Some(OverlayKind::PollVote) {
-            return Some(OverlayKind::PollVote);
-        }
-        if self.current_overlay == Some(OverlayKind::PinDuration) {
-            return Some(OverlayKind::PinDuration);
-        }
-        if self.current_overlay == Some(OverlayKind::ActionMenu) {
-            return Some(OverlayKind::ActionMenu);
-        }
-        if self.current_overlay == Some(OverlayKind::DeleteConfirm) {
-            return Some(OverlayKind::DeleteConfirm);
-        }
-        if self.file_picker.visible {
-            return Some(OverlayKind::FilePicker);
-        }
-        if self.emoji_picker.visible {
-            return Some(OverlayKind::EmojiPicker);
-        }
-        if self.reactions.show_picker {
-            return Some(OverlayKind::ReactionPicker);
-        }
-        if self.current_overlay == Some(OverlayKind::MessageRequest) {
-            return Some(OverlayKind::MessageRequest);
-        }
-        if self.group_menu.state.is_some() {
-            return Some(OverlayKind::GroupMenu);
-        }
-        if self.current_overlay == Some(OverlayKind::About) {
-            return Some(OverlayKind::About);
-        }
-        if self.profile.show {
-            return Some(OverlayKind::Profile);
-        }
-        if self.current_overlay == Some(OverlayKind::Help) {
-            return Some(OverlayKind::Help);
-        }
-        if self.verify.show {
-            return Some(OverlayKind::Verify);
-        }
-        if self.forward.show {
-            return Some(OverlayKind::Forward);
-        }
-        if self.contacts_overlay.show {
-            return Some(OverlayKind::Contacts);
-        }
-        if self.search.visible {
-            return Some(OverlayKind::Search);
-        }
-        if self.settings_profiles.show {
-            return Some(OverlayKind::SettingsProfiles);
-        }
-        if self.theme_picker.show {
-            return Some(OverlayKind::ThemePicker);
-        }
-        if self.keybindings_overlay.show {
-            return Some(OverlayKind::Keybindings);
-        }
-        if self.current_overlay == Some(OverlayKind::Customize) {
-            return Some(OverlayKind::Customize);
-        }
-        if self.current_overlay == Some(OverlayKind::Settings) {
-            return Some(OverlayKind::Settings);
-        }
-        if self.autocomplete.visible {
-            return Some(OverlayKind::Autocomplete);
-        }
-        None
+        self.current_overlay
     }
 
-    /// Open an App-owned overlay.
+    /// Open an overlay.
     ///
-    /// Clobbers whichever App-owned overlay was previously active (at most
-    /// one at a time; the old bool-per-overlay model tolerated concurrent
-    /// visibility, the new single-field model does not).
+    /// Clobbers whichever overlay was previously active. Use `try_open_overlay`
+    /// if you need to defer to an existing higher-priority overlay (e.g.
+    /// auto-open paths called from `update_status` or `update_autocomplete`).
     pub fn open_overlay(&mut self, kind: OverlayKind) {
         self.current_overlay = Some(kind);
     }
 
     /// Clear `current_overlay`.
-    ///
-    /// Only closes overlays that have been migrated onto `current_overlay`.
-    /// It does not touch the per-struct `.show`/`.visible` fields that the
-    /// remaining 17 unmigrated overlays still use. After every overlay is
-    /// migrated, this becomes the only way to close any overlay.
     pub fn close_overlay(&mut self) {
         self.current_overlay = None;
+    }
+
+    /// Open `kind` only if no other App-owned overlay is currently active
+    /// (or if `kind` is already the active overlay). Use this for auto-open
+    /// paths that must not clobber a higher-priority overlay - e.g.
+    /// `update_autocomplete` firing on every keystroke, or `update_status`
+    /// auto-opening MessageRequest on conversation switches.
+    pub fn try_open_overlay(&mut self, kind: OverlayKind) {
+        if self.current_overlay.is_none() || self.current_overlay == Some(kind) {
+            self.open_overlay(kind);
+        }
     }
 
     /// Returns true if the given overlay kind is currently open via the
@@ -3618,7 +3585,7 @@ impl App {
                     let was_reaction = self.emoji_picker.source == EmojiPickerSource::Reaction;
                     self.emoji_picker.close();
                     if was_reaction {
-                        self.reactions.show_picker = true;
+                        self.open_overlay(OverlayKind::ReactionPicker);
                     }
                     (true, None)
                 }
@@ -3907,7 +3874,7 @@ impl App {
             }
             Some(KeyAction::React) => {
                 if self.selected_message().is_some_and(|m| !m.is_system) {
-                    self.reactions.show_picker = true;
+                    self.open_overlay(OverlayKind::ReactionPicker);
                     self.reactions.picker_index = 0;
                 }
                 None
@@ -4016,7 +3983,7 @@ impl App {
             Some(KeyAction::ExitInsert) => {
                 self.mode = InputMode::Normal;
                 self.pending_normal_key = None; // defensive reset
-                self.autocomplete.visible = false;
+                self.close_overlay();
                 self.reply_target = None;
                 self.editing_message = None;
                 if self.typing.reset() {
@@ -4027,7 +3994,7 @@ impl App {
             Some(KeyAction::InsertNewline) => {
                 self.input_buffer.insert(self.input_cursor, '\n');
                 self.input_cursor += 1;
-                self.autocomplete.visible = false;
+                self.close_overlay();
                 self.typing.last_keypress = Some(Instant::now());
                 if !self.typing.sent
                     && !self.input_buffer.starts_with('/')
@@ -4106,7 +4073,7 @@ impl App {
             }
             Some(KeyAction::React) => {
                 if self.selected_message().is_some_and(|m| !m.is_system) {
-                    self.reactions.show_picker = true;
+                    self.open_overlay(OverlayKind::ReactionPicker);
                     self.reactions.picker_index = 0;
                 }
                 None
@@ -4452,7 +4419,9 @@ impl App {
             msg.source.clone()
         };
 
-        if self.store.move_conversation_to_top(&conv_id) && self.is_overlay(OverlayKind::SidebarFilter) {
+        if self.store.move_conversation_to_top(&conv_id)
+            && self.is_overlay(OverlayKind::SidebarFilter)
+        {
             self.refresh_sidebar_filter();
         }
 
@@ -5385,7 +5354,7 @@ impl App {
                         self.status_message = "Given name is required".to_string();
                         return None;
                     }
-                    self.profile.show = false;
+                    self.close_overlay();
                     return Some(SendRequest::UpdateProfile {
                         given_name,
                         family_name,
@@ -5395,7 +5364,7 @@ impl App {
                 }
             }
             KeyCode::Esc => {
-                self.profile.show = false;
+                self.close_overlay();
             }
             _ => {}
         }
@@ -5672,7 +5641,7 @@ impl App {
             }
         }
         // If verify overlay is open, refresh the displayed identities
-        if self.verify.show
+        if self.is_overlay(OverlayKind::Verify)
             && let Some(ref conv_id) = self.active_conversation
         {
             let conv_id = conv_id.clone();
@@ -6312,9 +6281,10 @@ impl App {
             InputAction::Search(query) => {
                 self.search
                     .open(query, self.active_conversation.as_deref(), &self.db);
+                self.open_overlay(OverlayKind::Search);
             }
             InputAction::Contacts => {
-                self.contacts_overlay.show = true;
+                self.open_overlay(OverlayKind::Contacts);
                 self.contacts_overlay.index = 0;
                 self.contacts_overlay.filter.clear();
                 self.refresh_contacts_filter();
@@ -6322,9 +6292,10 @@ impl App {
             InputAction::Emoji(query) => {
                 let filter = if query.is_empty() { None } else { Some(query) };
                 self.emoji_picker.open(EmojiPickerSource::Input, filter);
+                self.open_overlay(OverlayKind::EmojiPicker);
             }
             InputAction::Theme => {
-                self.theme_picker.show = true;
+                self.open_overlay(OverlayKind::ThemePicker);
                 self.theme_picker.index = self
                     .theme_picker
                     .available_themes
@@ -6333,6 +6304,7 @@ impl App {
                     .unwrap_or(0);
             }
             InputAction::Group => {
+                self.open_overlay(OverlayKind::GroupMenu);
                 self.group_menu.state = Some(GroupMenuState::Menu);
                 self.group_menu.index = 0;
                 self.group_menu.filter.clear();
@@ -6385,7 +6357,7 @@ impl App {
                             })
                             .unwrap_or_default();
                     }
-                    self.verify.show = true;
+                    self.open_overlay(OverlayKind::Verify);
                     self.verify.index = 0;
                     // Request fresh identity data
                     return Some(SendRequest::ListIdentities);
@@ -6394,7 +6366,7 @@ impl App {
                 }
             }
             InputAction::Profile => {
-                self.profile.show = true;
+                self.open_overlay(OverlayKind::Profile);
                 self.profile.index = 0;
                 self.profile.editing = false;
             }
@@ -6402,7 +6374,7 @@ impl App {
                 self.open_overlay(OverlayKind::About);
             }
             InputAction::Keybindings => {
-                self.keybindings_overlay.show = true;
+                self.open_overlay(OverlayKind::Keybindings);
                 self.keybindings_overlay.index = 0;
             }
             InputAction::Help => {
@@ -6554,7 +6526,7 @@ impl App {
             }
 
             if !candidates.is_empty() {
-                self.autocomplete.visible = true;
+                self.try_open_overlay(OverlayKind::Autocomplete);
                 self.autocomplete.mode = AutocompleteMode::Command;
                 self.autocomplete.command_candidates = candidates;
                 if self.autocomplete.index >= self.autocomplete.command_candidates.len() {
@@ -6622,7 +6594,7 @@ impl App {
             candidates.sort_by_key(|a| a.0.to_lowercase());
 
             if !candidates.is_empty() {
-                self.autocomplete.visible = true;
+                self.try_open_overlay(OverlayKind::Autocomplete);
                 self.autocomplete.mode = AutocompleteMode::Join;
                 self.autocomplete.join_candidates = candidates;
                 if self.autocomplete.index >= self.autocomplete.join_candidates.len() {
@@ -6679,7 +6651,7 @@ impl App {
             candidates.sort_by_key(|a| a.1.to_lowercase());
 
             if !candidates.is_empty() {
-                self.autocomplete.visible = true;
+                self.try_open_overlay(OverlayKind::Autocomplete);
                 self.autocomplete.mode = AutocompleteMode::Mention;
                 self.autocomplete.mention_candidates = candidates;
                 self.autocomplete.mention_trigger_pos = trigger_pos;
@@ -7016,7 +6988,7 @@ impl App {
                         self.input_buffer = format!("{} ", cmd.name);
                     }
                     self.input_cursor = self.input_buffer.len();
-                    self.autocomplete.visible = false;
+                    self.close_overlay();
                     self.autocomplete.command_candidates.clear();
                     self.autocomplete.index = 0;
                 }
@@ -7036,7 +7008,7 @@ impl App {
                     self.input_cursor = self.autocomplete.mention_trigger_pos + replacement.len();
                     // Record for outgoing mention
                     self.autocomplete.pending_mentions.push((name, uuid));
-                    self.autocomplete.visible = false;
+                    self.close_overlay();
                     self.autocomplete.mention_candidates.clear();
                     self.autocomplete.index = 0;
                 }
@@ -7050,7 +7022,7 @@ impl App {
                 {
                     self.input_buffer = format!("/join {value}");
                     self.input_cursor = self.input_buffer.len();
-                    self.autocomplete.visible = false;
+                    self.close_overlay();
                     self.autocomplete.join_candidates.clear();
                     self.autocomplete.index = 0;
                 }
@@ -7219,9 +7191,7 @@ impl App {
                 .and_then(|id| self.store.conversations.get(id))
                 .is_some_and(|c| !c.accepted);
             if should_show {
-                if self.current_overlay.is_none() || self.is_overlay(OverlayKind::MessageRequest) {
-                    self.open_overlay(OverlayKind::MessageRequest);
-                }
+                self.try_open_overlay(OverlayKind::MessageRequest);
             } else if self.is_overlay(OverlayKind::MessageRequest) {
                 self.close_overlay();
             }
@@ -7426,7 +7396,9 @@ impl App {
             && is_in_rect(col, row, inner)
         {
             let index = (row - inner.y) as usize;
-            let sidebar_list = if self.is_overlay(OverlayKind::SidebarFilter) && !self.sidebar_filtered.is_empty() {
+            let sidebar_list = if self.is_overlay(OverlayKind::SidebarFilter)
+                && !self.sidebar_filtered.is_empty()
+            {
                 &self.sidebar_filtered
             } else {
                 &self.store.conversation_order
@@ -8470,7 +8442,8 @@ mod tests {
         app.input_buffer = input.to_string();
         app.update_autocomplete();
         assert_eq!(
-            app.autocomplete.visible, expected_visible,
+            app.is_overlay(OverlayKind::Autocomplete),
+            expected_visible,
             "visibility for {input:?}"
         );
         if let Some(count) = expected_count {
@@ -8524,7 +8497,7 @@ mod tests {
             .insert("+2".to_string(), "Bob".to_string());
         app.input_buffer = "/join ".to_string();
         app.update_autocomplete();
-        assert!(app.autocomplete.visible);
+        assert!(app.is_overlay(OverlayKind::Autocomplete));
         assert_eq!(app.autocomplete.mode, AutocompleteMode::Join);
         assert_eq!(app.autocomplete.join_candidates.len(), 2);
     }
@@ -8542,7 +8515,7 @@ mod tests {
         );
         app.input_buffer = "/join ".to_string();
         app.update_autocomplete();
-        assert!(app.autocomplete.visible);
+        assert!(app.is_overlay(OverlayKind::Autocomplete));
         assert_eq!(app.autocomplete.mode, AutocompleteMode::Join);
         assert_eq!(app.autocomplete.join_candidates.len(), 1);
         assert!(app.autocomplete.join_candidates[0].0.starts_with('#'));
@@ -8558,7 +8531,7 @@ mod tests {
             .insert("+2".to_string(), "Bob".to_string());
         app.input_buffer = "/join al".to_string();
         app.update_autocomplete();
-        assert!(app.autocomplete.visible);
+        assert!(app.is_overlay(OverlayKind::Autocomplete));
         assert_eq!(app.autocomplete.join_candidates.len(), 1);
         assert!(app.autocomplete.join_candidates[0].0.contains("Alice"));
     }
@@ -8573,7 +8546,7 @@ mod tests {
             .insert("+5678".to_string(), "Bob".to_string());
         app.input_buffer = "/join +123".to_string();
         app.update_autocomplete();
-        assert!(app.autocomplete.visible);
+        assert!(app.is_overlay(OverlayKind::Autocomplete));
         assert_eq!(app.autocomplete.join_candidates.len(), 1);
         assert!(app.autocomplete.join_candidates[0].1 == "+1234");
     }
@@ -8585,7 +8558,7 @@ mod tests {
             .insert("+1".to_string(), "Alice".to_string());
         app.input_buffer = "/j ".to_string();
         app.update_autocomplete();
-        assert!(app.autocomplete.visible);
+        assert!(app.is_overlay(OverlayKind::Autocomplete));
         assert_eq!(app.autocomplete.mode, AutocompleteMode::Join);
         assert_eq!(app.autocomplete.join_candidates.len(), 1);
     }
@@ -8597,7 +8570,7 @@ mod tests {
             .insert("+1".to_string(), "Alice".to_string());
         app.input_buffer = "/join zzz".to_string();
         app.update_autocomplete();
-        assert!(!app.autocomplete.visible);
+        assert!(!app.is_overlay(OverlayKind::Autocomplete));
     }
 
     #[rstest]
@@ -8607,11 +8580,11 @@ mod tests {
             .insert("+1".to_string(), "Alice".to_string());
         app.input_buffer = "/join al".to_string();
         app.update_autocomplete();
-        assert!(app.autocomplete.visible);
+        assert!(app.is_overlay(OverlayKind::Autocomplete));
         app.apply_autocomplete();
         assert_eq!(app.input_buffer, "/join +1");
         assert_eq!(app.input_cursor, 8);
-        assert!(!app.autocomplete.visible);
+        assert!(!app.is_overlay(OverlayKind::Autocomplete));
     }
 
     #[rstest]
@@ -8627,7 +8600,7 @@ mod tests {
         );
         app.input_buffer = "/join fam".to_string();
         app.update_autocomplete();
-        assert!(app.autocomplete.visible);
+        assert!(app.is_overlay(OverlayKind::Autocomplete));
         app.apply_autocomplete();
         assert_eq!(app.input_buffer, "/join g1");
         assert_eq!(app.input_cursor, 8);
@@ -8640,7 +8613,7 @@ mod tests {
             .get_or_create_conversation("+9999", "+9999", false, &app.db);
         app.input_buffer = "/join +999".to_string();
         app.update_autocomplete();
-        assert!(app.autocomplete.visible);
+        assert!(app.is_overlay(OverlayKind::Autocomplete));
         assert_eq!(app.autocomplete.join_candidates.len(), 1);
     }
 
@@ -8655,7 +8628,7 @@ mod tests {
             .insert("+1".to_string(), "Alice".to_string());
         app.input_buffer = "/join ".to_string();
         app.update_autocomplete();
-        assert!(app.autocomplete.visible);
+        assert!(app.is_overlay(OverlayKind::Autocomplete));
         // Only Alice should appear from contact_names (g1 is skipped as non-phone)
         let contact_entries: Vec<_> = app
             .autocomplete
@@ -9979,7 +9952,7 @@ mod tests {
         app.update_autocomplete();
 
         // Should trigger mention autocomplete in 1:1 with the contact
-        assert!(app.autocomplete.visible);
+        assert!(app.is_overlay(OverlayKind::Autocomplete));
         assert_eq!(app.autocomplete.mode, AutocompleteMode::Mention);
         assert_eq!(app.autocomplete.mention_candidates.len(), 1);
         assert_eq!(app.autocomplete.mention_candidates[0].1, "Alice");
@@ -10011,7 +9984,7 @@ mod tests {
         app.input_cursor = 3;
         app.update_autocomplete();
 
-        assert!(app.autocomplete.visible);
+        assert!(app.is_overlay(OverlayKind::Autocomplete));
         assert_eq!(app.autocomplete.mode, AutocompleteMode::Mention);
         assert_eq!(app.autocomplete.mention_candidates.len(), 1);
         assert_eq!(app.autocomplete.mention_candidates[0].1, "Alice");
@@ -10042,7 +10015,7 @@ mod tests {
         app.input_buffer = "Hey @Al".to_string();
         app.input_cursor = 7;
         app.update_autocomplete();
-        assert!(app.autocomplete.visible);
+        assert!(app.is_overlay(OverlayKind::Autocomplete));
 
         app.apply_autocomplete();
         assert_eq!(app.input_buffer, "Hey @Alice ");
@@ -10161,7 +10134,7 @@ mod tests {
     fn attach_no_conversation_shows_error(mut app: App) {
         app.active_conversation = None;
         app.open_file_browser();
-        assert!(!app.file_picker.visible);
+        assert!(!app.is_overlay(OverlayKind::FilePicker));
         assert!(app.status_message.contains("No active conversation"));
     }
 
@@ -10212,7 +10185,7 @@ mod tests {
         app.input_cursor = 13;
         app.handle_input();
 
-        assert!(app.search.visible);
+        assert!(app.is_overlay(OverlayKind::Search));
         assert_eq!(app.search.query, "hello");
         assert!(!app.search.results.is_empty());
         assert_eq!(app.search.results[0].body, "hello world");
@@ -10224,18 +10197,18 @@ mod tests {
         app.input_cursor = 7;
         app.handle_input();
 
-        assert!(!app.search.visible);
+        assert!(!app.is_overlay(OverlayKind::Search));
         assert!(app.status_message.contains("requires"));
     }
 
     #[rstest]
     fn search_overlay_esc_closes(mut app: App) {
-        app.search.visible = true;
+        app.open_overlay(OverlayKind::Search);
         app.search.query = "test".to_string();
 
         app.handle_search_key(KeyCode::Esc);
 
-        assert!(!app.search.visible);
+        assert!(!app.is_overlay(OverlayKind::Search));
         assert!(app.search.query.is_empty());
     }
 
@@ -10267,7 +10240,7 @@ mod tests {
             )
             .unwrap();
 
-        app.search.visible = true;
+        app.open_overlay(OverlayKind::Search);
         app.search.query = "hello".to_string();
         app.search.run(app.active_conversation.as_deref(), &app.db);
         assert_eq!(app.search.results.len(), 1);
@@ -11096,54 +11069,20 @@ mod tests {
         assert_eq!(app.input_cursor, 5); // byte offset of space after "café"
     }
 
-    /// Toggle an App-owned overlay to the requested state. Used by
-    /// `toggle_overlay` for the variants that have been migrated to
-    /// `current_overlay`.
-    fn toggle_current_overlay(app: &mut App, kind: OverlayKind, on: bool) {
+    /// Toggle an overlay to the requested state. Routes through
+    /// `open_overlay`/`close_overlay` so the test mirrors production
+    /// callers, and special-cases GroupMenu's sub-state field.
+    fn toggle_overlay(app: &mut App, kind: OverlayKind, on: bool) {
         if on {
             app.open_overlay(kind);
         } else if app.is_overlay(kind) {
             app.close_overlay();
         }
-    }
-
-    /// Walk every `OverlayKind` variant by flipping the corresponding visibility
-    /// flag(s), asserting that `active_overlay` returns that variant and
-    /// `has_overlay` returns true, then clearing and asserting no overlay.
-    ///
-    /// The `match` is exhaustive so adding a new `OverlayKind` variant without
-    /// extending this test is a compile error.
-    fn toggle_overlay(app: &mut App, kind: OverlayKind, on: bool) {
-        match kind {
-            OverlayKind::SidebarFilter => toggle_current_overlay(app, OverlayKind::SidebarFilter, on),
-            OverlayKind::PollVote => toggle_current_overlay(app, OverlayKind::PollVote, on),
-            OverlayKind::PinDuration => toggle_current_overlay(app, OverlayKind::PinDuration, on),
-            OverlayKind::ActionMenu => toggle_current_overlay(app, OverlayKind::ActionMenu, on),
-            OverlayKind::DeleteConfirm => {
-                toggle_current_overlay(app, OverlayKind::DeleteConfirm, on)
-            }
-            OverlayKind::FilePicker => app.file_picker.visible = on,
-            OverlayKind::EmojiPicker => app.emoji_picker.visible = on,
-            OverlayKind::ReactionPicker => app.reactions.show_picker = on,
-            OverlayKind::MessageRequest => {
-                toggle_current_overlay(app, OverlayKind::MessageRequest, on)
-            }
-            OverlayKind::GroupMenu => {
-                app.group_menu.state = if on { Some(GroupMenuState::Menu) } else { None }
-            }
-            OverlayKind::About => toggle_current_overlay(app, OverlayKind::About, on),
-            OverlayKind::Profile => app.profile.show = on,
-            OverlayKind::Help => toggle_current_overlay(app, OverlayKind::Help, on),
-            OverlayKind::Verify => app.verify.show = on,
-            OverlayKind::Forward => app.forward.show = on,
-            OverlayKind::Contacts => app.contacts_overlay.show = on,
-            OverlayKind::Search => app.search.visible = on,
-            OverlayKind::SettingsProfiles => app.settings_profiles.show = on,
-            OverlayKind::ThemePicker => app.theme_picker.show = on,
-            OverlayKind::Keybindings => app.keybindings_overlay.show = on,
-            OverlayKind::Customize => toggle_current_overlay(app, OverlayKind::Customize, on),
-            OverlayKind::Settings => toggle_current_overlay(app, OverlayKind::Settings, on),
-            OverlayKind::Autocomplete => app.autocomplete.visible = on,
+        // GroupMenu carries an extra Option<GroupMenuState> sub-state that
+        // historically also encoded visibility. Keep it in sync so tests
+        // exercising group-menu rendering still see Some(Menu) when open.
+        if matches!(kind, OverlayKind::GroupMenu) {
+            app.group_menu.state = if on { Some(GroupMenuState::Menu) } else { None };
         }
     }
 

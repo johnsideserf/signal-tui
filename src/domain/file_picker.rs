@@ -2,10 +2,18 @@ use std::path::PathBuf;
 
 use crossterm::event::KeyCode;
 
+/// Outcome of a key press inside the file browser overlay.
+pub enum FilePickerOutcome {
+    /// Picker should stay open for further navigation.
+    Continue,
+    /// User selected a file; caller should consume the path and close the overlay.
+    Selected(PathBuf),
+    /// User cancelled (Esc); caller should close the overlay.
+    Cancelled,
+}
+
 /// State for the file browser overlay used to select attachments.
 pub struct FilePickerState {
-    /// File browser overlay visible
-    pub visible: bool,
     /// Current directory in file browser
     pub dir: PathBuf,
     /// Directory entries: (name, is_dir, size_bytes)
@@ -23,7 +31,6 @@ pub struct FilePickerState {
 impl Default for FilePickerState {
     fn default() -> Self {
         Self {
-            visible: false,
             dir: dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")),
             entries: Vec::new(),
             index: 0,
@@ -35,9 +42,9 @@ impl Default for FilePickerState {
 }
 
 impl FilePickerState {
-    /// Reset state and open the file browser.
+    /// Reset state for a fresh browse. Caller must also call
+    /// `App::open_overlay` to make the picker visible.
     pub fn open(&mut self) {
-        self.visible = true;
         self.dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         self.index = 0;
         self.filter.clear();
@@ -96,8 +103,7 @@ impl FilePickerState {
     }
 
     /// Handle a key press while the file browser overlay is open.
-    /// Returns `Some(path)` when the user selects a file.
-    pub fn handle_key(&mut self, code: KeyCode) -> Option<PathBuf> {
+    pub fn handle_key(&mut self, code: KeyCode) -> FilePickerOutcome {
         match code {
             KeyCode::Char('j') | KeyCode::Down
                 if !self.filtered.is_empty() && self.index < self.filtered.len() - 1 =>
@@ -116,9 +122,7 @@ impl FilePickerState {
                         self.filter.clear();
                         self.refresh_entries();
                     } else {
-                        let path = self.dir.join(&name);
-                        self.visible = false;
-                        return Some(path);
+                        return FilePickerOutcome::Selected(self.dir.join(&name));
                     }
                 }
             }
@@ -133,16 +137,14 @@ impl FilePickerState {
             KeyCode::Char('-') => {
                 self.navigate_up();
             }
-            KeyCode::Esc => {
-                self.visible = false;
-            }
+            KeyCode::Esc => return FilePickerOutcome::Cancelled,
             KeyCode::Char(c) => {
                 self.filter.push(c);
                 self.refresh_filter();
             }
             _ => {}
         }
-        None
+        FilePickerOutcome::Continue
     }
 
     /// Navigate to the parent directory in the file browser.

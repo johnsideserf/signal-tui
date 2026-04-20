@@ -22,6 +22,8 @@ pub enum SearchAction {
     },
     /// Status message to display.
     Status(String),
+    /// User cancelled the overlay (Esc) - caller should close it.
+    Cancel,
     /// No action needed.
     None,
 }
@@ -29,19 +31,18 @@ pub enum SearchAction {
 /// State for the search overlay.
 #[derive(Default)]
 pub struct SearchState {
-    pub visible: bool,
     pub query: String,
     pub results: Vec<SearchResult>,
     pub index: usize,
 }
 
 impl SearchState {
-    /// Open the search overlay with an initial query.
+    /// Configure the search overlay with an initial query and run the query.
+    /// Caller must also call `App::open_overlay` to make the overlay visible.
     pub fn open(&mut self, query: String, active_conversation: Option<&str>, db: &Database) {
         self.query = query;
         self.index = 0;
         self.run(active_conversation, db);
-        self.visible = true;
     }
 
     /// Handle a key press while the search overlay is open.
@@ -64,8 +65,8 @@ impl SearchState {
                 if let Some(result) = self.results.get(self.index) {
                     let conv_id = result.conv_id.clone();
                     let target_ts = result.timestamp_ms;
-                    self.visible = false;
-                    // Keep query for n/N navigation status display
+                    // Keep query for n/N navigation status display.
+                    // Caller closes the overlay on Select.
                     return SearchAction::Select {
                         conv_id,
                         timestamp_ms: target_ts,
@@ -74,8 +75,8 @@ impl SearchState {
                 }
             }
             KeyCode::Esc => {
-                self.visible = false;
                 self.query.clear();
+                return SearchAction::Cancel;
             }
             KeyCode::Backspace if !self.query.is_empty() => {
                 self.query.pop();

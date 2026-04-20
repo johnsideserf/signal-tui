@@ -20,7 +20,7 @@ mod verify_overlay;
 pub use action_menu::ActionMenuState;
 pub use contacts_overlay::ContactsOverlayState;
 pub use emoji_picker::{CATEGORIES, EmojiPickerAction, EmojiPickerSource, EmojiPickerState};
-pub use file_picker::FilePickerState;
+pub use file_picker::{FilePickerOutcome, FilePickerState};
 pub use forward_overlay::ForwardOverlayState;
 pub use group_menu_overlay::GroupMenuOverlayState;
 pub use image::ImageState;

@@ -1,8 +1,6 @@
 /// State for reaction display preferences and the reaction picker overlay.
 #[derive(Default)]
 pub struct ReactionState {
-    /// Reaction picker overlay visible
-    pub show_picker: bool,
     /// Selected index in the reaction picker
     pub picker_index: usize,
     /// Convert emoji to text emoticons/shortcodes in display

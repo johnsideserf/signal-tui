@@ -590,7 +590,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_status_bar(frame, app, status_area, sidebar_auto_hidden);
 
     // Autocomplete popup (overlays everything)
-    if app.autocomplete.visible {
+    if app.is_overlay(OverlayKind::Autocomplete) {
         let has_items = !app.autocomplete.is_empty();
         if has_items {
             draw_autocomplete(frame, app, input_area);
@@ -613,27 +613,27 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     // Contacts overlay (overlays everything)
-    if app.contacts_overlay.show {
+    if app.is_overlay(OverlayKind::Contacts) {
         draw_contacts(frame, app, size);
     }
 
     // Verify identity overlay
-    if app.verify.show {
+    if app.is_overlay(OverlayKind::Verify) {
         draw_verify(frame, app, size);
     }
 
     // Search overlay
-    if app.search.visible {
+    if app.is_overlay(OverlayKind::Search) {
         draw_search(frame, app, size);
     }
 
     // File browser overlay
-    if app.file_picker.visible {
+    if app.is_overlay(OverlayKind::FilePicker) {
         draw_file_browser(frame, app, size);
     }
 
     // Group management menu overlay
-    if app.group_menu.state.is_some() {
+    if app.is_overlay(OverlayKind::GroupMenu) {
         draw_group_menu(frame, app, size);
     }
 
@@ -648,12 +648,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     // Reaction picker overlay
-    if app.reactions.show_picker {
+    if app.is_overlay(OverlayKind::ReactionPicker) {
         draw_reaction_picker(frame, app, size);
     }
 
     // Emoji picker overlay
-    if app.emoji_picker.visible {
+    if app.is_overlay(OverlayKind::EmojiPicker) {
         draw_emoji_picker(frame, app, size);
     }
 
@@ -663,17 +663,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     // Theme picker overlay
-    if app.theme_picker.show {
+    if app.is_overlay(OverlayKind::ThemePicker) {
         draw_theme_picker(frame, app, size);
     }
 
     // Keybindings overlay
-    if app.keybindings_overlay.show {
+    if app.is_overlay(OverlayKind::Keybindings) {
         draw_keybindings(frame, app, size);
     }
 
     // Settings profile manager overlay
-    if app.settings_profiles.show {
+    if app.is_overlay(OverlayKind::SettingsProfiles) {
         draw_settings_profile_manager(frame, app, size);
     }
 
@@ -693,12 +693,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     // Profile editor overlay
-    if app.profile.show {
+    if app.is_overlay(OverlayKind::Profile) {
         draw_profile(frame, app, size);
     }
 
     // Forward message picker overlay
-    if app.forward.show {
+    if app.is_overlay(OverlayKind::Forward) {
         draw_forward(frame, app, size);
     }
 
@@ -5181,7 +5181,7 @@ mod snapshot_tests {
     #[test]
     fn test_theme_picker_overlay() {
         let mut app = demo_app();
-        app.theme_picker.show = true;
+        app.open_overlay(OverlayKind::ThemePicker);
         app.theme_picker.index = 1;
         let output = render_to_string(&mut app, 100, 30);
         insta::assert_snapshot!(output);
@@ -5190,7 +5190,7 @@ mod snapshot_tests {
     #[test]
     fn test_pin_duration_overlay() {
         let mut app = demo_app();
-        app.pin_duration.show = true;
+        app.open_overlay(OverlayKind::PinDuration);
         app.pin_duration.index = 1;
         app.pin_duration.pending = Some(PinPending {
             conv_id: "+15551234567".to_string(),
@@ -5205,7 +5205,7 @@ mod snapshot_tests {
     #[test]
     fn test_action_menu_overlay() {
         let mut app = demo_app();
-        app.action_menu.show = true;
+        app.open_overlay(OverlayKind::ActionMenu);
         app.action_menu.index = 0;
         app.focused_msg_index = Some(0);
         let output = render_to_string(&mut app, 100, 30);
@@ -5215,7 +5215,7 @@ mod snapshot_tests {
     #[test]
     fn test_contacts_overlay() {
         let mut app = demo_app();
-        app.contacts_overlay.show = true;
+        app.open_overlay(OverlayKind::Contacts);
         app.contacts_overlay.index = 0;
         app.contacts_overlay.filtered = vec![
             ("+15551234567".to_string(), "Alice".to_string()),
@@ -5228,7 +5228,7 @@ mod snapshot_tests {
     #[test]
     fn test_forward_overlay() {
         let mut app = demo_app();
-        app.forward.show = true;
+        app.open_overlay(OverlayKind::Forward);
         app.forward.index = 0;
         app.forward.filtered = vec![
             ("+15551234567".to_string(), "Alice".to_string()),
@@ -5243,6 +5243,7 @@ mod snapshot_tests {
     fn test_emoji_picker_overlay() {
         let mut app = demo_app();
         app.emoji_picker.open(EmojiPickerSource::Input, None);
+        app.open_overlay(OverlayKind::EmojiPicker);
         let output = render_to_string(&mut app, 100, 30);
         insta::assert_snapshot!(output);
     }

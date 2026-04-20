@@ -60,7 +60,6 @@ fn category_to_group(index: usize) -> Option<emojis::Group> {
 
 /// State for the emoji picker overlay.
 pub struct EmojiPickerState {
-    pub visible: bool,
     pub source: EmojiPickerSource,
     pub filter: String,
     pub selected_index: usize,
@@ -73,7 +72,6 @@ pub struct EmojiPickerState {
 impl Default for EmojiPickerState {
     fn default() -> Self {
         Self {
-            visible: false,
             source: EmojiPickerSource::Input,
             filter: String::new(),
             selected_index: 0,
@@ -85,9 +83,10 @@ impl Default for EmojiPickerState {
 }
 
 impl EmojiPickerState {
-    /// Open the picker for a given source context, with an optional initial search filter.
+    /// Configure the picker for a given source context, with an optional
+    /// initial search filter. Caller must also call `App::open_overlay`
+    /// to make the picker visible.
     pub fn open(&mut self, source: EmojiPickerSource, filter: Option<String>) {
-        self.visible = true;
         self.source = source;
         self.filter = filter.unwrap_or_default();
         self.selected_index = 0;
@@ -95,9 +94,9 @@ impl EmojiPickerState {
         self.refresh_filter();
     }
 
-    /// Close the picker and reset state.
+    /// Reset picker state. Caller must also call `App::close_overlay`
+    /// to dismiss the overlay.
     pub fn close(&mut self) {
-        self.visible = false;
         self.filter.clear();
         self.selected_index = 0;
         self.category_index = 0;
@@ -239,7 +238,8 @@ mod tests {
     fn open_populates_filtered_list() {
         let mut state = EmojiPickerState::default();
         state.open(EmojiPickerSource::Input, None);
-        assert!(state.visible);
+        // Visibility now lives on App.current_overlay; this struct test
+        // only verifies the state-mutation side of `open`.
         assert!(!state.filtered.is_empty());
         assert_eq!(state.selected_index, 0);
         assert_eq!(state.category_index, 0);
@@ -395,7 +395,8 @@ mod tests {
         state.category_index = 3;
 
         state.close();
-        assert!(!state.visible);
+        // Visibility now lives on App.current_overlay; this struct test
+        // only verifies the state-clearing side of `close`.
         assert!(state.filter.is_empty());
         assert_eq!(state.selected_index, 0);
         assert_eq!(state.category_index, 0);

@@ -3,8 +3,6 @@ use crate::keybindings::{KeyAction, KeyCombo};
 /// State for the keybindings configuration overlay.
 #[derive(Default)]
 pub struct KeybindingsOverlayState {
-    /// Keybindings overlay visible
-    pub show: bool,
     /// Cursor position in keybindings overlay
     pub index: usize,
     /// Whether capturing a new key binding

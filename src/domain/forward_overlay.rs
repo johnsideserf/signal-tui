@@ -1,8 +1,6 @@
 /// State for the forward message picker overlay.
 #[derive(Default)]
 pub struct ForwardOverlayState {
-    /// Forward message picker overlay visible
-    pub show: bool,
     /// Cursor position in forward picker
     pub index: usize,
     /// Type-to-filter text for forward picker
