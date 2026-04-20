@@ -66,6 +66,17 @@ fn floor_char_boundary(buf: &str, pos: usize) -> usize {
     p
 }
 
+/// Wire-protocol quote fields needed only for DB persistence.
+///
+/// `DisplayMessage.quote` holds the resolved author display name, which differs
+/// from the phone-number/UUID we persist in the DB for cross-session recovery.
+#[derive(Default)]
+pub struct WireQuote {
+    pub author: Option<String>,
+    pub body: Option<String>,
+    pub timestamp: Option<i64>,
+}
+
 impl App {
     /// Like `db_warn` but also surfaces the error in the status bar so the user sees it.
     fn db_warn_visible<T>(&mut self, result: Result<T, impl std::fmt::Display>, context: &str) {
@@ -73,6 +84,104 @@ impl App {
             crate::debug_log::logf(format_args!("db {context}: {e}"));
             self.status_message = format!("DB error ({context}): {e}");
         }
+    }
+
+    /// Common hook for all message insertions. Handles the side effects shared
+    /// by the incoming, local-send, poll, and system-message paths:
+    /// - Inserts into the conversation store (ordered by timestamp or appended)
+    /// - Bumps `last_read_index` if the insert came before the read marker
+    /// - Increments `expiring_msg_count` when the message has a disappearing timer
+    /// - Persists to the database
+    /// - Moves the conversation to the top of the sidebar (refreshing the filter
+    ///   if one is active)
+    ///
+    /// Path-specific side effects (unread counter, notifications, read receipts,
+    /// scroll/focus reset) remain at the call sites; see issue #209 for further
+    /// unification.
+    ///
+    /// Returns the index where the message was placed, or `None` if the
+    /// conversation no longer exists.
+    pub(crate) fn on_message_added(
+        &mut self,
+        conv_id: &str,
+        msg: DisplayMessage,
+        wire_quote: WireQuote,
+        ordered_insert: bool,
+    ) -> Option<usize> {
+        // Snapshot the fields we need for DB persistence before the message moves.
+        let ts_rfc3339 = msg.timestamp.to_rfc3339();
+        let sender = msg.sender.clone();
+        let sender_id = msg.sender_id.clone();
+        let body = msg.body.clone();
+        let is_system = msg.is_system;
+        let status = msg.status;
+        let timestamp_ms = msg.timestamp_ms;
+        let expires_in_seconds = msg.expires_in_seconds;
+        let expiration_start_ms = msg.expiration_start_ms;
+
+        // Insert into the in-memory store.
+        let insert_idx = {
+            let conv = self.store.conversations.get_mut(conv_id)?;
+            let pos = if ordered_insert {
+                conv.messages
+                    .partition_point(|m| m.timestamp_ms <= timestamp_ms)
+            } else {
+                conv.messages.len()
+            };
+            conv.messages.insert(pos, msg);
+            pos
+        };
+
+        // Bump the read marker when an ordered insert lands before it.
+        if ordered_insert
+            && let Some(read_idx) = self.store.last_read_index.get_mut(conv_id)
+            && insert_idx <= *read_idx
+        {
+            *read_idx += 1;
+        }
+
+        if expires_in_seconds > 0 {
+            self.expiring_msg_count += 1;
+        }
+
+        // DB persist.
+        let db_result = if is_system {
+            self.db.insert_message(
+                conv_id,
+                &sender,
+                &ts_rfc3339,
+                &body,
+                true,
+                status,
+                timestamp_ms,
+            )
+        } else {
+            self.db.insert_message_full(
+                conv_id,
+                &sender,
+                &ts_rfc3339,
+                &body,
+                false,
+                status,
+                timestamp_ms,
+                &sender_id,
+                wire_quote.author.as_deref(),
+                wire_quote.body.as_deref(),
+                wire_quote.timestamp,
+                expires_in_seconds,
+                expiration_start_ms,
+            )
+        };
+        self.db_warn_visible(db_result, "on_message_added");
+
+        // Sidebar reorder (skip for system messages, which shouldn't bump
+        // conversations to the top just because someone changed the group name).
+        if !is_system && self.store.move_conversation_to_top(conv_id) && self.sidebar_filter_active
+        {
+            self.refresh_sidebar_filter();
+        }
+
+        Some(insert_idx)
     }
 }
 
@@ -4288,7 +4397,6 @@ impl App {
             self.db_warn_visible(self.db.update_accepted(&conv_id, false), "update_accepted");
         }
 
-        let ts_rfc3339 = msg.timestamp.to_rfc3339();
         let msg_ts_ms = msg.timestamp.timestamp_millis();
         // Outgoing synced messages already have a server timestamp; incoming messages have no status
         let msg_status = if msg.is_outgoing {
@@ -4367,7 +4475,7 @@ impl App {
         let wire_quote_body = msg_quote.as_ref().map(|(_, _, b, _)| b.clone());
         let wire_quote_ts = msg_quote.as_ref().map(|(_, _, _, t)| *t);
 
-        // Helper: insert a DisplayMessage in timestamp order and persist to DB
+        // Helper: build a DisplayMessage in timestamp order and persist via on_message_added.
         let mut push_msg = |body: String,
                             image_lines: Option<Vec<Line<'static>>>,
                             image_path: Option<String>,
@@ -4381,67 +4489,42 @@ impl App {
                 .poll_vote
                 .pending_polls
                 .remove(&(conv_id.clone(), msg_ts_ms));
-            if let Some(conv) = self.store.conversations.get_mut(&conv_id) {
-                let pos = conv
-                    .messages
-                    .partition_point(|m| m.timestamp_ms <= msg_ts_ms);
-                conv.messages.insert(
-                    pos,
-                    DisplayMessage {
-                        sender: sender_display.clone(),
-                        timestamp: msg.timestamp,
-                        body: body.clone(),
-                        is_system: false,
-                        image_lines,
-                        image_path,
-                        status: msg_status,
-                        timestamp_ms: msg_ts_ms,
-                        reactions: Vec::new(),
-                        mention_ranges,
-                        style_ranges,
-                        body_raw: body_raw.clone(),
-                        mentions: mentions.clone(),
-                        quote,
-                        is_edited: false,
-                        is_deleted: false,
-                        is_pinned: false,
-                        sender_id: sender_id.clone(),
-                        expires_in_seconds: msg_expires_in,
-                        expiration_start_ms: msg_expiration_start,
-                        poll_data: deferred_poll,
-                        poll_votes: Vec::new(),
-                        preview: None,
-                        preview_image_lines: None,
-                        preview_image_path: None,
-                    },
-                );
-                // Bump last_read_index if we inserted before the read marker
-                if let Some(read_idx) = self.store.last_read_index.get_mut(&conv_id)
-                    && pos <= *read_idx
-                {
-                    *read_idx += 1;
-                }
-                if msg_expires_in > 0 {
-                    self.expiring_msg_count += 1;
-                }
-            }
-            db_warn(
-                self.db.insert_message_full(
-                    &conv_id,
-                    &sender_display,
-                    &ts_rfc3339,
-                    &body,
-                    false,
-                    msg_status,
-                    msg_ts_ms,
-                    &sender_id,
-                    wire_quote_author.as_deref(),
-                    wire_quote_body.as_deref(),
-                    wire_quote_ts,
-                    msg_expires_in,
-                    msg_expiration_start,
-                ),
-                "insert_message",
+            let display = DisplayMessage {
+                sender: sender_display.clone(),
+                timestamp: msg.timestamp,
+                body,
+                is_system: false,
+                image_lines,
+                image_path,
+                status: msg_status,
+                timestamp_ms: msg_ts_ms,
+                reactions: Vec::new(),
+                mention_ranges,
+                style_ranges,
+                body_raw,
+                mentions,
+                quote,
+                is_edited: false,
+                is_deleted: false,
+                is_pinned: false,
+                sender_id: sender_id.clone(),
+                expires_in_seconds: msg_expires_in,
+                expiration_start_ms: msg_expiration_start,
+                poll_data: deferred_poll,
+                poll_votes: Vec::new(),
+                preview: None,
+                preview_image_lines: None,
+                preview_image_path: None,
+            };
+            self.on_message_added(
+                &conv_id,
+                display,
+                WireQuote {
+                    author: wire_quote_author.clone(),
+                    body: wire_quote_body.clone(),
+                    timestamp: wire_quote_ts,
+                },
+                true,
             );
         };
 
@@ -4668,53 +4751,34 @@ impl App {
             .unwrap_or_else(|| conv_id.to_string());
         self.store
             .get_or_create_conversation(conv_id, &conv_name, is_group, &self.db);
-        if let Some(conv) = self.store.conversations.get_mut(conv_id) {
-            let pos = conv
-                .messages
-                .partition_point(|m| m.timestamp_ms <= timestamp_ms);
-            conv.messages.insert(
-                pos,
-                DisplayMessage {
-                    sender: String::new(),
-                    timestamp,
-                    body: body.to_string(),
-                    is_system: true,
-                    image_lines: None,
-                    image_path: None,
-                    status: None,
-                    timestamp_ms,
-                    reactions: Vec::new(),
-                    mention_ranges: Vec::new(),
-                    style_ranges: Vec::new(),
-                    body_raw: None,
-                    mentions: Vec::new(),
-                    quote: None,
-                    is_edited: false,
-                    is_deleted: false,
-                    is_pinned: false,
-                    sender_id: String::new(),
-                    expires_in_seconds: 0,
-                    expiration_start_ms: 0,
-                    poll_data: None,
-                    poll_votes: Vec::new(),
-                    preview: None,
-                    preview_image_lines: None,
-                    preview_image_path: None,
-                },
-            );
-            // Bump last_read_index if we inserted before the read marker
-            if let Some(read_idx) = self.store.last_read_index.get_mut(conv_id)
-                && pos <= *read_idx
-            {
-                *read_idx += 1;
-            }
-        }
-        let ts_rfc3339 = timestamp.to_rfc3339();
-        self.db_warn_visible(
-            self.db
-                .insert_message(conv_id, "", &ts_rfc3339, body, true, None, timestamp_ms),
-            "insert_system_message",
-        );
+        let msg = DisplayMessage {
+            sender: String::new(),
+            timestamp,
+            body: body.to_string(),
+            is_system: true,
+            image_lines: None,
+            image_path: None,
+            status: None,
+            timestamp_ms,
+            reactions: Vec::new(),
+            mention_ranges: Vec::new(),
+            style_ranges: Vec::new(),
+            body_raw: None,
+            mentions: Vec::new(),
+            quote: None,
+            is_edited: false,
+            is_deleted: false,
+            is_pinned: false,
+            sender_id: String::new(),
+            expires_in_seconds: 0,
+            expiration_start_ms: 0,
+            poll_data: None,
+            poll_votes: Vec::new(),
+            preview: None,
+            preview_image_lines: None,
+            preview_image_path: None,
+        };
+        self.on_message_added(conv_id, msg, WireQuote::default(), true);
     }
 
     /// Remove expired disappearing messages from memory and DB.
@@ -5879,73 +5943,57 @@ impl App {
                         .unwrap_or(0);
                     let out_expiry_start = if out_expires > 0 { local_ts_ms } else { 0 };
 
-                    if let Some(conv) = self.store.conversations.get_mut(&conv_id) {
-                        conv.messages.push(DisplayMessage {
-                            sender: "you".to_string(),
-                            timestamp: now,
-                            body: display_body.clone(),
-                            is_system: false,
-                            image_lines: outgoing_image_lines,
-                            image_path: outgoing_image_path,
-                            status: Some(MessageStatus::Sending),
-                            timestamp_ms: local_ts_ms,
-                            reactions: Vec::new(),
-                            mention_ranges,
-                            style_ranges: Vec::new(),
-                            body_raw: if wire_mentions.is_empty() {
-                                None
-                            } else {
-                                Some(wire_body.clone())
-                            },
-                            mentions: wire_mentions
-                                .iter()
-                                .map(|(start, uuid)| Mention {
-                                    start: *start,
-                                    length: 1,
-                                    uuid: uuid.clone(),
-                                })
-                                .collect(),
-                            quote,
-                            is_edited: false,
-                            is_deleted: false,
-                            is_pinned: false,
-                            sender_id: self.account.clone(),
-                            expires_in_seconds: out_expires,
-                            expiration_start_ms: out_expiry_start,
-                            poll_data: None,
-                            poll_votes: Vec::new(),
-                            preview: None,
-                            preview_image_lines: None,
-                            preview_image_path: None,
-                        });
-                        if out_expires > 0 {
-                            self.expiring_msg_count += 1;
-                        }
-                    }
-                    self.db_warn_visible(
-                        self.db.insert_message_full(
-                            &conv_id,
-                            "you",
-                            &now.to_rfc3339(),
-                            &display_body,
-                            false,
-                            Some(MessageStatus::Sending),
-                            local_ts_ms,
-                            &self.account,
-                            quote_author.as_deref(),
-                            quote_body.as_deref(),
-                            quote_timestamp,
-                            out_expires,
-                            out_expiry_start,
-                        ),
-                        "insert_message",
+                    let outgoing_msg = DisplayMessage {
+                        sender: "you".to_string(),
+                        timestamp: now,
+                        body: display_body.clone(),
+                        is_system: false,
+                        image_lines: outgoing_image_lines,
+                        image_path: outgoing_image_path,
+                        status: Some(MessageStatus::Sending),
+                        timestamp_ms: local_ts_ms,
+                        reactions: Vec::new(),
+                        mention_ranges,
+                        style_ranges: Vec::new(),
+                        body_raw: if wire_mentions.is_empty() {
+                            None
+                        } else {
+                            Some(wire_body.clone())
+                        },
+                        mentions: wire_mentions
+                            .iter()
+                            .map(|(start, uuid)| Mention {
+                                start: *start,
+                                length: 1,
+                                uuid: uuid.clone(),
+                            })
+                            .collect(),
+                        quote,
+                        is_edited: false,
+                        is_deleted: false,
+                        is_pinned: false,
+                        sender_id: self.account.clone(),
+                        expires_in_seconds: out_expires,
+                        expiration_start_ms: out_expiry_start,
+                        poll_data: None,
+                        poll_votes: Vec::new(),
+                        preview: None,
+                        preview_image_lines: None,
+                        preview_image_path: None,
+                    };
+                    self.on_message_added(
+                        &conv_id,
+                        outgoing_msg,
+                        WireQuote {
+                            author: quote_author.clone(),
+                            body: quote_body.clone(),
+                            timestamp: quote_timestamp,
+                        },
+                        false,
                     );
                     self.scroll_offset = 0;
                     self.focused_msg_index = None;
                     self.reply_target = None;
-                    if self.store.move_conversation_to_top(&conv_id) && self.sidebar_filter_active {
-                        self.refresh_sidebar_filter();
-                    }
                     return Some(SendRequest::Message {
                         recipient: conv_id,
                         body: wire_body,
@@ -6291,53 +6339,35 @@ impl App {
 
                     // Optimistic local message
                     let poll_data_for_db = poll_data.clone();
-                    if let Some(conv) = self.store.conversations.get_mut(&conv_id) {
-                        conv.messages.push(DisplayMessage {
-                            sender: "you".to_string(),
-                            timestamp: now,
-                            body: format!("\u{1F4CA} {question}"),
-                            is_system: false,
-                            image_lines: None,
-                            image_path: None,
-                            status: Some(MessageStatus::Sending),
-                            timestamp_ms: local_ts_ms,
-                            reactions: Vec::new(),
-                            mention_ranges: Vec::new(),
-                            style_ranges: Vec::new(),
-                            body_raw: None,
-                            mentions: Vec::new(),
-                            quote: None,
-                            is_edited: false,
-                            is_deleted: false,
-                            is_pinned: false,
-                            sender_id: self.account.clone(),
-                            expires_in_seconds: 0,
-                            expiration_start_ms: 0,
-                            poll_data: Some(poll_data),
-                            poll_votes: Vec::new(),
-                            preview: None,
-                            preview_image_lines: None,
-                            preview_image_path: None,
-                        });
-                    }
-                    self.db_warn_visible(
-                        self.db.insert_message_full(
-                            &conv_id,
-                            "you",
-                            &now.to_rfc3339(),
-                            &format!("\u{1F4CA} {question}"),
-                            false,
-                            Some(MessageStatus::Sending),
-                            local_ts_ms,
-                            &self.account.clone(),
-                            None,
-                            None,
-                            None,
-                            0,
-                            0,
-                        ),
-                        "insert_poll_msg",
-                    );
+                    let body = format!("\u{1F4CA} {question}");
+                    let poll_msg = DisplayMessage {
+                        sender: "you".to_string(),
+                        timestamp: now,
+                        body,
+                        is_system: false,
+                        image_lines: None,
+                        image_path: None,
+                        status: Some(MessageStatus::Sending),
+                        timestamp_ms: local_ts_ms,
+                        reactions: Vec::new(),
+                        mention_ranges: Vec::new(),
+                        style_ranges: Vec::new(),
+                        body_raw: None,
+                        mentions: Vec::new(),
+                        quote: None,
+                        is_edited: false,
+                        is_deleted: false,
+                        is_pinned: false,
+                        sender_id: self.account.clone(),
+                        expires_in_seconds: 0,
+                        expiration_start_ms: 0,
+                        poll_data: Some(poll_data),
+                        poll_votes: Vec::new(),
+                        preview: None,
+                        preview_image_lines: None,
+                        preview_image_path: None,
+                    };
+                    self.on_message_added(&conv_id, poll_msg, WireQuote::default(), false);
                     self.db_warn_visible(
                         self.db
                             .upsert_poll_data(&conv_id, local_ts_ms, &poll_data_for_db),
