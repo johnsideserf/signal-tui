@@ -441,16 +441,10 @@ pub struct App {
     pub blocked_conversations: HashSet<String>,
     /// Autocomplete popup state: candidates, selection, pending mentions.
     pub autocomplete: AutocompleteState,
-    /// Settings overlay visible
-    pub show_settings: bool,
     /// Cursor position in settings list
     pub settings_index: usize,
-    /// Customize sub-menu overlay visible (Theme, Keybindings, Profile)
-    pub show_customize: bool,
     /// Cursor position in customize sub-menu
     pub customize_index: usize,
-    /// Help overlay visible
-    pub show_help: bool,
     /// State for the contacts list overlay
     pub contacts_overlay: ContactsOverlayState,
     /// State for the identity verification overlay
@@ -509,8 +503,6 @@ pub struct App {
     pub pending_paste_cleanups: HashMap<String, (PathBuf, Instant)>,
     /// Reply target: (author_phone, body_snippet, timestamp_ms)
     pub reply_target: Option<(String, String, i64)>,
-    /// Delete confirmation overlay visible
-    pub show_delete_confirm: bool,
     /// Message being edited: (timestamp_ms, conv_id)
     pub editing_message: Option<(i64, String)>,
     /// Search overlay state
@@ -527,8 +519,6 @@ pub struct App {
     pub forward: ForwardOverlayState,
     /// Group management menu overlay state
     pub group_menu: GroupMenuOverlayState,
-    /// Message request overlay visible
-    pub show_message_request: bool,
     /// Inner area of sidebar List widget (None when sidebar is hidden)
     pub mouse_sidebar_inner: Option<Rect>,
     /// Inner area of messages block
@@ -555,8 +545,6 @@ pub struct App {
     pub poll_vote: PollVoteOverlayState,
     /// Number of in-memory messages with expiration > 0 (skip sweeps when zero)
     pub expiring_msg_count: usize,
-    /// About overlay visible
-    pub show_about: bool,
     /// Profile editor overlay state
     pub profile: ProfileOverlayState,
     /// Settings profile overlay state
@@ -565,6 +553,15 @@ pub struct App {
     pub settings_mouse_snapshot: bool,
     /// Sync state: tracks the initial message burst on startup.
     pub sync: SyncState,
+    /// Currently active App-owned overlay, when one is open.
+    ///
+    /// Migration in progress: this is the source of truth for the six
+    /// overlays that were previously standalone booleans (About, Help,
+    /// Customize, DeleteConfirm, Settings, MessageRequest). The remaining
+    /// overlays still live inside their own state structs with `.show` /
+    /// `.visible` flags. Once every overlay has been migrated, the per-overlay
+    /// flags can be removed and `active_overlay` becomes `self.current_overlay`.
+    pub current_overlay: Option<OverlayKind>,
 }
 
 pub const QUICK_REACTIONS: &[&str] = &[
@@ -1098,14 +1095,14 @@ impl App {
                         _ => "native".to_string(),
                     };
                 } else if self.settings_index == customize_index {
-                    self.show_customize = true;
+                    self.open_overlay(OverlayKind::Customize);
                     self.customize_index = 0;
                 } else {
                     self.toggle_setting(self.settings_index);
                 }
             }
             KeyCode::Esc | KeyCode::Char('q') => {
-                self.show_settings = false;
+                self.close_overlay();
                 self.save_settings();
                 self.fire_deferred_settings_hooks();
             }
@@ -1124,8 +1121,7 @@ impl App {
                 self.customize_index = self.customize_index.saturating_sub(1);
             }
             KeyCode::Char(' ') | KeyCode::Enter | KeyCode::Tab => {
-                self.show_customize = false;
-                self.show_settings = false;
+                self.close_overlay();
                 self.save_settings();
                 match self.customize_index {
                     0 => {
@@ -1148,7 +1144,7 @@ impl App {
                 }
             }
             KeyCode::Esc | KeyCode::Char('q') => {
-                self.show_customize = false;
+                self.close_overlay();
             }
             _ => {}
         }
@@ -2030,7 +2026,7 @@ impl App {
         let conv_id = match self.active_conversation.clone() {
             Some(id) => id,
             None => {
-                self.show_message_request = false;
+                self.close_overlay();
                 return None;
             }
         };
@@ -2046,7 +2042,7 @@ impl App {
                     conv.accepted = true;
                 }
                 self.db_warn_visible(self.db.update_accepted(&conv_id, true), "update_accepted");
-                self.show_message_request = false;
+                self.close_overlay();
                 Some(SendRequest::MessageRequestResponse {
                     recipient: conv_id,
                     is_group,
@@ -2064,7 +2060,7 @@ impl App {
                 self.store.conversation_order.retain(|id| id != &conv_id);
                 self.scroll_positions.remove(&conv_id);
                 self.db_warn_visible(self.db.delete_conversation(&conv_id), "delete_conversation");
-                self.show_message_request = false;
+                self.close_overlay();
                 self.active_conversation = None;
                 Some(SendRequest::MessageRequestResponse {
                     recipient: conv_id,
@@ -2073,7 +2069,7 @@ impl App {
                 })
             }
             KeyCode::Esc => {
-                self.show_message_request = false;
+                self.close_overlay();
                 self.active_conversation = None;
                 None
             }
@@ -2437,7 +2433,7 @@ impl App {
                     && !msg.is_system
                     && !msg.is_deleted
                 {
-                    self.show_delete_confirm = true;
+                    self.open_overlay(OverlayKind::DeleteConfirm);
                 }
                 None
             }
@@ -2924,11 +2920,8 @@ impl App {
             muted_conversations: HashSet::new(),
             blocked_conversations: HashSet::new(),
             autocomplete: AutocompleteState::new(),
-            show_settings: false,
             settings_index: 0,
-            show_customize: false,
             customize_index: 0,
-            show_help: false,
             contacts_overlay: ContactsOverlayState::default(),
             verify: VerifyOverlayState::default(),
             identity_trust: HashMap::new(),
@@ -2969,7 +2962,6 @@ impl App {
                 dir
             },
             reply_target: None,
-            show_delete_confirm: false,
             editing_message: None,
             search: SearchState::default(),
             pending_typing_stop: None,
@@ -2978,7 +2970,6 @@ impl App {
             action_menu: ActionMenuState::default(),
             forward: ForwardOverlayState::default(),
             group_menu: GroupMenuOverlayState::default(),
-            show_message_request: false,
             mouse_sidebar_inner: None,
             mouse_messages_area: Rect::default(),
             mouse_input_area: Rect::default(),
@@ -2998,7 +2989,6 @@ impl App {
             pin_duration: PinDurationOverlayState::default(),
             poll_vote: PollVoteOverlayState::default(),
             expiring_msg_count: 0,
-            show_about: false,
             profile: ProfileOverlayState::default(),
             settings_profiles: SettingsProfileOverlayState {
                 available: crate::settings_profile::all_settings_profiles(),
@@ -3006,6 +2996,7 @@ impl App {
             },
             settings_mouse_snapshot: true,
             sync: SyncState::new(),
+            current_overlay: None,
         }
     }
 
@@ -3489,7 +3480,7 @@ impl App {
         if self.action_menu.show {
             return Some(OverlayKind::ActionMenu);
         }
-        if self.show_delete_confirm {
+        if self.current_overlay == Some(OverlayKind::DeleteConfirm) {
             return Some(OverlayKind::DeleteConfirm);
         }
         if self.file_picker.visible {
@@ -3501,19 +3492,19 @@ impl App {
         if self.reactions.show_picker {
             return Some(OverlayKind::ReactionPicker);
         }
-        if self.show_message_request {
+        if self.current_overlay == Some(OverlayKind::MessageRequest) {
             return Some(OverlayKind::MessageRequest);
         }
         if self.group_menu.state.is_some() {
             return Some(OverlayKind::GroupMenu);
         }
-        if self.show_about {
+        if self.current_overlay == Some(OverlayKind::About) {
             return Some(OverlayKind::About);
         }
         if self.profile.show {
             return Some(OverlayKind::Profile);
         }
-        if self.show_help {
+        if self.current_overlay == Some(OverlayKind::Help) {
             return Some(OverlayKind::Help);
         }
         if self.verify.show {
@@ -3537,16 +3528,46 @@ impl App {
         if self.keybindings_overlay.show {
             return Some(OverlayKind::Keybindings);
         }
-        if self.show_customize {
+        if self.current_overlay == Some(OverlayKind::Customize) {
             return Some(OverlayKind::Customize);
         }
-        if self.show_settings {
+        if self.current_overlay == Some(OverlayKind::Settings) {
             return Some(OverlayKind::Settings);
         }
         if self.autocomplete.visible {
             return Some(OverlayKind::Autocomplete);
         }
         None
+    }
+
+    /// Open an App-owned overlay.
+    ///
+    /// Clobbers whichever App-owned overlay was previously active (at most
+    /// one at a time; the old bool-per-overlay model tolerated concurrent
+    /// visibility, the new single-field model does not).
+    pub fn open_overlay(&mut self, kind: OverlayKind) {
+        self.current_overlay = Some(kind);
+    }
+
+    /// Close the currently-active App-owned overlay.
+    ///
+    /// No-op if no overlay is open or if the active overlay belongs to a
+    /// still-unmigrated state struct (those still use their own `.show`
+    /// field). After all 23 overlays are migrated, this becomes the only way
+    /// to close any overlay.
+    pub fn close_overlay(&mut self) {
+        self.current_overlay = None;
+    }
+
+    /// Returns true if the given overlay kind is currently open via the
+    /// App-owned `current_overlay` field.
+    ///
+    /// Only meaningful for the overlays that have been migrated to
+    /// `current_overlay`; others report false here regardless of whether
+    /// their own `.show` flag is set. Use `active_overlay()` for the
+    /// unified check.
+    pub fn is_overlay(&self, kind: OverlayKind) -> bool {
+        self.current_overlay == Some(kind)
     }
 
     pub fn handle_overlay_key(&mut self, code: KeyCode) -> (bool, Option<SendRequest>) {
@@ -3617,7 +3638,7 @@ impl App {
                 (true, send)
             }
             OverlayKind::About => {
-                self.show_about = false;
+                self.close_overlay();
                 (true, None)
             }
             OverlayKind::Profile => {
@@ -3625,7 +3646,7 @@ impl App {
                 (true, send)
             }
             OverlayKind::Help => {
-                self.show_help = false;
+                self.close_overlay();
                 (true, None)
             }
             OverlayKind::Verify => {
@@ -3696,7 +3717,7 @@ impl App {
                         && !msg.is_system
                         && !msg.is_deleted
                     {
-                        self.show_delete_confirm = true;
+                        self.open_overlay(OverlayKind::DeleteConfirm);
                     }
                     return None;
                 }
@@ -4144,7 +4165,7 @@ impl App {
                     && !msg.is_system
                     && !msg.is_deleted
                 {
-                    self.show_delete_confirm = true;
+                    self.open_overlay(OverlayKind::DeleteConfirm);
                 }
                 None
             }
@@ -5011,7 +5032,7 @@ impl App {
     pub fn handle_delete_confirm_key(&mut self, code: KeyCode) -> Option<SendRequest> {
         match code {
             KeyCode::Char('y') => {
-                self.show_delete_confirm = false;
+                self.close_overlay();
                 let conv_id = self.active_conversation.clone()?;
                 let conv = self.store.conversations.get(&conv_id)?;
                 let is_group = conv.is_group;
@@ -5045,7 +5066,7 @@ impl App {
             }
             KeyCode::Char('l') => {
                 // Local-only delete (for outgoing messages)
-                self.show_delete_confirm = false;
+                self.close_overlay();
                 let conv_id = self.active_conversation.clone()?;
                 let conv = self.store.conversations.get(&conv_id)?;
                 let index = self
@@ -5066,7 +5087,7 @@ impl App {
                 None
             }
             KeyCode::Char('n') | KeyCode::Esc => {
-                self.show_delete_confirm = false;
+                self.close_overlay();
                 None
             }
             _ => None,
@@ -6282,7 +6303,7 @@ impl App {
                 }
             }
             InputAction::Settings => {
-                self.show_settings = true;
+                self.open_overlay(OverlayKind::Settings);
                 self.settings_index = 0;
                 self.settings_mouse_snapshot = self.mouse_enabled;
             }
@@ -6379,14 +6400,14 @@ impl App {
                 self.profile.editing = false;
             }
             InputAction::About => {
-                self.show_about = true;
+                self.open_overlay(OverlayKind::About);
             }
             InputAction::Keybindings => {
                 self.keybindings_overlay.show = true;
                 self.keybindings_overlay.index = 0;
             }
             InputAction::Help => {
-                self.show_help = true;
+                self.open_overlay(OverlayKind::Help);
             }
             InputAction::SetDisappearing(duration_str) => {
                 match input::parse_duration_to_seconds(&duration_str) {
@@ -7185,14 +7206,21 @@ impl App {
                 self.status_message = format!("connected | {}{}", prefix, conv.name);
             }
             // Show message request overlay for unaccepted conversations
-            self.show_message_request = self
+            let should_show = self
                 .active_conversation
                 .as_ref()
                 .and_then(|id| self.store.conversations.get(id))
                 .is_some_and(|c| !c.accepted);
+            if should_show {
+                self.open_overlay(OverlayKind::MessageRequest);
+            } else if self.is_overlay(OverlayKind::MessageRequest) {
+                self.close_overlay();
+            }
         } else {
             self.status_message = "connected | no conversation selected".to_string();
-            self.show_message_request = false;
+            if self.is_overlay(OverlayKind::MessageRequest) {
+                self.close_overlay();
+            }
         }
     }
 
@@ -10774,11 +10802,11 @@ mod tests {
     fn accept_key_returns_send_request_and_marks_accepted(mut app: App) {
         app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
         app.active_conversation = Some("+1".to_string());
-        app.show_message_request = true;
+        app.open_overlay(OverlayKind::MessageRequest);
 
         let req = app.handle_message_request_key(KeyCode::Char('a'));
         assert!(app.store.conversations["+1"].accepted);
-        assert!(!app.show_message_request);
+        assert!(!app.is_overlay(OverlayKind::MessageRequest));
         assert!(matches!(
             req,
             Some(SendRequest::MessageRequestResponse { ref response_type, .. })
@@ -10790,13 +10818,13 @@ mod tests {
     fn delete_key_removes_conversation(mut app: App) {
         app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
         app.active_conversation = Some("+1".to_string());
-        app.show_message_request = true;
+        app.open_overlay(OverlayKind::MessageRequest);
 
         let req = app.handle_message_request_key(KeyCode::Char('d'));
         assert!(!app.store.conversations.contains_key("+1"));
         assert!(!app.store.conversation_order.contains(&"+1".to_string()));
         assert!(app.active_conversation.is_none());
-        assert!(!app.show_message_request);
+        assert!(!app.is_overlay(OverlayKind::MessageRequest));
         assert!(matches!(
             req,
             Some(SendRequest::MessageRequestResponse { ref response_type, .. })
@@ -10808,11 +10836,11 @@ mod tests {
     fn esc_closes_message_request_overlay(mut app: App) {
         app.handle_signal_event(SignalEvent::MessageReceived(msg_from("+1")));
         app.active_conversation = Some("+1".to_string());
-        app.show_message_request = true;
+        app.open_overlay(OverlayKind::MessageRequest);
 
         let req = app.handle_message_request_key(KeyCode::Esc);
         assert!(req.is_none());
-        assert!(!app.show_message_request);
+        assert!(!app.is_overlay(OverlayKind::MessageRequest));
         assert!(app.active_conversation.is_none());
     }
 
@@ -10962,7 +10990,7 @@ mod tests {
 
     #[rstest]
     fn mouse_overlay_scroll_navigates_list(mut app: App) {
-        app.show_settings = true;
+        app.open_overlay(OverlayKind::Settings);
         app.settings_index = 0;
         app.mouse_messages_area = Rect::new(0, 0, 80, 20);
         // Scroll down in overlay should navigate settings list (j), not scroll messages
@@ -11037,6 +11065,17 @@ mod tests {
         assert_eq!(app.input_cursor, 5); // byte offset of space after "café"
     }
 
+    /// Toggle an App-owned overlay to the requested state. Used by
+    /// `toggle_overlay` for the variants that have been migrated to
+    /// `current_overlay`.
+    fn toggle_current_overlay(app: &mut App, kind: OverlayKind, on: bool) {
+        if on {
+            app.open_overlay(kind);
+        } else if app.is_overlay(kind) {
+            app.close_overlay();
+        }
+    }
+
     /// Walk every `OverlayKind` variant by flipping the corresponding visibility
     /// flag(s), asserting that `active_overlay` returns that variant and
     /// `has_overlay` returns true, then clearing and asserting no overlay.
@@ -11049,17 +11088,21 @@ mod tests {
             OverlayKind::PollVote => app.poll_vote.show = on,
             OverlayKind::PinDuration => app.pin_duration.show = on,
             OverlayKind::ActionMenu => app.action_menu.show = on,
-            OverlayKind::DeleteConfirm => app.show_delete_confirm = on,
+            OverlayKind::DeleteConfirm => {
+                toggle_current_overlay(app, OverlayKind::DeleteConfirm, on)
+            }
             OverlayKind::FilePicker => app.file_picker.visible = on,
             OverlayKind::EmojiPicker => app.emoji_picker.visible = on,
             OverlayKind::ReactionPicker => app.reactions.show_picker = on,
-            OverlayKind::MessageRequest => app.show_message_request = on,
+            OverlayKind::MessageRequest => {
+                toggle_current_overlay(app, OverlayKind::MessageRequest, on)
+            }
             OverlayKind::GroupMenu => {
                 app.group_menu.state = if on { Some(GroupMenuState::Menu) } else { None }
             }
-            OverlayKind::About => app.show_about = on,
+            OverlayKind::About => toggle_current_overlay(app, OverlayKind::About, on),
             OverlayKind::Profile => app.profile.show = on,
-            OverlayKind::Help => app.show_help = on,
+            OverlayKind::Help => toggle_current_overlay(app, OverlayKind::Help, on),
             OverlayKind::Verify => app.verify.show = on,
             OverlayKind::Forward => app.forward.show = on,
             OverlayKind::Contacts => app.contacts_overlay.show = on,
@@ -11067,8 +11110,8 @@ mod tests {
             OverlayKind::SettingsProfiles => app.settings_profiles.show = on,
             OverlayKind::ThemePicker => app.theme_picker.show = on,
             OverlayKind::Keybindings => app.keybindings_overlay.show = on,
-            OverlayKind::Customize => app.show_customize = on,
-            OverlayKind::Settings => app.show_settings = on,
+            OverlayKind::Customize => toggle_current_overlay(app, OverlayKind::Customize, on),
+            OverlayKind::Settings => toggle_current_overlay(app, OverlayKind::Settings, on),
             OverlayKind::Autocomplete => app.autocomplete.visible = on,
         }
     }
@@ -11161,12 +11204,12 @@ mod tests {
         // First d sets pending
         app.handle_normal_key(KeyModifiers::NONE, KeyCode::Char('d'));
         assert_eq!(app.pending_normal_key, Some('d'));
-        assert!(!app.show_delete_confirm);
+        assert!(!app.is_overlay(OverlayKind::DeleteConfirm));
 
         // Second d triggers delete confirm
         app.handle_normal_key(KeyModifiers::NONE, KeyCode::Char('d'));
         assert_eq!(app.pending_normal_key, None);
-        assert!(app.show_delete_confirm);
+        assert!(app.is_overlay(OverlayKind::DeleteConfirm));
     }
 
     #[rstest]

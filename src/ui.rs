@@ -11,8 +11,8 @@ use ratatui::{
 };
 
 use crate::app::{
-    App, AutocompleteMode, GroupMenuState, InputMode, PIN_DURATIONS, QUICK_REACTIONS, SETTINGS,
-    SettingDef, VisibleImage,
+    App, AutocompleteMode, GroupMenuState, InputMode, OverlayKind, PIN_DURATIONS, QUICK_REACTIONS,
+    SETTINGS, SettingDef, VisibleImage,
 };
 use crate::domain::CATEGORIES;
 use crate::image_render::{self, ImageProtocol};
@@ -598,17 +598,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     // Settings overlay (overlays everything)
-    if app.show_settings {
+    if app.is_overlay(OverlayKind::Settings) {
         draw_settings(frame, app, size);
     }
 
     // Customize sub-menu overlay (Theme, Keybindings, Profile)
-    if app.show_customize {
+    if app.is_overlay(OverlayKind::Customize) {
         draw_customize(frame, app, size);
     }
 
     // Help overlay (overlays everything)
-    if app.show_help {
+    if app.is_overlay(OverlayKind::Help) {
         draw_help(frame, app, size);
     }
 
@@ -638,7 +638,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     // Message request overlay
-    if app.show_message_request {
+    if app.is_overlay(OverlayKind::MessageRequest) {
         draw_message_request(frame, app, size);
     }
 
@@ -658,7 +658,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     // Delete confirmation overlay
-    if app.show_delete_confirm {
+    if app.is_overlay(OverlayKind::DeleteConfirm) {
         draw_delete_confirm(frame, app, size);
     }
 
@@ -688,7 +688,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     // About overlay
-    if app.show_about {
+    if app.is_overlay(OverlayKind::About) {
         draw_about(frame, app, size);
     }
 
@@ -5054,7 +5054,7 @@ mod snapshot_tests {
     #[test]
     fn test_help_overlay() {
         let mut app = demo_app();
-        app.show_help = true;
+        app.open_overlay(OverlayKind::Help);
         let output = render_to_string(&mut app, 100, 30);
         insta::assert_snapshot!(output);
     }
@@ -5112,7 +5112,7 @@ mod snapshot_tests {
     #[test]
     fn test_settings_overlay() {
         let mut app = demo_app();
-        app.show_settings = true;
+        app.open_overlay(OverlayKind::Settings);
         let output = render_to_string(&mut app, 100, 30);
         insta::assert_snapshot!(output);
     }
@@ -5120,7 +5120,7 @@ mod snapshot_tests {
     #[test]
     fn test_about_overlay() {
         let mut app = demo_app();
-        app.show_about = true;
+        app.open_overlay(OverlayKind::About);
         let output = render_to_string(&mut app, 100, 30);
         insta::assert_snapshot!(output);
     }
