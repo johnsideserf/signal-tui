@@ -1,7 +1,7 @@
 //! Shared helpers for j/k/Enter/Esc list overlays.
 //!
 //! Most overlays in [`crate::domain`] expose the same navigation pattern;
-//! this module centralizes key resolution ([`ListOverlayAction`]) and the
+//! this module centralizes key resolution ([`ListKeyAction`]) and the
 //! styled-row rendering helpers used by the UI layer.
 
 use crossterm::event::KeyCode;

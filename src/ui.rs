@@ -1,9 +1,9 @@
 //! Stateless rendering layer.
 //!
-//! [`draw`] takes `&App` and renders sidebar + chat + status bar each frame.
-//! Sender colors are hash-based across an 8-color palette; groups are prefixed
-//! with `#`. OSC 8 hyperlinks are injected post-render to dodge ratatui width
-//! calculation bugs (see [`LinkRegion`]).
+//! [`draw`] takes the current [`App`] and renders sidebar + chat + status
+//! bar each frame. Sender colors are hash-based across an 8-color palette;
+//! groups are prefixed with `#`. OSC 8 hyperlinks are injected post-render
+//! to dodge ratatui width calculation bugs (see [`LinkRegion`]).
 
 use ratatui::{
     Frame,

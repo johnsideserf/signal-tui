@@ -123,7 +123,7 @@ pub struct Config {
     #[serde(default = "default_settings_profile")]
     pub settings_profile: String,
 
-    /// Signal TLS proxy URL passed through to signal-cli (e.g., "https://signal-proxy.example.com")
+    /// Signal TLS proxy URL passed through to signal-cli (e.g., `<https://signal-proxy.example.com>`)
     #[serde(default)]
     pub proxy: String,
 }

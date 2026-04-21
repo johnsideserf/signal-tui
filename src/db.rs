@@ -1,10 +1,11 @@
 //! SQLite persistence layer (WAL mode).
 //!
 //! Three core tables: `conversations`, `messages`, `read_markers`. Schema
-//! migrations are version-based ([`Database::run_migrations`]). Read paths
+//! migrations are version-based (see private `migrate`). Read paths
 //! propagate errors via `?`; write paths are logged via
-//! `App::db_warn_visible` so transient persistence failures don't break the
-//! UI.
+//! [`crate::conversation_store::db_warn`] (silent) or
+//! `App::db_warn_visible` (surfaces in the status bar) so transient
+//! persistence failures don't break the UI.
 
 use std::collections::HashMap;
 use std::path::Path;

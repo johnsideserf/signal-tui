@@ -1,4 +1,4 @@
-//! Wire types shared between [`super::client`] and [`crate::app`].
+//! Wire types shared between [`super::client`] and the binary's `app` module.
 //!
 //! Defines [`SignalEvent`] (the channel payload), [`SignalMessage`],
 //! [`Contact`], [`Group`], JSON-RPC framing structs, and the per-message
