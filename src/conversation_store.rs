@@ -506,3 +506,19 @@ impl ConversationStore {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remember_contact_name_respects_existing_entry() {
+        let mut s = ConversationStore::new();
+        s.remember_contact_name("+1", None);
+        assert!(s.contact_names.get("+1").is_none());
+        s.remember_contact_name("+1", Some("Alice"));
+        assert_eq!(s.contact_names["+1"], "Alice");
+        s.remember_contact_name("+1", Some("Overwrite?"));
+        assert_eq!(s.contact_names["+1"], "Alice");
+    }
+}
