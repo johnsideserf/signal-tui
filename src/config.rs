@@ -302,6 +302,8 @@ mod tests {
     use super::*;
 
     fn legacy_config(inline: bool, native: bool) -> Config {
+        // image_mode MUST be explicitly empty here — Config::default()
+        // sets it to "halfblock", which would early-return the migration.
         Config {
             image_mode: String::new(),
             inline_images: inline,
