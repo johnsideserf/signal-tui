@@ -225,20 +225,27 @@ impl Config {
             let mut config: Config = toml::from_str(&contents).with_context(|| {
                 format!("Failed to parse config from {}", config_path.display())
             })?;
-            // Migrate legacy inline_images/native_images to image_mode
-            if config.image_mode.is_empty() {
-                config.image_mode = if config.native_images {
-                    "native".to_string()
-                } else if config.inline_images {
-                    "halfblock".to_string()
-                } else {
-                    "none".to_string()
-                };
-            }
+            config.migrate_legacy_image_mode();
             Ok(config)
         } else {
             Ok(Config::default())
         }
+    }
+
+    /// Backfill `image_mode` from the legacy `inline_images` / `native_images`
+    /// flags when upgrading from a config written by siggy < v1.6.0. No-op
+    /// once `image_mode` is set.
+    fn migrate_legacy_image_mode(&mut self) {
+        if !self.image_mode.is_empty() {
+            return;
+        }
+        self.image_mode = if self.native_images {
+            "native".to_string()
+        } else if self.inline_images {
+            "halfblock".to_string()
+        } else {
+            "none".to_string()
+        };
     }
 
     /// Serialize this config to TOML and write it to the default config path.
@@ -287,5 +294,52 @@ impl Config {
             .unwrap_or_else(|| PathBuf::from(".config"))
             .join("siggy")
             .join("config.toml")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn legacy_config(inline: bool, native: bool) -> Config {
+        Config {
+            image_mode: String::new(),
+            inline_images: inline,
+            native_images: native,
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn migrate_legacy_image_mode_native_wins() {
+        let mut c = legacy_config(true, true);
+        c.migrate_legacy_image_mode();
+        assert_eq!(c.image_mode, "native");
+    }
+
+    #[test]
+    fn migrate_legacy_image_mode_halfblock_when_only_inline() {
+        let mut c = legacy_config(true, false);
+        c.migrate_legacy_image_mode();
+        assert_eq!(c.image_mode, "halfblock");
+    }
+
+    #[test]
+    fn migrate_legacy_image_mode_none_when_both_disabled() {
+        let mut c = legacy_config(false, false);
+        c.migrate_legacy_image_mode();
+        assert_eq!(c.image_mode, "none");
+    }
+
+    #[test]
+    fn migrate_legacy_image_mode_preserves_existing() {
+        let mut c = Config {
+            image_mode: "native".to_string(),
+            inline_images: false,
+            native_images: false,
+            ..Config::default()
+        };
+        c.migrate_legacy_image_mode();
+        assert_eq!(c.image_mode, "native");
     }
 }
