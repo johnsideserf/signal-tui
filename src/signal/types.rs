@@ -1,3 +1,9 @@
+//! Wire types shared between [`super::client`] and [`crate::app`].
+//!
+//! Defines [`SignalEvent`] (the channel payload), [`SignalMessage`],
+//! [`Contact`], [`Group`], JSON-RPC framing structs, and the per-message
+//! status / trust / reaction value types.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -63,6 +69,9 @@ impl TrustLevel {
 #[derive(Debug, Clone)]
 pub struct IdentityInfo {
     pub number: Option<String>,
+    /// Only read by tests today; kept on the wire type for parity with
+    /// signal-cli's identity payload.
+    #[allow(dead_code)]
     pub uuid: Option<String>,
     pub fingerprint: String,
     pub safety_number: String,

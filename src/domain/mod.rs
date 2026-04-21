@@ -1,3 +1,10 @@
+//! Domain state structs extracted from [`crate::app::App`].
+//!
+//! Each submodule owns the fields and helpers for one logical concern
+//! (file picker, search, typing indicators, individual overlays). Keeping
+//! these grouped reduces merge conflicts and makes the App struct easier
+//! to navigate.
+
 mod action_menu;
 mod contacts_overlay;
 mod emoji_picker;

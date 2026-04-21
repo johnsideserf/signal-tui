@@ -1,3 +1,9 @@
+//! Binary entry point and event loop.
+//!
+//! Polls the keyboard at 50 ms, drains [`signal::SignalEvent`]s into the
+//! [`app::App`] state, and renders each frame via [`ui::draw`]. Orchestrates
+//! the first-run flow: setup wizard -> device linking -> app startup.
+
 mod app;
 mod autocomplete;
 mod config;

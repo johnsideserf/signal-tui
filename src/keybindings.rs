@@ -1,3 +1,10 @@
+//! Configurable key bindings.
+//!
+//! [`KeyBindings`] resolves a (`KeyModifiers`, `KeyCode`, [`BindingMode`])
+//! triple to a [`KeyAction`]. Built-in profiles ship with the binary;
+//! [`KeyBindingOverrides`] is loaded from / saved to `keybindings.toml` so
+//! users can rebind without recompiling.
+
 use crossterm::event::{KeyCode, KeyModifiers};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

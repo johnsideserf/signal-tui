@@ -1,3 +1,9 @@
+//! Conversation, message, and contact storage extracted from [`crate::app::App`].
+//!
+//! [`ConversationStore`] owns the in-memory conversation map, ordered
+//! sidebar list, contact-name and UUID lookups, and per-conversation read
+//! markers. Mutations also persist via [`crate::db::Database`].
+
 use chrono::{DateTime, Local, Utc};
 use ratatui::text::Line;
 use std::collections::{HashMap, HashSet};

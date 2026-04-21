@@ -1,3 +1,10 @@
+//! First-run wizard.
+//!
+//! Multi-step flow that detects (or installs) signal-cli, prompts for the
+//! user's E.164 phone, and hands off to [`crate::link`] for QR-code device
+//! linking. Persists the resolved signal-cli path back to [`crate::config`]
+//! so subsequent launches skip detection.
+
 use std::io;
 use std::time::Duration;
 

@@ -1,3 +1,10 @@
+//! Slash-command parsing.
+//!
+//! Translates the user's typed input buffer into an [`InputAction`] enum
+//! consumed by the event loop. Slash commands (`/join`, `/part`, `/quit`,
+//! `/sidebar`, `/help`, ...) live in [`COMMANDS`] alongside their
+//! autocomplete metadata.
+
 /// Metadata for a slash command (used for autocomplete + help)
 pub struct CommandInfo {
     pub name: &'static str,

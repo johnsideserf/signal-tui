@@ -1,3 +1,9 @@
+//! Popup state for slash-command, @mention, and group-join autocomplete.
+//!
+//! Holds the current candidate list, selected index, and any pending
+//! `@mention` resolutions. The behavior (filter logic, key handling) lives
+//! in [`crate::app`]; this module owns only the data.
+
 /// Which autocomplete mode is active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AutocompleteMode {

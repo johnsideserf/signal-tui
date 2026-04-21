@@ -1,3 +1,9 @@
+//! Shared helpers for j/k/Enter/Esc list overlays.
+//!
+//! Most overlays in [`crate::domain`] expose the same navigation pattern;
+//! this module centralizes key resolution ([`ListOverlayAction`]) and the
+//! styled-row rendering helpers used by the UI layer.
+
 use crossterm::event::KeyCode;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};

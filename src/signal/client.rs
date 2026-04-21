@@ -1,3 +1,12 @@
+//! signal-cli child process bridge over JSON-RPC.
+//!
+//! [`SignalClient`] spawns signal-cli and runs two tokio tasks: a stdout
+//! reader that parses JSON-RPC frames into [`SignalEvent`]s, and a stdin
+//! writer that sends [`JsonRpcRequest`]s. The `pending_requests` map
+//! correlates response IDs with the originating method so the reader can
+//! emit the right event variant. Notifications (incoming messages, typing,
+//! receipts) and RPC results both flow through the same mpsc channel.
+
 use anyhow::{Context, Result};
 use chrono::DateTime;
 use std::collections::HashMap;

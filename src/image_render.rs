@@ -1,3 +1,10 @@
+//! Terminal image rendering across protocols.
+//!
+//! Detects the host terminal's image protocol ([`ImageProtocol`]: Kitty,
+//! iTerm2, Sixel, or Halfblock fallback) and provides encoders for each:
+//! [`encode_native_png`] for Kitty/iTerm2, [`encode_sixel`] for Sixel, and
+//! [`render_image`] for Unicode halfblock approximation.
+
 use std::io::Cursor;
 use std::path::Path;
 

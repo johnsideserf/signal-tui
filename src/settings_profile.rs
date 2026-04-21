@@ -1,3 +1,10 @@
+//! Named settings profiles.
+//!
+//! A [`SettingsProfile`] bundles display preferences (image mode, receipts,
+//! theme, etc.) so users can swap between configurations. Built-in profiles
+//! ship with the binary; user-defined profiles live in
+//! `settings_profiles.toml`.
+
 use serde::{Deserialize, Serialize};
 
 use crate::app::App;

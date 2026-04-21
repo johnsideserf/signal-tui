@@ -1,3 +1,11 @@
+//! Central application state and event handling.
+//!
+//! [`App`] owns conversations, input buffer, mode (Normal/Insert), and every
+//! overlay state struct. [`App::handle_signal_event`] is the single entry point
+//! for all backend events from `signal::client`. Conversations are keyed by
+//! phone number (1:1) or group ID; the [`ConversationStore`] sub-struct holds
+//! the persistent map and ordered sidebar list.
+
 use chrono::{DateTime, Utc};
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;

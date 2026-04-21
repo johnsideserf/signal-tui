@@ -1,3 +1,10 @@
+//! TOML configuration at the platform-specific user config dir.
+//!
+//! Held as [`Config`]; persists account (E.164 phone), `signal_cli_path`,
+//! `download_dir`, and assorted UI preferences. Includes silent migrations:
+//! the legacy `~/.config/signal-tui/` -> `~/.config/siggy/` rename and the
+//! `inline_images` / `native_images` -> `image_mode` field collapse.
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

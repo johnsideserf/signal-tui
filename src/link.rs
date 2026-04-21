@@ -1,3 +1,10 @@
+//! Device linking against an existing Signal account.
+//!
+//! Spawns `signal-cli link`, parses the linking URI from stdout, renders a
+//! QR code in the terminal, and waits for the user to scan it from their
+//! primary device. On success, polls account registration until signal-cli
+//! reports the new device is provisioned.
+
 use std::io;
 use std::time::Duration;
 
