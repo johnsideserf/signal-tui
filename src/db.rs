@@ -234,11 +234,10 @@ impl Database {
                 BEGIN;
                 ALTER TABLE messages ADD COLUMN body_raw TEXT;
                 ALTER TABLE messages ADD COLUMN mentions_json TEXT;
-                UPDATE schema_version SET version = 14;
+                UPDATE schema_version SET version = 13;
                 COMMIT;
                 ",
             )?;
-
         }
 
         if version < 14 {
@@ -246,7 +245,7 @@ impl Database {
                 "
                 BEGIN;
                 ALTER TABLE conversations ADD COLUMN mute_expires_at TEXT;
-                UPDATE schema_version SET version = 13;
+                UPDATE schema_version SET version = 14;
                 COMMIT;
                 ",
             )?;
