@@ -515,7 +515,7 @@ mod tests {
     fn remember_contact_name_respects_existing_entry() {
         let mut s = ConversationStore::new();
         s.remember_contact_name("+1", None);
-        assert!(s.contact_names.get("+1").is_none());
+        assert!(!s.contact_names.contains_key("+1"));
         s.remember_contact_name("+1", Some("Alice"));
         assert_eq!(s.contact_names["+1"], "Alice");
         s.remember_contact_name("+1", Some("Overwrite?"));
