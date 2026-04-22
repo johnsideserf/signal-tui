@@ -24,9 +24,8 @@ use crate::domain::{
     ActionMenuState, ContactsOverlayState, EmojiPickerAction, EmojiPickerSource, EmojiPickerState,
     FilePickerState, ForwardOverlayState, GroupMenuOverlayState, ImageState, InputState,
     KeybindingsOverlayState, NotificationState, PendingState, PinDurationOverlayState,
-    PollVoteOverlayState,
-    ProfileOverlayState, ReactionState, SearchAction, SearchState, SettingsProfileOverlayState,
-    ThemePickerState, TypingState, VerifyOverlayState,
+    PollVoteOverlayState, ProfileOverlayState, ReactionState, SearchAction, SearchState,
+    SettingsProfileOverlayState, ThemePickerState, TypingState, VerifyOverlayState,
 };
 use crate::image_render;
 use crate::image_render::ImageProtocol;
@@ -3352,7 +3351,8 @@ impl App {
         if sender_id.is_empty() || sender_id == self.account {
             return;
         }
-        self.pending.read_receipts
+        self.pending
+            .read_receipts
             .push((sender_id.to_string(), vec![timestamp_ms]));
     }
 
@@ -9260,7 +9260,8 @@ mod tests {
         }
 
         // Register pending send
-        app.pending.sends
+        app.pending
+            .sends
             .insert("rpc-1".to_string(), (conv_id.to_string(), local_ts));
 
         app.handle_signal_event(SignalEvent::SendTimestamp {
@@ -9310,7 +9311,8 @@ mod tests {
             });
         }
 
-        app.pending.sends
+        app.pending
+            .sends
             .insert("rpc-1".to_string(), (conv_id.to_string(), local_ts));
 
         app.handle_signal_event(SignalEvent::SendFailed {
@@ -9478,7 +9480,8 @@ mod tests {
             });
         }
 
-        app.pending.sends
+        app.pending
+            .sends
             .insert("rpc-1".to_string(), (conv_id.to_string(), local_ts));
 
         // Receipt arrives BEFORE SendTimestamp (references server_ts which we don't know yet)

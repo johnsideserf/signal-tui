@@ -738,7 +738,8 @@ async fn dispatch_send(signal_client: &mut SignalClient, app: &mut App, req: Sen
                         "send: to={} ts={local_ts_ms}",
                         debug_log::mask_phone(&recipient)
                     ));
-                    app.pending.sends
+                    app.pending
+                        .sends
                         .insert(rpc_id.clone(), (recipient.to_string(), local_ts_ms));
                     // Register any paste temp file for deferred deletion. The actual delete is
                     // triggered after send confirmation; this sentinel keeps it alive until then.
@@ -817,7 +818,8 @@ async fn dispatch_send(signal_client: &mut SignalClient, app: &mut App, req: Sen
                         "edit: to={} ts={edit_timestamp}",
                         debug_log::mask_phone(&recipient)
                     ));
-                    app.pending.sends
+                    app.pending
+                        .sends
                         .insert(rpc_id, (recipient.to_string(), local_ts_ms));
                 }
                 Err(e) => {
