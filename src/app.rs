@@ -8750,15 +8750,15 @@ mod tests {
 
     #[rstest]
     fn history_up_recalls_last_entry(mut app: App) {
-        app.input.history = vec!["hello".to_string(), "world".to_string()];
+        app.input.history = vec!["hello".to_string(), "goodbye".to_string()];
         app.input.buffer = "draft".to_string();
         app.input.cursor = 5;
 
         app.history_up();
-        assert_eq!(app.input.buffer, "world");
+        assert_eq!(app.input.buffer, "goodbye");
         assert_eq!(app.input.history_index, Some(1));
         assert_eq!(app.input.history_draft, "draft");
-        assert_eq!(app.input.cursor, 5); // cursor at end of "world"
+        assert_eq!(app.input.cursor, 7); // cursor at end of "goodbye" (7 bytes, distinct from draft's 5)
     }
 
     #[rstest]
