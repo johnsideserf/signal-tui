@@ -11273,7 +11273,7 @@ mod tests {
     }
 
     #[rstest]
-    fn o_preserves_input_buffer(mut app: App) {
+    fn o_preserves_composer_buffer(mut app: App) {
         app.mode = InputMode::Normal;
         app.input.buffer = "hello world".to_string();
         app.input.cursor = 5;
@@ -11588,7 +11588,7 @@ mod tests {
     // --- Paste command tests ---
 
     #[rstest]
-    fn paste_text_inserts_into_input_buffer(mut app: App) {
+    fn paste_text_inserts_into_composer(mut app: App) {
         // handle_paste_text delegates to handle_paste for plain text, which guards on Insert mode
         app.mode = InputMode::Insert;
         app.active_conversation = Some("test-conv".to_string());

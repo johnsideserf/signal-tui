@@ -40,7 +40,7 @@ To use a fixture, mark the test `#[rstest]` and add the fixture as a parameter:
 ```rust
 #[rstest]
 fn my_test(mut app: App) {
-    app.input_buffer = "/quit".to_string();
+    app.input.buffer = "/quit".to_string();
     // ...
 }
 ```

@@ -27,7 +27,7 @@ signal-cli → JsonRpcResponse → SignalEvent (mpsc) → App state → SQLite +
 ### Key Modules
 
 - **main.rs** — Event loop: polls keyboard (50ms), drains signal events, renders each frame. Orchestrates setup wizard → device linking → app startup.
-- **app.rs** — All application state. `App` owns conversations (HashMap + ordered Vec for sidebar), input buffer, mode (Normal/Insert). `handle_signal_event()` is the single entry point for all backend events.
+- **app.rs** — All application state. `App` owns conversations (HashMap + ordered Vec for sidebar), composer state (`input: InputState` sub-struct with buffer/cursor/history), mode (Normal/Insert). `handle_signal_event()` is the single entry point for all backend events.
 - **signal/client.rs** — Spawns signal-cli child process. Two tokio tasks: stdout reader (parses JSON-RPC into `SignalEvent`), stdin writer (sends `JsonRpcRequest`). `pending_requests` map tracks RPC call IDs to correlate responses with their method.
 - **signal/types.rs** — Shared types: `SignalEvent` enum, `SignalMessage`, `Contact`, `Group`, JSON-RPC structs.
 - **ui.rs** — Stateless rendering. `draw()` takes `&App` and renders sidebar + chat + status bar. Sender colors are hash-based (8 colors). Groups prefixed with `#`.
