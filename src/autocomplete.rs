@@ -25,7 +25,7 @@ pub struct AutocompleteState {
     pub mention_candidates: Vec<(String, String, Option<String>)>,
     /// Join autocomplete candidates: (display_text, completion_value)
     pub join_candidates: Vec<(String, String)>,
-    /// Byte offset of the '@' trigger in input_buffer
+    /// Byte offset of the '@' trigger in the input buffer
     pub mention_trigger_pos: usize,
     /// Completed mentions for the current input: (display_name, uuid)
     pub pending_mentions: Vec<(String, Option<String>)>,

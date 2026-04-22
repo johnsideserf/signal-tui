@@ -22,7 +22,7 @@ use crate::conversation_store::{ConversationStore, db_warn, short_name};
 use crate::db::Database;
 use crate::domain::{
     ActionMenuState, ContactsOverlayState, EmojiPickerAction, EmojiPickerSource, EmojiPickerState,
-    FilePickerState, ForwardOverlayState, GroupMenuOverlayState, ImageState,
+    FilePickerState, ForwardOverlayState, GroupMenuOverlayState, ImageState, InputState,
     KeybindingsOverlayState, NotificationState, PinDurationOverlayState, PollVoteOverlayState,
     ProfileOverlayState, ReactionState, SearchAction, SearchState, SettingsProfileOverlayState,
     ThemePickerState, TypingState, VerifyOverlayState,
@@ -392,16 +392,8 @@ pub struct App {
     pub store: ConversationStore,
     /// Currently selected conversation ID
     pub active_conversation: Option<String>,
-    /// Text input buffer
-    pub input_buffer: String,
-    /// Cursor position in input buffer
-    pub input_cursor: usize,
-    /// Previously submitted inputs for Up/Down recall
-    pub input_history: Vec<String>,
-    /// Current position in history (None = not browsing)
-    pub history_index: Option<usize>,
-    /// Saves in-progress input when browsing history
-    pub history_draft: String,
+    /// Message composer: text buffer, cursor, and history recall.
+    pub input: InputState,
     /// Whether sidebar is visible
     pub sidebar_visible: bool,
     /// Scroll offset for messages (0 = bottom)
@@ -2420,8 +2412,8 @@ impl App {
                     if let Some(ref conv_id) = self.active_conversation {
                         let conv_id = conv_id.clone();
                         self.editing_message = Some((ts, conv_id));
-                        self.input_buffer = body;
-                        self.input_cursor = self.input_buffer.len();
+                        self.input.buffer = body;
+                        self.input.cursor = self.input.buffer.len();
                         self.mode = InputMode::Insert;
                     }
                 }
@@ -2928,11 +2920,7 @@ impl App {
         Self {
             store: ConversationStore::new(),
             active_conversation: None,
-            input_buffer: String::new(),
-            input_cursor: 0,
-            input_history: Vec::new(),
-            history_index: None,
-            history_draft: String::new(),
+            input: InputState::default(),
             sidebar_visible: true,
             scroll_offset: 0,
             scroll_positions: HashMap::new(),
@@ -3448,7 +3436,7 @@ impl App {
         }
         match action {
             Some(KeyAction::Quit) => {
-                if self.input_buffer.is_empty() || self.quit_confirm {
+                if self.input.buffer.is_empty() || self.quit_confirm {
                     self.should_quit = true;
                 } else {
                     self.quit_confirm = true;
@@ -3572,8 +3560,8 @@ impl App {
                     self.emoji_picker.close();
                     match source {
                         EmojiPickerSource::Input => {
-                            self.input_buffer.insert_str(self.input_cursor, &emoji);
-                            self.input_cursor += emoji.len();
+                            self.input.buffer.insert_str(self.input.cursor, &emoji);
+                            self.input.cursor += emoji.len();
                             (true, None)
                         }
                         EmojiPickerSource::Reaction => {
@@ -3749,47 +3737,47 @@ impl App {
                 None
             }
             Some(KeyAction::InsertAfterCursor) => {
-                self.input_cursor = next_char_pos(&self.input_buffer, self.input_cursor);
+                self.input.cursor = next_char_pos(&self.input.buffer, self.input.cursor);
                 self.mode = InputMode::Insert;
                 None
             }
             Some(KeyAction::InsertLineStart) => {
-                self.input_cursor = self.current_line_start();
+                self.input.cursor = self.current_line_start();
                 self.mode = InputMode::Insert;
                 None
             }
             Some(KeyAction::InsertLineEnd) => {
-                self.input_cursor = self.current_line_end();
+                self.input.cursor = self.current_line_end();
                 self.mode = InputMode::Insert;
                 None
             }
             Some(KeyAction::OpenLineBelow) => {
                 let line_end = self.current_line_end();
-                self.input_cursor = line_end;
-                self.input_buffer.insert(self.input_cursor, '\n');
-                self.input_cursor += 1;
+                self.input.cursor = line_end;
+                self.input.buffer.insert(self.input.cursor, '\n');
+                self.input.cursor += 1;
                 self.mode = InputMode::Insert;
                 None
             }
             Some(KeyAction::CursorLeft) => {
-                self.input_cursor = prev_char_pos(&self.input_buffer, self.input_cursor);
+                self.input.cursor = prev_char_pos(&self.input.buffer, self.input.cursor);
                 None
             }
             Some(KeyAction::CursorRight) => {
-                self.input_cursor = next_char_pos(&self.input_buffer, self.input_cursor);
+                self.input.cursor = next_char_pos(&self.input.buffer, self.input.cursor);
                 None
             }
             Some(KeyAction::LineStart) => {
-                self.input_cursor = self.current_line_start();
+                self.input.cursor = self.current_line_start();
                 None
             }
             Some(KeyAction::LineEnd) => {
-                self.input_cursor = self.current_line_end();
+                self.input.cursor = self.current_line_end();
                 None
             }
             Some(KeyAction::WordForward) => {
-                let buf = &self.input_buffer;
-                let mut pos = self.input_cursor;
+                let buf = &self.input.buffer;
+                let mut pos = self.input.cursor;
                 while pos < buf.len() {
                     let c = buf[pos..].chars().next().unwrap();
                     if c.is_whitespace() {
@@ -3804,12 +3792,12 @@ impl App {
                     }
                     pos += c.len_utf8();
                 }
-                self.input_cursor = pos;
+                self.input.cursor = pos;
                 None
             }
             Some(KeyAction::WordBack) => {
-                let buf = &self.input_buffer;
-                let mut pos = self.input_cursor;
+                let buf = &self.input.buffer;
+                let mut pos = self.input.cursor;
                 while pos > 0 {
                     let prev = buf[..pos].chars().next_back().unwrap();
                     if !prev.is_whitespace() {
@@ -3824,27 +3812,27 @@ impl App {
                     }
                     pos -= prev.len_utf8();
                 }
-                self.input_cursor = pos;
+                self.input.cursor = pos;
                 None
             }
             Some(KeyAction::DeleteChar) => {
-                if self.input_cursor < self.input_buffer.len() {
-                    self.input_buffer.remove(self.input_cursor);
-                    if self.input_cursor > 0 && self.input_cursor >= self.input_buffer.len() {
-                        self.input_cursor =
-                            prev_char_pos(&self.input_buffer, self.input_buffer.len());
+                if self.input.cursor < self.input.buffer.len() {
+                    self.input.buffer.remove(self.input.cursor);
+                    if self.input.cursor > 0 && self.input.cursor >= self.input.buffer.len() {
+                        self.input.cursor =
+                            prev_char_pos(&self.input.buffer, self.input.buffer.len());
                     }
                 }
                 None
             }
             Some(KeyAction::DeleteToEnd) => {
                 let line_end = self.current_line_end();
-                self.input_buffer.drain(self.input_cursor..line_end);
+                self.input.buffer.drain(self.input.cursor..line_end);
                 None
             }
             Some(KeyAction::StartSearch) => {
-                self.input_buffer = "/".to_string();
-                self.input_cursor = 1;
+                self.input.buffer = "/".to_string();
+                self.input.cursor = 1;
                 self.mode = InputMode::Insert;
                 self.update_autocomplete();
                 None
@@ -3857,9 +3845,9 @@ impl App {
                 None
             }
             Some(KeyAction::ClearInput) => {
-                if !self.input_buffer.is_empty() {
-                    self.input_buffer.clear();
-                    self.input_cursor = 0;
+                if !self.input.buffer.is_empty() {
+                    self.input.buffer.clear();
+                    self.input.cursor = 0;
                     self.autocomplete.pending_mentions.clear();
                 }
                 None
@@ -3913,8 +3901,8 @@ impl App {
                     if let Some(ref conv_id) = self.active_conversation {
                         let conv_id = conv_id.clone();
                         self.editing_message = Some((ts, conv_id));
-                        self.input_buffer = body;
-                        self.input_cursor = self.input_buffer.len();
+                        self.input.buffer = body;
+                        self.input.cursor = self.input.buffer.len();
                         self.mode = InputMode::Insert;
                     }
                 }
@@ -3993,12 +3981,12 @@ impl App {
                 None
             }
             Some(KeyAction::InsertNewline) => {
-                self.input_buffer.insert(self.input_cursor, '\n');
-                self.input_cursor += 1;
+                self.input.buffer.insert(self.input.cursor, '\n');
+                self.input.cursor += 1;
                 self.close_overlay();
                 self.typing.last_keypress = Some(Instant::now());
                 if !self.typing.sent
-                    && !self.input_buffer.starts_with('/')
+                    && !self.input.buffer.starts_with('/')
                     && self
                         .active_conversation
                         .as_ref()
@@ -4038,30 +4026,30 @@ impl App {
                 None
             }
             Some(KeyAction::CursorLeft) => {
-                self.input_cursor = prev_char_pos(&self.input_buffer, self.input_cursor);
+                self.input.cursor = prev_char_pos(&self.input.buffer, self.input.cursor);
                 None
             }
             Some(KeyAction::CursorRight) => {
-                self.input_cursor = next_char_pos(&self.input_buffer, self.input_cursor);
+                self.input.cursor = next_char_pos(&self.input.buffer, self.input.cursor);
                 None
             }
             Some(KeyAction::LineStart) => {
-                self.input_cursor = self.current_line_start();
+                self.input.cursor = self.current_line_start();
                 None
             }
             Some(KeyAction::LineEnd) => {
-                self.input_cursor = self.current_line_end();
+                self.input.cursor = self.current_line_end();
                 None
             }
             Some(KeyAction::DeleteChar) => {
-                if self.input_cursor < self.input_buffer.len() {
-                    self.input_buffer.remove(self.input_cursor);
+                if self.input.cursor < self.input.buffer.len() {
+                    self.input.buffer.remove(self.input.cursor);
                 }
                 None
             }
             Some(KeyAction::DeleteToEnd) => {
                 let line_end = self.current_line_end();
-                self.input_buffer.drain(self.input_cursor..line_end);
+                self.input.buffer.drain(self.input.cursor..line_end);
                 None
             }
             Some(KeyAction::CopyMessage) => {
@@ -4111,8 +4099,8 @@ impl App {
                     if let Some(ref conv_id) = self.active_conversation {
                         let conv_id = conv_id.clone();
                         self.editing_message = Some((ts, conv_id));
-                        self.input_buffer = body;
-                        self.input_cursor = self.input_buffer.len();
+                        self.input.buffer = body;
+                        self.input.cursor = self.input.buffer.len();
                     }
                 }
                 None
@@ -4178,14 +4166,14 @@ impl App {
                     KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete
                 ) {
                     self.typing.last_keypress = Some(Instant::now());
-                    if self.input_buffer.is_empty() && self.typing.sent {
+                    if self.input.buffer.is_empty() && self.typing.sent {
                         self.typing.sent = false;
                         self.typing.last_keypress = None;
                         return self.build_typing_request(true);
                     }
                     if !self.typing.sent
-                        && !self.input_buffer.is_empty()
-                        && !self.input_buffer.starts_with('/')
+                        && !self.input.buffer.is_empty()
+                        && !self.input.buffer.starts_with('/')
                         && self
                             .active_conversation
                             .as_ref()
@@ -5919,14 +5907,14 @@ impl App {
 
     /// Handle a line of user input; returns Some((conv_id, body, is_group, local_ts_ms)) if we need to send a message
     pub fn handle_input(&mut self) -> Option<SendRequest> {
-        let input = self.input_buffer.clone();
+        let input = self.input.buffer.clone();
         let trimmed = input.trim();
         if !trimmed.is_empty() {
-            self.input_history.push(trimmed.to_string());
+            self.input.history.push(trimmed.to_string());
         }
-        self.history_index = None;
-        self.input_buffer.clear();
-        self.input_cursor = 0;
+        self.input.history_index = None;
+        self.input.buffer.clear();
+        self.input.cursor = 0;
 
         let action = input::parse_input(&input);
         match action {
@@ -6162,7 +6150,7 @@ impl App {
                 self.update_status();
             }
             InputAction::Quit => {
-                if self.input_buffer.is_empty() || self.quit_confirm {
+                if self.input.buffer.is_empty() || self.quit_confirm {
                     self.should_quit = true;
                 } else {
                     self.quit_confirm = true;
@@ -6543,10 +6531,10 @@ impl App {
         None
     }
 
-    /// Update autocomplete candidates based on current input_buffer.
+    /// Update autocomplete candidates based on the current input buffer.
     /// Called after every input change in Insert mode.
     pub fn update_autocomplete(&mut self) {
-        let buf = &self.input_buffer;
+        let buf = &self.input.buffer;
 
         // Try command autocomplete first: starts with '/' and no space yet
         if buf.starts_with('/') && !buf.contains(' ') {
@@ -6644,7 +6632,7 @@ impl App {
             && let Some(conv) = self.store.conversations.get(conv_id)
             && let Some(trigger_pos) = self.find_mention_trigger()
         {
-            let after_at = &self.input_buffer[trigger_pos + 1..self.input_cursor];
+            let after_at = &self.input.buffer[trigger_pos + 1..self.input.cursor];
             let filter_lower = after_at.to_lowercase();
 
             let mut candidates: Vec<(String, String, Option<String>)> = Vec::new();
@@ -6708,7 +6696,7 @@ impl App {
     /// Returns Some(pos) if `@` is found before cursor, at start or after whitespace,
     /// with no spaces between `@` and cursor.
     fn find_mention_trigger(&self) -> Option<usize> {
-        let before_cursor = &self.input_buffer[..self.input_cursor];
+        let before_cursor = &self.input.buffer[..self.input.cursor];
         // Find rightmost '@' before cursor
         let at_pos = before_cursor.rfind('@')?;
         // '@' must be at start or preceded by whitespace
@@ -6730,76 +6718,76 @@ impl App {
     /// Returns true if the key was handled.
     /// Navigate up through input history (older entries).
     pub fn history_up(&mut self) {
-        if self.input_history.is_empty() {
+        if self.input.history.is_empty() {
             return;
         }
-        match self.history_index {
+        match self.input.history_index {
             None => {
-                self.history_draft = self.input_buffer.clone();
-                self.history_index = Some(self.input_history.len() - 1);
+                self.input.history_draft = self.input.buffer.clone();
+                self.input.history_index = Some(self.input.history.len() - 1);
             }
             Some(idx) if idx > 0 => {
-                self.history_index = Some(idx - 1);
+                self.input.history_index = Some(idx - 1);
             }
             _ => return,
         }
-        self.input_buffer = self.input_history[self.history_index.unwrap()].clone();
-        self.input_cursor = self.input_buffer.len();
+        self.input.buffer = self.input.history[self.input.history_index.unwrap()].clone();
+        self.input.cursor = self.input.buffer.len();
     }
 
     /// Navigate down through input history (newer entries).
     pub fn history_down(&mut self) {
-        let idx = match self.history_index {
+        let idx = match self.input.history_index {
             Some(idx) => idx,
             None => return,
         };
-        if idx < self.input_history.len() - 1 {
-            self.history_index = Some(idx + 1);
-            self.input_buffer = self.input_history[idx + 1].clone();
+        if idx < self.input.history.len() - 1 {
+            self.input.history_index = Some(idx + 1);
+            self.input.buffer = self.input.history[idx + 1].clone();
         } else {
-            self.input_buffer = self.history_draft.clone();
-            self.history_index = None;
+            self.input.buffer = self.input.history_draft.clone();
+            self.input.history_index = None;
         }
-        self.input_cursor = self.input_buffer.len();
+        self.input.cursor = self.input.buffer.len();
     }
 
     pub fn apply_input_edit(&mut self, key_code: KeyCode) -> bool {
         match key_code {
             KeyCode::Backspace => {
-                if self.input_cursor > 0 {
-                    self.input_cursor = prev_char_pos(&self.input_buffer, self.input_cursor);
-                    self.input_buffer.remove(self.input_cursor);
+                if self.input.cursor > 0 {
+                    self.input.cursor = prev_char_pos(&self.input.buffer, self.input.cursor);
+                    self.input.buffer.remove(self.input.cursor);
                 } else if self.pending_attachment.is_some() {
                     self.pending_attachment = None;
                 }
                 true
             }
             KeyCode::Delete => {
-                if self.input_cursor < self.input_buffer.len() {
-                    self.input_buffer.remove(self.input_cursor);
+                if self.input.cursor < self.input.buffer.len() {
+                    self.input.buffer.remove(self.input.cursor);
                 }
                 true
             }
             KeyCode::Left => {
-                self.input_cursor = prev_char_pos(&self.input_buffer, self.input_cursor);
+                self.input.cursor = prev_char_pos(&self.input.buffer, self.input.cursor);
                 true
             }
             KeyCode::Right => {
-                self.input_cursor = next_char_pos(&self.input_buffer, self.input_cursor);
+                self.input.cursor = next_char_pos(&self.input.buffer, self.input.cursor);
                 true
             }
             KeyCode::Home => {
-                self.input_cursor = self.current_line_start();
+                self.input.cursor = self.current_line_start();
                 true
             }
             KeyCode::End => {
-                self.input_cursor = self.current_line_end();
+                self.input.cursor = self.current_line_end();
                 true
             }
             KeyCode::Up => {
                 let (line, col) = self.cursor_line_col();
                 if line > 0 {
-                    let lines: Vec<&str> = self.input_buffer.split('\n').collect();
+                    let lines: Vec<&str> = self.input.buffer.split('\n').collect();
                     let target_line = lines[line - 1];
                     let target_chars = target_line.chars().count();
                     let target_col: usize = target_line
@@ -6808,7 +6796,7 @@ impl App {
                         .map(|c| c.len_utf8())
                         .sum();
                     let offset: usize = lines.iter().take(line - 1).map(|l| l.len() + 1).sum();
-                    self.input_cursor = offset + target_col;
+                    self.input.cursor = offset + target_col;
                 } else {
                     self.history_up();
                 }
@@ -6818,7 +6806,7 @@ impl App {
                 let (line, col) = self.cursor_line_col();
                 let total_lines = self.input_line_count();
                 if line < total_lines - 1 {
-                    let lines: Vec<&str> = self.input_buffer.split('\n').collect();
+                    let lines: Vec<&str> = self.input.buffer.split('\n').collect();
                     let target_line = lines[line + 1];
                     let target_chars = target_line.chars().count();
                     let target_col: usize = target_line
@@ -6827,15 +6815,15 @@ impl App {
                         .map(|c| c.len_utf8())
                         .sum();
                     let offset: usize = lines.iter().take(line + 1).map(|l| l.len() + 1).sum();
-                    self.input_cursor = offset + target_col;
+                    self.input.cursor = offset + target_col;
                 } else {
                     self.history_down();
                 }
                 true
             }
             KeyCode::Char(c) => {
-                self.input_buffer.insert(self.input_cursor, c);
-                self.input_cursor += c.len_utf8();
+                self.input.buffer.insert(self.input.cursor, c);
+                self.input.cursor += c.len_utf8();
                 true
             }
             _ => false,
@@ -6844,13 +6832,13 @@ impl App {
 
     /// Returns the number of lines in the input buffer.
     pub fn input_line_count(&self) -> usize {
-        self.input_buffer.matches('\n').count() + 1
+        self.input.buffer.matches('\n').count() + 1
     }
 
     /// Returns (line_index, column) of the cursor within the input buffer.
     /// Column is measured in characters (not bytes) for correct display positioning.
     pub fn cursor_line_col(&self) -> (usize, usize) {
-        let before = &self.input_buffer[..self.input_cursor];
+        let before = &self.input.buffer[..self.input.cursor];
         let line = before.matches('\n').count();
         let line_start = match before.rfind('\n') {
             Some(pos) => pos + 1,
@@ -6862,7 +6850,7 @@ impl App {
 
     /// Returns the byte offset of the start of the current line.
     fn current_line_start(&self) -> usize {
-        self.input_buffer[..self.input_cursor]
+        self.input.buffer[..self.input.cursor]
             .rfind('\n')
             .map(|p| p + 1)
             .unwrap_or(0)
@@ -6870,19 +6858,19 @@ impl App {
 
     /// Returns the byte offset of the end of the current line (before the newline or buffer end).
     fn current_line_end(&self) -> usize {
-        self.input_buffer[self.input_cursor..]
+        self.input.buffer[self.input.cursor..]
             .find('\n')
-            .map(|p| self.input_cursor + p)
-            .unwrap_or(self.input_buffer.len())
+            .map(|p| self.input.cursor + p)
+            .unwrap_or(self.input.buffer.len())
     }
 
     /// Delete the word before the cursor (Ctrl+W behavior).
     fn delete_word_back(&mut self) {
-        if self.input_cursor == 0 {
+        if self.input.cursor == 0 {
             return;
         }
-        let buf = &self.input_buffer;
-        let mut pos = self.input_cursor;
+        let buf = &self.input.buffer;
+        let mut pos = self.input.cursor;
         // Skip whitespace before cursor
         while pos > 0 {
             let prev = buf[..pos].chars().next_back().unwrap();
@@ -6899,8 +6887,8 @@ impl App {
             }
             pos -= prev.len_utf8();
         }
-        self.input_buffer.drain(pos..self.input_cursor);
-        self.input_cursor = pos;
+        self.input.buffer.drain(pos..self.input.cursor);
+        self.input.cursor = pos;
     }
 
     /// Handle a bracketed paste event (Ctrl+V or terminal paste).
@@ -6911,14 +6899,14 @@ impl App {
         }
         // Normalize line endings and insert pasted text at cursor position
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
-        self.input_buffer.insert_str(self.input_cursor, &text);
-        self.input_cursor += text.len();
+        self.input.buffer.insert_str(self.input.cursor, &text);
+        self.input.cursor += text.len();
         // Single autocomplete + typing indicator update
         self.update_autocomplete();
         self.typing.last_keypress = Some(Instant::now());
         if !self.typing.sent
-            && !self.input_buffer.is_empty()
-            && !self.input_buffer.starts_with('/')
+            && !self.input.buffer.is_empty()
+            && !self.input.buffer.starts_with('/')
             && self
                 .active_conversation
                 .as_ref()
@@ -7021,11 +7009,11 @@ impl App {
                 {
                     let cmd = &COMMANDS[cmd_idx];
                     if cmd.args.is_empty() {
-                        self.input_buffer = cmd.name.to_string();
+                        self.input.buffer = cmd.name.to_string();
                     } else {
-                        self.input_buffer = format!("{} ", cmd.name);
+                        self.input.buffer = format!("{} ", cmd.name);
                     }
-                    self.input_cursor = self.input_buffer.len();
+                    self.input.cursor = self.input.buffer.len();
                     self.close_overlay();
                     self.autocomplete.command_candidates.clear();
                     self.autocomplete.index = 0;
@@ -7040,10 +7028,10 @@ impl App {
                 {
                     // Replace @partial with @FullName followed by a space
                     let replacement = format!("@{name} ");
-                    let before = &self.input_buffer[..self.autocomplete.mention_trigger_pos];
-                    let after = &self.input_buffer[self.input_cursor..];
-                    self.input_buffer = format!("{before}{replacement}{after}");
-                    self.input_cursor = self.autocomplete.mention_trigger_pos + replacement.len();
+                    let before = &self.input.buffer[..self.autocomplete.mention_trigger_pos];
+                    let after = &self.input.buffer[self.input.cursor..];
+                    self.input.buffer = format!("{before}{replacement}{after}");
+                    self.input.cursor = self.autocomplete.mention_trigger_pos + replacement.len();
                     // Record for outgoing mention
                     self.autocomplete.pending_mentions.push((name, uuid));
                     self.close_overlay();
@@ -7058,8 +7046,8 @@ impl App {
                     .get(self.autocomplete.index)
                     .cloned()
                 {
-                    self.input_buffer = format!("/join {value}");
-                    self.input_cursor = self.input_buffer.len();
+                    self.input.buffer = format!("/join {value}");
+                    self.input.cursor = self.input.buffer.len();
                     self.close_overlay();
                     self.autocomplete.join_candidates.clear();
                     self.autocomplete.index = 0;
@@ -7458,21 +7446,21 @@ impl App {
                 let text_width = (self.mouse_input_area.width.saturating_sub(2)) as usize
                     - self.mouse_input_prefix_len as usize;
                 let input_scroll = floor_char_boundary(
-                    &self.input_buffer,
-                    self.input_cursor.saturating_sub(text_width),
+                    &self.input.buffer,
+                    self.input.cursor.saturating_sub(text_width),
                 );
                 let target_col = (col - content_start_col) as usize;
                 // Walk characters to find the byte offset for the target column
                 let mut byte_pos = input_scroll;
-                for (col_pos, ch) in self.input_buffer[input_scroll..].chars().enumerate() {
+                for (col_pos, ch) in self.input.buffer[input_scroll..].chars().enumerate() {
                     if col_pos >= target_col {
                         break;
                     }
                     byte_pos += ch.len_utf8();
                 }
-                self.input_cursor = byte_pos.min(self.input_buffer.len());
+                self.input.cursor = byte_pos.min(self.input.buffer.len());
             } else {
-                self.input_cursor = 0;
+                self.input.cursor = 0;
             }
         }
     }
@@ -8477,7 +8465,7 @@ mod tests {
         #[case] expected_visible: bool,
         #[case] expected_count: Option<usize>,
     ) {
-        app.input_buffer = input.to_string();
+        app.input.buffer = input.to_string();
         app.update_autocomplete();
         assert_eq!(
             app.is_overlay(OverlayKind::Autocomplete),
@@ -8495,27 +8483,27 @@ mod tests {
 
     #[rstest]
     fn apply_autocomplete_trailing_space_for_arg_command(mut app: App) {
-        app.input_buffer = "/jo".to_string();
+        app.input.buffer = "/jo".to_string();
         app.update_autocomplete();
         app.apply_autocomplete();
         // /join takes args, so buffer should end with a space
-        assert_eq!(app.input_buffer, "/join ");
-        assert_eq!(app.input_cursor, 6);
+        assert_eq!(app.input.buffer, "/join ");
+        assert_eq!(app.input.cursor, 6);
     }
 
     #[rstest]
     fn apply_autocomplete_no_space_for_no_arg_command(mut app: App) {
-        app.input_buffer = "/pa".to_string();
+        app.input.buffer = "/pa".to_string();
         app.update_autocomplete();
         app.apply_autocomplete();
         // /part takes no args, no trailing space
-        assert_eq!(app.input_buffer, "/part");
-        assert_eq!(app.input_cursor, 5);
+        assert_eq!(app.input.buffer, "/part");
+        assert_eq!(app.input.cursor, 5);
     }
 
     #[rstest]
     fn apply_autocomplete_index_clamped(mut app: App) {
-        app.input_buffer = "/".to_string();
+        app.input.buffer = "/".to_string();
         app.update_autocomplete();
         let len = app.autocomplete.command_candidates.len();
         app.autocomplete.index = len + 5; // way out of bounds
@@ -8533,7 +8521,7 @@ mod tests {
         app.store
             .contact_names
             .insert("+2".to_string(), "Bob".to_string());
-        app.input_buffer = "/join ".to_string();
+        app.input.buffer = "/join ".to_string();
         app.update_autocomplete();
         assert!(app.is_overlay(OverlayKind::Autocomplete));
         assert_eq!(app.autocomplete.mode, AutocompleteMode::Join);
@@ -8551,7 +8539,7 @@ mod tests {
                 member_uuids: vec![],
             },
         );
-        app.input_buffer = "/join ".to_string();
+        app.input.buffer = "/join ".to_string();
         app.update_autocomplete();
         assert!(app.is_overlay(OverlayKind::Autocomplete));
         assert_eq!(app.autocomplete.mode, AutocompleteMode::Join);
@@ -8567,7 +8555,7 @@ mod tests {
         app.store
             .contact_names
             .insert("+2".to_string(), "Bob".to_string());
-        app.input_buffer = "/join al".to_string();
+        app.input.buffer = "/join al".to_string();
         app.update_autocomplete();
         assert!(app.is_overlay(OverlayKind::Autocomplete));
         assert_eq!(app.autocomplete.join_candidates.len(), 1);
@@ -8582,7 +8570,7 @@ mod tests {
         app.store
             .contact_names
             .insert("+5678".to_string(), "Bob".to_string());
-        app.input_buffer = "/join +123".to_string();
+        app.input.buffer = "/join +123".to_string();
         app.update_autocomplete();
         assert!(app.is_overlay(OverlayKind::Autocomplete));
         assert_eq!(app.autocomplete.join_candidates.len(), 1);
@@ -8594,7 +8582,7 @@ mod tests {
         app.store
             .contact_names
             .insert("+1".to_string(), "Alice".to_string());
-        app.input_buffer = "/j ".to_string();
+        app.input.buffer = "/j ".to_string();
         app.update_autocomplete();
         assert!(app.is_overlay(OverlayKind::Autocomplete));
         assert_eq!(app.autocomplete.mode, AutocompleteMode::Join);
@@ -8606,7 +8594,7 @@ mod tests {
         app.store
             .contact_names
             .insert("+1".to_string(), "Alice".to_string());
-        app.input_buffer = "/join zzz".to_string();
+        app.input.buffer = "/join zzz".to_string();
         app.update_autocomplete();
         assert!(!app.is_overlay(OverlayKind::Autocomplete));
     }
@@ -8616,12 +8604,12 @@ mod tests {
         app.store
             .contact_names
             .insert("+1".to_string(), "Alice".to_string());
-        app.input_buffer = "/join al".to_string();
+        app.input.buffer = "/join al".to_string();
         app.update_autocomplete();
         assert!(app.is_overlay(OverlayKind::Autocomplete));
         app.apply_autocomplete();
-        assert_eq!(app.input_buffer, "/join +1");
-        assert_eq!(app.input_cursor, 8);
+        assert_eq!(app.input.buffer, "/join +1");
+        assert_eq!(app.input.cursor, 8);
         assert!(!app.is_overlay(OverlayKind::Autocomplete));
     }
 
@@ -8636,12 +8624,12 @@ mod tests {
                 member_uuids: vec![],
             },
         );
-        app.input_buffer = "/join fam".to_string();
+        app.input.buffer = "/join fam".to_string();
         app.update_autocomplete();
         assert!(app.is_overlay(OverlayKind::Autocomplete));
         app.apply_autocomplete();
-        assert_eq!(app.input_buffer, "/join g1");
-        assert_eq!(app.input_cursor, 8);
+        assert_eq!(app.input.buffer, "/join g1");
+        assert_eq!(app.input.cursor, 8);
     }
 
     #[rstest]
@@ -8649,7 +8637,7 @@ mod tests {
         // Create a conversation that isn't in contact_names
         app.store
             .get_or_create_conversation("+9999", "+9999", false, &app.db);
-        app.input_buffer = "/join +999".to_string();
+        app.input.buffer = "/join +999".to_string();
         app.update_autocomplete();
         assert!(app.is_overlay(OverlayKind::Autocomplete));
         assert_eq!(app.autocomplete.join_candidates.len(), 1);
@@ -8664,7 +8652,7 @@ mod tests {
         app.store
             .contact_names
             .insert("+1".to_string(), "Alice".to_string());
-        app.input_buffer = "/join ".to_string();
+        app.input.buffer = "/join ".to_string();
         app.update_autocomplete();
         assert!(app.is_overlay(OverlayKind::Autocomplete));
         // Only Alice should appear from contact_names (g1 is skipped as non-phone)
@@ -8682,7 +8670,7 @@ mod tests {
         app.store
             .contact_names
             .insert("+1".to_string(), "Alice".to_string());
-        app.input_buffer = "/join ".to_string();
+        app.input.buffer = "/join ".to_string();
         app.update_autocomplete();
         app.autocomplete.index = 100; // way out of bounds
         app.update_autocomplete(); // should clamp
@@ -8695,46 +8683,46 @@ mod tests {
     fn input_edit_char_insert(mut app: App) {
         assert!(app.apply_input_edit(KeyCode::Char('a')));
         assert!(app.apply_input_edit(KeyCode::Char('b')));
-        assert_eq!(app.input_buffer, "ab");
-        assert_eq!(app.input_cursor, 2);
+        assert_eq!(app.input.buffer, "ab");
+        assert_eq!(app.input.cursor, 2);
     }
 
     #[rstest]
     fn input_edit_backspace(mut app: App) {
-        app.input_buffer = "abc".to_string();
-        app.input_cursor = 3;
+        app.input.buffer = "abc".to_string();
+        app.input.cursor = 3;
         assert!(app.apply_input_edit(KeyCode::Backspace));
-        assert_eq!(app.input_buffer, "ab");
-        assert_eq!(app.input_cursor, 2);
+        assert_eq!(app.input.buffer, "ab");
+        assert_eq!(app.input.cursor, 2);
     }
 
     #[rstest]
     fn input_edit_delete(mut app: App) {
-        app.input_buffer = "abc".to_string();
-        app.input_cursor = 1;
+        app.input.buffer = "abc".to_string();
+        app.input.cursor = 1;
         assert!(app.apply_input_edit(KeyCode::Delete));
-        assert_eq!(app.input_buffer, "ac");
-        assert_eq!(app.input_cursor, 1);
+        assert_eq!(app.input.buffer, "ac");
+        assert_eq!(app.input.cursor, 1);
     }
 
     #[rstest]
     fn input_edit_left_right(mut app: App) {
-        app.input_buffer = "abc".to_string();
-        app.input_cursor = 2;
+        app.input.buffer = "abc".to_string();
+        app.input.cursor = 2;
         assert!(app.apply_input_edit(KeyCode::Left));
-        assert_eq!(app.input_cursor, 1);
+        assert_eq!(app.input.cursor, 1);
         assert!(app.apply_input_edit(KeyCode::Right));
-        assert_eq!(app.input_cursor, 2);
+        assert_eq!(app.input.cursor, 2);
     }
 
     #[rstest]
     fn input_edit_home_end(mut app: App) {
-        app.input_buffer = "abc".to_string();
-        app.input_cursor = 1;
+        app.input.buffer = "abc".to_string();
+        app.input.cursor = 1;
         assert!(app.apply_input_edit(KeyCode::Home));
-        assert_eq!(app.input_cursor, 0);
+        assert_eq!(app.input.cursor, 0);
         assert!(app.apply_input_edit(KeyCode::End));
-        assert_eq!(app.input_cursor, 3);
+        assert_eq!(app.input.cursor, 3);
     }
 
     #[rstest]
@@ -8746,99 +8734,99 @@ mod tests {
 
     #[rstest]
     fn history_up_empty_is_noop(mut app: App) {
-        app.input_buffer = "draft".to_string();
+        app.input.buffer = "draft".to_string();
         app.history_up();
-        assert_eq!(app.input_buffer, "draft");
-        assert_eq!(app.history_index, None);
+        assert_eq!(app.input.buffer, "draft");
+        assert_eq!(app.input.history_index, None);
     }
 
     #[rstest]
     fn history_down_without_browsing_is_noop(mut app: App) {
-        app.input_buffer = "draft".to_string();
+        app.input.buffer = "draft".to_string();
         app.history_down();
-        assert_eq!(app.input_buffer, "draft");
-        assert_eq!(app.history_index, None);
+        assert_eq!(app.input.buffer, "draft");
+        assert_eq!(app.input.history_index, None);
     }
 
     #[rstest]
     fn history_up_recalls_last_entry(mut app: App) {
-        app.input_history = vec!["hello".to_string(), "world".to_string()];
-        app.input_buffer = "draft".to_string();
-        app.input_cursor = 5;
+        app.input.history = vec!["hello".to_string(), "world".to_string()];
+        app.input.buffer = "draft".to_string();
+        app.input.cursor = 5;
 
         app.history_up();
-        assert_eq!(app.input_buffer, "world");
-        assert_eq!(app.history_index, Some(1));
-        assert_eq!(app.history_draft, "draft");
-        assert_eq!(app.input_cursor, 5); // cursor at end of "world"
+        assert_eq!(app.input.buffer, "world");
+        assert_eq!(app.input.history_index, Some(1));
+        assert_eq!(app.input.history_draft, "draft");
+        assert_eq!(app.input.cursor, 5); // cursor at end of "world"
     }
 
     #[rstest]
     fn history_up_walks_to_oldest(mut app: App) {
-        app.input_history = vec![
+        app.input.history = vec![
             "first".to_string(),
             "second".to_string(),
             "third".to_string(),
         ];
-        app.input_buffer = String::new();
+        app.input.buffer = String::new();
 
         app.history_up(); // -> "third"
-        assert_eq!(app.input_buffer, "third");
-        assert_eq!(app.history_index, Some(2));
+        assert_eq!(app.input.buffer, "third");
+        assert_eq!(app.input.history_index, Some(2));
 
         app.history_up(); // -> "second"
-        assert_eq!(app.input_buffer, "second");
-        assert_eq!(app.history_index, Some(1));
+        assert_eq!(app.input.buffer, "second");
+        assert_eq!(app.input.history_index, Some(1));
 
         app.history_up(); // -> "first"
-        assert_eq!(app.input_buffer, "first");
-        assert_eq!(app.history_index, Some(0));
+        assert_eq!(app.input.buffer, "first");
+        assert_eq!(app.input.history_index, Some(0));
 
         // At oldest — stays put
         app.history_up();
-        assert_eq!(app.input_buffer, "first");
-        assert_eq!(app.history_index, Some(0));
+        assert_eq!(app.input.buffer, "first");
+        assert_eq!(app.input.history_index, Some(0));
     }
 
     #[rstest]
     fn history_down_walks_forward_and_restores_draft(mut app: App) {
-        app.input_history = vec!["aaa".to_string(), "bbb".to_string()];
-        app.input_buffer = "my draft".to_string();
+        app.input.history = vec!["aaa".to_string(), "bbb".to_string()];
+        app.input.buffer = "my draft".to_string();
 
         // Go to oldest
         app.history_up(); // -> "bbb"
         app.history_up(); // -> "aaa"
-        assert_eq!(app.input_buffer, "aaa");
-        assert_eq!(app.history_index, Some(0));
+        assert_eq!(app.input.buffer, "aaa");
+        assert_eq!(app.input.history_index, Some(0));
 
         // Walk forward
         app.history_down(); // -> "bbb"
-        assert_eq!(app.input_buffer, "bbb");
-        assert_eq!(app.history_index, Some(1));
+        assert_eq!(app.input.buffer, "bbb");
+        assert_eq!(app.input.history_index, Some(1));
 
         // Past newest restores draft
         app.history_down();
-        assert_eq!(app.input_buffer, "my draft");
-        assert_eq!(app.history_index, None);
+        assert_eq!(app.input.buffer, "my draft");
+        assert_eq!(app.input.history_index, None);
     }
 
     #[rstest]
     fn history_cursor_moves_to_end(mut app: App) {
-        app.input_history = vec!["short".to_string(), "a longer entry".to_string()];
-        app.input_buffer = String::new();
-        app.input_cursor = 0;
+        app.input.history = vec!["short".to_string(), "a longer entry".to_string()];
+        app.input.buffer = String::new();
+        app.input.cursor = 0;
 
         app.history_up(); // -> "a longer entry"
-        assert_eq!(app.input_cursor, 14);
+        assert_eq!(app.input.cursor, 14);
 
         app.history_up(); // -> "short"
-        assert_eq!(app.input_cursor, 5);
+        assert_eq!(app.input.cursor, 5);
 
         app.history_down(); // -> "a longer entry"
-        assert_eq!(app.input_cursor, 14);
+        assert_eq!(app.input.cursor, 14);
 
         app.history_down(); // -> draft ""
-        assert_eq!(app.input_cursor, 0);
+        assert_eq!(app.input.cursor, 0);
     }
 
     #[rstest]
@@ -8848,17 +8836,17 @@ mod tests {
             .get_or_create_conversation("+1", "Alice", false, &app.db);
         app.active_conversation = Some("+1".to_string());
 
-        app.input_buffer = "hello".to_string();
-        app.input_cursor = 5;
+        app.input.buffer = "hello".to_string();
+        app.input.cursor = 5;
         app.handle_input();
-        assert_eq!(app.input_history, vec!["hello".to_string()]);
-        assert_eq!(app.history_index, None);
+        assert_eq!(app.input.history, vec!["hello".to_string()]);
+        assert_eq!(app.input.history_index, None);
 
-        app.input_buffer = "world".to_string();
-        app.input_cursor = 5;
+        app.input.buffer = "world".to_string();
+        app.input.cursor = 5;
         app.handle_input();
         assert_eq!(
-            app.input_history,
+            app.input.history,
             vec!["hello".to_string(), "world".to_string()]
         );
     }
@@ -8870,15 +8858,15 @@ mod tests {
         app.active_conversation = Some("+1".to_string());
 
         // Whitespace-only input should not be saved
-        app.input_buffer = "   ".to_string();
+        app.input.buffer = "   ".to_string();
         app.handle_input();
-        assert!(app.input_history.is_empty());
+        assert!(app.input.history.is_empty());
 
         // Input with surrounding whitespace should be trimmed
-        app.input_buffer = "  hello  ".to_string();
-        app.input_cursor = 9;
+        app.input.buffer = "  hello  ".to_string();
+        app.input.cursor = 9;
         app.handle_input();
-        assert_eq!(app.input_history, vec!["hello".to_string()]);
+        assert_eq!(app.input.history, vec!["hello".to_string()]);
     }
 
     #[rstest]
@@ -8887,134 +8875,134 @@ mod tests {
             .get_or_create_conversation("+1", "Alice", false, &app.db);
         app.active_conversation = Some("+1".to_string());
 
-        app.input_history = vec!["old".to_string()];
-        app.history_index = Some(0);
-        app.input_buffer = "new".to_string();
-        app.input_cursor = 3;
+        app.input.history = vec!["old".to_string()];
+        app.input.history_index = Some(0);
+        app.input.buffer = "new".to_string();
+        app.input.cursor = 3;
         app.handle_input();
 
-        assert_eq!(app.history_index, None);
+        assert_eq!(app.input.history_index, None);
     }
 
     #[rstest]
     fn apply_input_edit_up_down_routes_to_history(mut app: App) {
-        app.input_history = vec!["recalled".to_string()];
-        app.input_buffer = "draft".to_string();
+        app.input.history = vec!["recalled".to_string()];
+        app.input.buffer = "draft".to_string();
 
         assert!(app.apply_input_edit(KeyCode::Up));
-        assert_eq!(app.input_buffer, "recalled");
+        assert_eq!(app.input.buffer, "recalled");
 
         assert!(app.apply_input_edit(KeyCode::Down));
-        assert_eq!(app.input_buffer, "draft");
+        assert_eq!(app.input.buffer, "draft");
     }
 
     // --- Multi-line input tests ---
 
     #[rstest]
     fn input_line_count_single_line(mut app: App) {
-        app.input_buffer = "hello".to_string();
+        app.input.buffer = "hello".to_string();
         assert_eq!(app.input_line_count(), 1);
     }
 
     #[rstest]
     fn input_line_count_multi_line(mut app: App) {
-        app.input_buffer = "hello\nworld\nfoo".to_string();
+        app.input.buffer = "hello\nworld\nfoo".to_string();
         assert_eq!(app.input_line_count(), 3);
     }
 
     #[rstest]
     fn cursor_line_col_first_line(mut app: App) {
-        app.input_buffer = "hello\nworld".to_string();
-        app.input_cursor = 3;
+        app.input.buffer = "hello\nworld".to_string();
+        app.input.cursor = 3;
         assert_eq!(app.cursor_line_col(), (0, 3));
     }
 
     #[rstest]
     fn cursor_line_col_second_line(mut app: App) {
-        app.input_buffer = "hello\nworld".to_string();
-        app.input_cursor = 8; // "world" index 2
+        app.input.buffer = "hello\nworld".to_string();
+        app.input.cursor = 8; // "world" index 2
         assert_eq!(app.cursor_line_col(), (1, 2));
     }
 
     #[rstest]
     fn cursor_line_col_at_newline(mut app: App) {
-        app.input_buffer = "hello\nworld".to_string();
-        app.input_cursor = 6; // start of "world"
+        app.input.buffer = "hello\nworld".to_string();
+        app.input.cursor = 6; // start of "world"
         assert_eq!(app.cursor_line_col(), (1, 0));
     }
 
     #[rstest]
     fn up_navigates_between_lines(mut app: App) {
-        app.input_buffer = "hello\nworld".to_string();
-        app.input_cursor = 8; // line 1, col 2
+        app.input.buffer = "hello\nworld".to_string();
+        app.input.cursor = 8; // line 1, col 2
         app.apply_input_edit(KeyCode::Up);
-        assert_eq!(app.input_cursor, 2); // line 0, col 2
+        assert_eq!(app.input.cursor, 2); // line 0, col 2
     }
 
     #[rstest]
     fn down_navigates_between_lines(mut app: App) {
-        app.input_buffer = "hello\nworld".to_string();
-        app.input_cursor = 2; // line 0, col 2
+        app.input.buffer = "hello\nworld".to_string();
+        app.input.cursor = 2; // line 0, col 2
         app.apply_input_edit(KeyCode::Down);
-        assert_eq!(app.input_cursor, 8); // line 1, col 2
+        assert_eq!(app.input.cursor, 8); // line 1, col 2
     }
 
     #[rstest]
     fn up_clamps_to_shorter_line(mut app: App) {
-        app.input_buffer = "hi\nhello world".to_string();
-        app.input_cursor = 12; // line 1, col 9
+        app.input.buffer = "hi\nhello world".to_string();
+        app.input.cursor = 12; // line 1, col 9
         app.apply_input_edit(KeyCode::Up);
-        assert_eq!(app.input_cursor, 2); // line 0, col 2 (clamped to "hi" length)
+        assert_eq!(app.input.cursor, 2); // line 0, col 2 (clamped to "hi" length)
     }
 
     #[rstest]
     fn down_clamps_to_shorter_line(mut app: App) {
-        app.input_buffer = "hello world\nhi".to_string();
-        app.input_cursor = 9; // line 0, col 9
+        app.input.buffer = "hello world\nhi".to_string();
+        app.input.cursor = 9; // line 0, col 9
         app.apply_input_edit(KeyCode::Down);
-        assert_eq!(app.input_cursor, 14); // line 1, col 2 (clamped to "hi" length)
+        assert_eq!(app.input.cursor, 14); // line 1, col 2 (clamped to "hi" length)
     }
 
     #[rstest]
     fn up_on_first_line_uses_history(mut app: App) {
-        app.input_buffer = "hello\nworld".to_string();
-        app.input_cursor = 3; // line 0, col 3
-        app.input_history = vec!["recalled".to_string()];
+        app.input.buffer = "hello\nworld".to_string();
+        app.input.cursor = 3; // line 0, col 3
+        app.input.history = vec!["recalled".to_string()];
         app.apply_input_edit(KeyCode::Up);
-        assert_eq!(app.input_buffer, "recalled");
+        assert_eq!(app.input.buffer, "recalled");
     }
 
     #[rstest]
     fn down_on_last_line_falls_through_to_history(mut app: App) {
         // Single-line buffer on last line → Down should use history_down
-        app.input_buffer = "current".to_string();
-        app.input_cursor = 3;
-        app.input_history = vec!["old".to_string()];
-        app.history_index = Some(0);
+        app.input.buffer = "current".to_string();
+        app.input.cursor = 3;
+        app.input.history = vec!["old".to_string()];
+        app.input.history_index = Some(0);
         // history_down from index 0 with 1 item → restores draft
         // but we didn't save a draft via history_up, so draft is ""
         app.apply_input_edit(KeyCode::Down);
-        assert_eq!(app.history_index, None); // exited history browsing
+        assert_eq!(app.input.history_index, None); // exited history browsing
     }
 
     #[rstest]
     fn home_end_line_aware(mut app: App) {
-        app.input_buffer = "hello\nworld".to_string();
-        app.input_cursor = 8; // line 1, col 2
+        app.input.buffer = "hello\nworld".to_string();
+        app.input.cursor = 8; // line 1, col 2
         app.apply_input_edit(KeyCode::Home);
-        assert_eq!(app.input_cursor, 6); // start of line 1
+        assert_eq!(app.input.cursor, 6); // start of line 1
         app.apply_input_edit(KeyCode::End);
-        assert_eq!(app.input_cursor, 11); // end of line 1
+        assert_eq!(app.input.cursor, 11); // end of line 1
     }
 
     #[rstest]
     fn alt_enter_inserts_newline(mut app: App) {
         app.mode = InputMode::Insert;
-        app.input_buffer = "hello".to_string();
-        app.input_cursor = 5;
+        app.input.buffer = "hello".to_string();
+        app.input.cursor = 5;
         app.handle_insert_key(KeyModifiers::ALT, KeyCode::Enter);
-        assert_eq!(app.input_buffer, "hello\n");
-        assert_eq!(app.input_cursor, 6);
+        assert_eq!(app.input.buffer, "hello\n");
+        assert_eq!(app.input.cursor, 6);
     }
 
     #[rstest]
@@ -9023,18 +9011,18 @@ mod tests {
         app.store
             .get_or_create_conversation("+1", "Alice", false, &app.db);
         app.active_conversation = Some("+1".to_string());
-        app.input_buffer = "hello\nworld".to_string();
-        app.input_cursor = 11;
+        app.input.buffer = "hello\nworld".to_string();
+        app.input.cursor = 11;
         let result = app.handle_insert_key(KeyModifiers::NONE, KeyCode::Enter);
         assert!(result.is_some()); // should produce a SendRequest
-        assert!(app.input_buffer.is_empty()); // buffer cleared after send
+        assert!(app.input.buffer.is_empty()); // buffer cleared after send
     }
 
     #[rstest]
     fn paste_normalizes_line_endings(mut app: App) {
         app.mode = InputMode::Insert;
         app.handle_paste("hello\r\nworld\rfoo".to_string());
-        assert_eq!(app.input_buffer, "hello\nworld\nfoo");
+        assert_eq!(app.input.buffer, "hello\nworld\nfoo");
     }
 
     // --- Pagination tests ---
@@ -9985,8 +9973,8 @@ mod tests {
             .contact_names
             .insert("+1".to_string(), "Alice".to_string());
         app.active_conversation = Some("+1".to_string());
-        app.input_buffer = "@Al".to_string();
-        app.input_cursor = 3;
+        app.input.buffer = "@Al".to_string();
+        app.input.cursor = 3;
         app.update_autocomplete();
 
         // Should trigger mention autocomplete in 1:1 with the contact
@@ -10018,8 +10006,8 @@ mod tests {
             .get_or_create_conversation("g1", "Test Group", true, &app.db);
         app.active_conversation = Some("g1".to_string());
 
-        app.input_buffer = "@Al".to_string();
-        app.input_cursor = 3;
+        app.input.buffer = "@Al".to_string();
+        app.input.cursor = 3;
         app.update_autocomplete();
 
         assert!(app.is_overlay(OverlayKind::Autocomplete));
@@ -10050,13 +10038,13 @@ mod tests {
             .get_or_create_conversation("g1", "Test Group", true, &app.db);
         app.active_conversation = Some("g1".to_string());
 
-        app.input_buffer = "Hey @Al".to_string();
-        app.input_cursor = 7;
+        app.input.buffer = "Hey @Al".to_string();
+        app.input.cursor = 7;
         app.update_autocomplete();
         assert!(app.is_overlay(OverlayKind::Autocomplete));
 
         app.apply_autocomplete();
-        assert_eq!(app.input_buffer, "Hey @Alice ");
+        assert_eq!(app.input.buffer, "Hey @Alice ");
         assert_eq!(app.autocomplete.pending_mentions.len(), 1);
         assert_eq!(app.autocomplete.pending_mentions[0].0, "Alice");
         assert_eq!(
@@ -10146,8 +10134,8 @@ mod tests {
     #[rstest]
     fn backspace_at_zero_clears_pending_attachment(mut app: App) {
         app.pending_attachment = Some(std::path::PathBuf::from("/tmp/photo.jpg"));
-        app.input_cursor = 0;
-        app.input_buffer.clear();
+        app.input.cursor = 0;
+        app.input.buffer.clear();
 
         app.apply_input_edit(KeyCode::Backspace);
         assert!(app.pending_attachment.is_none());
@@ -10159,8 +10147,8 @@ mod tests {
             .get_or_create_conversation("+1", "Alice", false, &app.db);
         app.active_conversation = Some("+1".to_string());
         app.pending_attachment = Some(std::path::PathBuf::from("/tmp/photo.jpg"));
-        app.input_buffer.clear();
-        app.input_cursor = 0;
+        app.input.buffer.clear();
+        app.input.cursor = 0;
 
         let result = app.handle_input();
         assert!(result.is_some());
@@ -10194,8 +10182,8 @@ mod tests {
             .get_or_create_conversation("+1", "Alice", false, &app.db);
         app.active_conversation = Some("+1".to_string());
         app.pending_attachment = Some(std::path::PathBuf::from("/tmp/photo.jpg"));
-        app.input_buffer = "/part".to_string();
-        app.input_cursor = 5;
+        app.input.buffer = "/part".to_string();
+        app.input.cursor = 5;
         app.handle_input();
         assert!(app.pending_attachment.is_none());
     }
@@ -10219,8 +10207,8 @@ mod tests {
             )
             .unwrap();
 
-        app.input_buffer = "/search hello".to_string();
-        app.input_cursor = 13;
+        app.input.buffer = "/search hello".to_string();
+        app.input.cursor = 13;
         app.handle_input();
 
         assert!(app.is_overlay(OverlayKind::Search));
@@ -10231,8 +10219,8 @@ mod tests {
 
     #[rstest]
     fn search_without_query_shows_error(mut app: App) {
-        app.input_buffer = "/search".to_string();
-        app.input_cursor = 7;
+        app.input.buffer = "/search".to_string();
+        app.input.cursor = 7;
         app.handle_input();
 
         assert!(!app.is_overlay(OverlayKind::Search));
@@ -10670,8 +10658,8 @@ mod tests {
         );
 
         // Open group menu via handle_input
-        app.input_buffer = "/group".to_string();
-        app.input_cursor = 6;
+        app.input.buffer = "/group".to_string();
+        app.input.cursor = 6;
         app.handle_input();
         assert_eq!(app.group_menu.state, Some(GroupMenuState::Menu));
 
@@ -10893,8 +10881,8 @@ mod tests {
         // current_overlay = Some(Autocomplete), trapping subsequent input
         // in the empty handler.
         app.mode = InputMode::Insert;
-        app.input_buffer = "/j".to_string();
-        app.input_cursor = 2;
+        app.input.buffer = "/j".to_string();
+        app.input.cursor = 2;
         app.update_autocomplete();
         assert!(app.is_overlay(OverlayKind::Autocomplete));
 
@@ -10910,14 +10898,14 @@ mod tests {
         // Regression guard for PR #346: typing past any candidate match
         // should drop visibility, not leave the empty overlay open.
         app.mode = InputMode::Insert;
-        app.input_buffer = "/j".to_string();
-        app.input_cursor = 2;
+        app.input.buffer = "/j".to_string();
+        app.input.cursor = 2;
         app.update_autocomplete();
         assert!(app.is_overlay(OverlayKind::Autocomplete));
 
         // Type a string that matches no command/mention/join.
-        app.input_buffer = "/zzznothingmatches".to_string();
-        app.input_cursor = app.input_buffer.len();
+        app.input.buffer = "/zzznothingmatches".to_string();
+        app.input.cursor = app.input.buffer.len();
         app.update_autocomplete();
         assert!(
             !app.is_overlay(OverlayKind::Autocomplete),
@@ -10972,7 +10960,7 @@ mod tests {
         app.store
             .get_or_create_conversation("+1", "Alice", false, &app.db);
         app.active_conversation = Some("+1".to_string());
-        app.input_buffer = "/block".to_string();
+        app.input.buffer = "/block".to_string();
         let req = app.handle_input();
         assert!(app.blocked_conversations.contains("+1"));
         assert!(
@@ -10987,7 +10975,7 @@ mod tests {
             .get_or_create_conversation("+1", "Alice", false, &app.db);
         app.active_conversation = Some("+1".to_string());
         app.blocked_conversations.insert("+1".to_string());
-        app.input_buffer = "/unblock".to_string();
+        app.input.buffer = "/unblock".to_string();
         let req = app.handle_input();
         assert!(!app.blocked_conversations.contains("+1"));
         assert!(
@@ -11011,7 +10999,7 @@ mod tests {
         if pre_blocked {
             app.blocked_conversations.insert("+1".to_string());
         }
-        app.input_buffer = cmd.to_string();
+        app.input.buffer = cmd.to_string();
         let req = app.handle_input();
         assert!(req.is_none());
         assert!(app.status_message.contains(expected_msg));
@@ -11025,7 +11013,7 @@ mod tests {
         #[case] cmd: &str,
         #[case] expected_msg: &str,
     ) {
-        app.input_buffer = cmd.to_string();
+        app.input.buffer = cmd.to_string();
         let req = app.handle_input();
         assert!(req.is_none());
         assert!(app.status_message.contains(expected_msg));
@@ -11119,8 +11107,8 @@ mod tests {
     #[rstest]
     fn mouse_input_click_positions_cursor(mut app: App) {
         app.mode = InputMode::Normal;
-        app.input_buffer = "hello world".to_string();
-        app.input_cursor = 0;
+        app.input.buffer = "hello world".to_string();
+        app.input.cursor = 0;
         // Input area with borders: x=10, y=20, w=40, h=3
         app.mouse_input_area = Rect::new(10, 20, 40, 3);
         app.mouse_input_prefix_len = 2; // "> "
@@ -11129,21 +11117,21 @@ mod tests {
         // content_start_col = 10 + 1 + 2 = 13, so click_offset = 18 - 13 = 5
         app.handle_mouse_event(mouse_down(18, 21));
         assert_eq!(app.mode, InputMode::Insert);
-        assert_eq!(app.input_cursor, 5);
+        assert_eq!(app.input.cursor, 5);
     }
 
     #[rstest]
     fn mouse_input_click_handles_multibyte(mut app: App) {
         app.mode = InputMode::Normal;
-        app.input_buffer = "caf\u{e9} ok".to_string(); // "café ok" — é is 2 bytes
-        app.input_cursor = 0;
+        app.input.buffer = "caf\u{e9} ok".to_string(); // "café ok" — é is 2 bytes
+        app.input.cursor = 0;
         app.mouse_input_area = Rect::new(0, 0, 40, 3);
         app.mouse_input_prefix_len = 2;
 
         // Click at column 7: content_start = 0+1+2 = 3, target_col = 7-3 = 4
         // Characters: c(1) a(1) f(1) é(2bytes,1col) → 4 chars = 5 bytes
         app.handle_mouse_event(mouse_down(7, 1));
-        assert_eq!(app.input_cursor, 5); // byte offset of space after "café"
+        assert_eq!(app.input.cursor, 5); // byte offset of space after "café"
     }
 
     /// Toggle an overlay to the requested state. Routes through
@@ -11287,14 +11275,14 @@ mod tests {
     #[rstest]
     fn o_preserves_input_buffer(mut app: App) {
         app.mode = InputMode::Normal;
-        app.input_buffer = "hello world".to_string();
-        app.input_cursor = 5;
+        app.input.buffer = "hello world".to_string();
+        app.input.cursor = 5;
 
         app.handle_normal_key(KeyModifiers::NONE, KeyCode::Char('o'));
 
         assert_eq!(app.mode, InputMode::Insert);
-        assert_eq!(app.input_buffer, "hello world\n");
-        assert_eq!(app.input_cursor, 12);
+        assert_eq!(app.input.buffer, "hello world\n");
+        assert_eq!(app.input.cursor, 12);
     }
 
     #[rstest]
@@ -11605,7 +11593,7 @@ mod tests {
         app.mode = InputMode::Insert;
         app.active_conversation = Some("test-conv".to_string());
         app.handle_paste_text("hello world");
-        assert_eq!(app.input_buffer, "hello world");
+        assert_eq!(app.input.buffer, "hello world");
     }
 
     #[rstest]
@@ -11616,7 +11604,7 @@ mod tests {
         app.active_conversation = Some("test-conv".to_string());
         app.handle_paste_text(&path);
         assert!(app.pending_attachment.is_none());
-        assert_eq!(app.input_buffer, path);
+        assert_eq!(app.input.buffer, path);
     }
 
     #[rstest]
@@ -11625,7 +11613,7 @@ mod tests {
         app.handle_paste_text("   ");
         assert!(app.status_message.contains("empty"));
         assert!(app.pending_attachment.is_none());
-        assert!(app.input_buffer.is_empty());
+        assert!(app.input.buffer.is_empty());
     }
 
     #[rstest]

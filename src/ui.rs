@@ -2416,7 +2416,7 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
     app.mouse_input_prefix_len = prefix_len as u16;
     let text_width = inner_width.saturating_sub(prefix_len); // usable chars for buffer text
 
-    if app.input_buffer.is_empty() && badge.is_none() {
+    if app.input.buffer.is_empty() && badge.is_none() {
         let placeholder = match app.mode {
             InputMode::Normal => "  Press i to type, / for commands",
             InputMode::Insert => "  Type a message...",
@@ -2428,7 +2428,7 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
         .block(block);
         frame.render_widget(input, area);
     } else {
-        let lines: Vec<&str> = app.input_buffer.split('\n').collect();
+        let lines: Vec<&str> = app.input.buffer.split('\n').collect();
         let (cursor_line, cursor_col) = app.cursor_line_col();
         let visible_lines = area.height.saturating_sub(2) as usize;
         let vertical_scroll = if cursor_line >= visible_lines {
