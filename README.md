@@ -12,6 +12,10 @@
   <a href="https://x.com/siggyapp"><img src="https://img.shields.io/badge/follow-@siggyapp-000000?logo=x&logoColor=white" alt="Follow @siggyapp"></a>
 </p>
 
+[English](README.md) | [中文](README.zh-CN.md)
+
+> This translation was last updated against commit `master`. The English version is authoritative.
+
 A terminal-based Signal messenger client with an IRC aesthetic. Wraps [signal-cli](https://github.com/AsamK/signal-cli) via JSON-RPC for the messaging backend.
 
 ![siggy screenshot](screenshot.png)
