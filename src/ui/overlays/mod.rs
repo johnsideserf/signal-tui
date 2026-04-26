@@ -6,4 +6,7 @@
 //! frame, plus per-overlay popup-width constants for sizing.
 
 pub(super) mod about;
+pub(super) mod action_menu;
 pub(super) mod delete_confirm;
+pub(super) mod message_request;
+pub(super) mod reaction_picker;
