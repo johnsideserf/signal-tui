@@ -5,11 +5,14 @@
 //! groups are prefixed with `#`. OSC 8 hyperlinks are injected post-render
 //! to dodge ratatui width calculation bugs (see [`LinkRegion`]).
 
+mod autocomplete;
 mod composer;
 mod overlays;
 mod sidebar;
 mod status_bar;
+mod welcome;
 
+use autocomplete::draw_autocomplete;
 use composer::draw_input;
 use overlays::about::draw_about;
 use overlays::action_menu::draw_action_menu;
@@ -34,6 +37,7 @@ use overlays::theme_picker::draw_theme_picker;
 use overlays::verify::draw_verify;
 use sidebar::draw_sidebar;
 use status_bar::draw_status_bar;
+use welcome::draw_welcome;
 
 use ratatui::{
     Frame,
@@ -47,9 +51,9 @@ use ratatui::{
     },
 };
 
-use crate::app::{App, AutocompleteMode, InputMode, OverlayKind, VisibleImage};
+use crate::app::{App, InputMode, OverlayKind, VisibleImage};
 use crate::image_render::{self, ImageProtocol};
-use crate::input::{COMMANDS, format_compact_duration};
+use crate::input::format_compact_duration;
 use crate::signal::types::{MessageStatus, PollData, PollVote, Reaction, StyleType, TrustLevel};
 use crate::theme::Theme;
 
@@ -1532,259 +1536,7 @@ pub(crate) fn build_reaction_summary(
     }
 }
 
-/// Render the welcome/empty-state screen when no conversation is active.
-fn draw_welcome(frame: &mut Frame, app: &App, area: Rect) {
-    let theme = &app.theme;
-    let mut lines = vec![Line::from("")];
-
-    if let Some(ref err) = app.connection_error {
-        lines.push(Line::from(Span::styled(
-            "  Connection Error",
-            Style::default()
-                .fg(theme.error)
-                .add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("  {err}"),
-            Style::default().fg(theme.error),
-        )));
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "  Run with --setup to reconfigure.",
-            Style::default().fg(theme.fg_secondary),
-        )));
-    } else if app.loading {
-        const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-        let spinner_char = SPINNER[app.spinner_tick % SPINNER.len()];
-        lines.push(Line::from(Span::styled(
-            "  siggy",
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            format!("  {spinner_char} {}", app.startup_status),
-            Style::default().fg(theme.fg_muted),
-        )));
-    } else if app.store.conversation_order.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  Welcome to siggy",
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "  No conversations yet",
-            Style::default().fg(theme.fg_secondary),
-        )));
-        lines.push(Line::from(Span::styled(
-            "  Messages you send and receive will appear here.",
-            Style::default().fg(theme.fg_secondary),
-        )));
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "  /join +1234567890  message someone by phone number",
-            Style::default().fg(theme.fg_secondary),
-        )));
-        lines.push(Line::from(Span::styled(
-            "  /contacts          browse your synced contacts",
-            Style::default().fg(theme.fg_secondary),
-        )));
-        lines.push(Line::from(Span::styled(
-            "  /help              see all commands and keybindings",
-            Style::default().fg(theme.fg_secondary),
-        )));
-    } else {
-        lines.push(Line::from(Span::styled(
-            "  Welcome to siggy",
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "  Getting started",
-            Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(Span::styled(
-            "  Tab / Shift+Tab    cycle through conversations",
-            Style::default().fg(theme.fg_secondary),
-        )));
-        lines.push(Line::from(Span::styled(
-            "  /join <contact>    open a conversation by name or number",
-            Style::default().fg(theme.fg_secondary),
-        )));
-        lines.push(Line::from(Span::styled(
-            "  Esc                switch to Normal mode (vim keys)",
-            Style::default().fg(theme.fg_secondary),
-        )));
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "  Useful commands",
-            Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(Span::styled(
-            "  /contacts          browse synced contacts",
-            Style::default().fg(theme.fg_secondary),
-        )));
-        lines.push(Line::from(Span::styled(
-            "  /settings          configure preferences",
-            Style::default().fg(theme.fg_secondary),
-        )));
-        lines.push(Line::from(Span::styled(
-            "  /help              all commands and keybindings",
-            Style::default().fg(theme.fg_secondary),
-        )));
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "  Ctrl+\u{2190}/\u{2192} to resize sidebar",
-            Style::default().fg(theme.fg_muted),
-        )));
-    }
-
-    frame.render_widget(Paragraph::new(lines), area);
-}
-
-/// Find the message index at the bottom of the visible viewport.
-/// Returns the index into the conversation's messages Vec.
-fn draw_autocomplete(frame: &mut Frame, app: &App, input_area: Rect) {
-    let theme = &app.theme;
-    let terminal_width = frame.area().width;
-    let mut lines: Vec<Line> = Vec::new();
-    let mut max_content_width: usize = 0;
-
-    match app.autocomplete.mode {
-        AutocompleteMode::Command => {
-            for (i, &cmd_idx) in app.autocomplete.command_candidates.iter().enumerate() {
-                let cmd = &COMMANDS[cmd_idx];
-                let args_part = if cmd.args.is_empty() {
-                    String::new()
-                } else {
-                    format!(" {}", cmd.args)
-                };
-                let left = format!("  {}{}", cmd.name, args_part);
-                let right = format!("  {}", cmd.description);
-                let total_len = left.len() + right.len() + 2;
-                if total_len > max_content_width {
-                    max_content_width = total_len;
-                }
-
-                let is_selected = i == app.autocomplete.index;
-                let style = if is_selected {
-                    Style::default()
-                        .bg(theme.bg_selected)
-                        .fg(theme.fg)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(theme.fg_secondary)
-                };
-                let desc_style = if is_selected {
-                    Style::default().bg(theme.bg_selected).fg(theme.accent)
-                } else {
-                    Style::default().fg(theme.fg_muted)
-                };
-
-                lines.push(Line::from(vec![
-                    Span::styled(left, style),
-                    Span::styled(right, desc_style),
-                ]));
-            }
-        }
-        AutocompleteMode::Mention => {
-            for (i, (phone, name, _uuid)) in app.autocomplete.mention_candidates.iter().enumerate()
-            {
-                let left = format!("  @{name}");
-                let right = format!("  {phone}");
-                let total_len = left.len() + right.len() + 2;
-                if total_len > max_content_width {
-                    max_content_width = total_len;
-                }
-
-                let is_selected = i == app.autocomplete.index;
-                let style = if is_selected {
-                    Style::default()
-                        .bg(theme.bg_selected)
-                        .fg(theme.accent)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(theme.accent)
-                };
-                let phone_style = if is_selected {
-                    Style::default().bg(theme.bg_selected).fg(theme.fg_muted)
-                } else {
-                    Style::default().fg(theme.fg_muted)
-                };
-
-                lines.push(Line::from(vec![
-                    Span::styled(left, style),
-                    Span::styled(right, phone_style),
-                ]));
-            }
-        }
-        AutocompleteMode::Join => {
-            for (i, (display, _value)) in app.autocomplete.join_candidates.iter().enumerate() {
-                let left = format!("  {display}");
-                let total_len = left.len() + 2;
-                if total_len > max_content_width {
-                    max_content_width = total_len;
-                }
-
-                let is_selected = i == app.autocomplete.index;
-                let style = if is_selected {
-                    Style::default()
-                        .bg(theme.bg_selected)
-                        .fg(theme.success)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(theme.success)
-                };
-
-                lines.push(Line::from(vec![Span::styled(left, style)]));
-            }
-        }
-    }
-
-    let count = lines.len();
-
-    // Size the popup, clamping to available space
-    let terminal_height = frame.area().height;
-    let popup_width = (max_content_width as u16 + 2)
-        .min(terminal_width.saturating_sub(2))
-        .max(20);
-    let popup_height = ((count as u16) + 2).min(input_area.y).min(terminal_height); // +2 for border
-    if popup_height < 3 {
-        return; // not enough space to render anything useful
-    }
-
-    // Position above the input box, left-aligned with it
-    let x = input_area.x;
-    let y = input_area.y.saturating_sub(popup_height);
-
-    let area = Rect::new(
-        x,
-        y,
-        popup_width.min(terminal_width.saturating_sub(x)),
-        popup_height,
-    );
-    lines.truncate((popup_height.saturating_sub(2)) as usize);
-
-    // Clear the area behind the popup so chat text doesn't leak through
-    frame.render_widget(Clear, area);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.accent))
-        .style(Style::default().bg(theme.bg));
-
-    let popup = Paragraph::new(lines).block(block);
-    frame.render_widget(popup, area);
-}
-
-/// Format a safety number string as groups of 5 digits, 6 per line.
-/// Format a file size in human-readable form (B, K, M, G).
+/// Build the per-poll display lines (option bars, vote totals, mode footer).
 pub(crate) fn build_poll_display(
     poll: &PollData,
     votes: &[PollVote],
