@@ -12,7 +12,10 @@ mod status_bar;
 
 use composer::draw_input;
 use overlays::about::draw_about;
+use overlays::action_menu::draw_action_menu;
 use overlays::delete_confirm::draw_delete_confirm;
+use overlays::message_request::draw_message_request;
+use overlays::reaction_picker::draw_reaction_picker;
 use sidebar::draw_sidebar;
 use status_bar::draw_status_bar;
 
@@ -29,8 +32,8 @@ use ratatui::{
 };
 
 use crate::app::{
-    App, AutocompleteMode, GroupMenuState, InputMode, OverlayKind, PIN_DURATIONS, QUICK_REACTIONS,
-    SETTINGS, SettingDef, VisibleImage,
+    App, AutocompleteMode, GroupMenuState, InputMode, OverlayKind, PIN_DURATIONS, SETTINGS,
+    SettingDef, VisibleImage,
 };
 use crate::domain::CATEGORIES;
 use crate::image_render::{self, ImageProtocol};
@@ -1799,176 +1802,6 @@ fn draw_group_menu(frame: &mut Frame, app: &App, area: Rect) {
             frame.render_widget(popup, inner);
         }
     }
-}
-
-fn draw_message_request(frame: &mut Frame, app: &App, area: Rect) {
-    let theme = &app.theme;
-    let conv_id = match app.active_conversation.as_ref() {
-        Some(id) => id,
-        None => return,
-    };
-    let conv = match app.store.conversations.get(conv_id) {
-        Some(c) => c,
-        None => return,
-    };
-
-    let msg_count = conv.messages.len();
-    let name = &conv.name;
-    let phone = &conv.id;
-
-    let (popup_area, block) = centered_popup(frame, area, 36, 9, " Message Request ", theme);
-    frame.render_widget(block, popup_area);
-
-    let inner = popup_area.inner(ratatui::layout::Margin {
-        vertical: 1,
-        horizontal: 2,
-    });
-    let lines = vec![
-        Line::from(Span::styled(
-            name.as_str(),
-            Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
-            phone.as_str(),
-            Style::default().fg(theme.fg_muted),
-        )),
-        Line::from(Span::styled(
-            format!(
-                "{} message{}",
-                msg_count,
-                if msg_count == 1 { "" } else { "s" }
-            ),
-            Style::default().fg(theme.fg_secondary),
-        )),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(
-                "(a)",
-                Style::default()
-                    .fg(theme.success)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("ccept / ", Style::default().fg(theme.fg_secondary)),
-            Span::styled(
-                "(d)",
-                Style::default()
-                    .fg(theme.error)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("elete", Style::default().fg(theme.fg_secondary)),
-        ]),
-        Line::from(Span::styled(
-            "Esc to go back",
-            Style::default().fg(theme.fg_muted),
-        )),
-    ];
-
-    let text = Paragraph::new(lines).alignment(ratatui::layout::Alignment::Center);
-    frame.render_widget(text, inner);
-}
-
-fn draw_action_menu(frame: &mut Frame, app: &App, area: Rect) {
-    let theme = &app.theme;
-    let items = app.action_menu_items();
-    if items.is_empty() {
-        return;
-    }
-
-    let popup_width: u16 = 30;
-    let popup_height = items.len() as u16 + 4;
-
-    let (popup_area, block) =
-        centered_popup(frame, area, popup_width, popup_height, " Actions ", theme);
-
-    let inner = block.inner(popup_area);
-    frame.render_widget(block, popup_area);
-
-    let content_width = inner.width as usize;
-
-    let mut lines: Vec<Line> = Vec::new();
-    for (i, action) in items.iter().enumerate() {
-        let is_selected = i == app.action_menu.index;
-        let icon = if app.nerd_fonts {
-            format!("{} ", action.nerd_icon)
-        } else {
-            String::new()
-        };
-
-        let label_part = format!("  {icon}{}", action.label);
-        let hint_width = action.key_hint.len();
-        let pad = content_width.saturating_sub(label_part.chars().count() + hint_width + 2);
-        let padding = " ".repeat(pad);
-
-        let row_style = if is_selected {
-            Style::default().bg(theme.bg_selected)
-        } else {
-            Style::default()
-        };
-        let hint_style = if is_selected {
-            Style::default()
-                .bg(theme.bg_selected)
-                .fg(theme.fg_muted)
-                .add_modifier(Modifier::DIM)
-        } else {
-            Style::default().fg(theme.fg_muted)
-        };
-
-        lines.push(Line::from(vec![
-            Span::styled(format!("{label_part}{padding}"), row_style),
-            Span::styled(format!("{} ", action.key_hint), hint_style),
-        ]));
-    }
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "  Esc to close",
-        Style::default().fg(theme.fg_muted),
-    )));
-
-    let popup = Paragraph::new(lines);
-    frame.render_widget(popup, inner);
-}
-
-fn draw_reaction_picker(frame: &mut Frame, app: &App, area: Rect) {
-    let theme = &app.theme;
-    let emoji_count = QUICK_REACTIONS.len();
-    let popup_width = (emoji_count * 4 + 4) as u16;
-    let popup_height = 3u16;
-
-    let (popup_area, block) = centered_popup(
-        frame,
-        area,
-        popup_width,
-        popup_height,
-        " React (e: search all) ",
-        theme,
-    );
-
-    let mut spans = vec![Span::raw(" ".to_string())];
-    for (i, emoji) in QUICK_REACTIONS.iter().enumerate() {
-        let style = if i == app.reactions.picker_index {
-            Style::default()
-                .bg(theme.bg_selected)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-        let prefix = if i == app.reactions.picker_index {
-            "["
-        } else {
-            " "
-        };
-        let suffix = if i == app.reactions.picker_index {
-            "]"
-        } else {
-            " "
-        };
-        spans.push(Span::styled(format!("{prefix}{emoji}{suffix}"), style));
-    }
-
-    let line = Line::from(spans);
-    let popup = Paragraph::new(vec![line]).block(block);
-    frame.render_widget(popup, popup_area);
 }
 
 fn draw_emoji_picker(frame: &mut Frame, app: &App, area: Rect) {
