@@ -9,6 +9,7 @@ pub(super) mod about;
 pub(super) mod action_menu;
 pub(super) mod customize;
 pub(super) mod delete_confirm;
+pub(super) mod keybindings;
 pub(super) mod message_request;
 pub(super) mod pin_duration;
 pub(super) mod poll_vote;
