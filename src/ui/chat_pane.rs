@@ -26,11 +26,9 @@ use ratatui::{
 };
 
 use super::composer::draw_input;
+use super::links::{split_spans_by_newline, styled_uri_spans};
 use super::welcome::draw_welcome;
-use super::{
-    MSG_WINDOW_MULTIPLIER, build_separator, sender_color, split_spans_by_newline, status_symbol,
-    styled_uri_spans, truncate,
-};
+use super::{MSG_WINDOW_MULTIPLIER, build_separator, sender_color, status_symbol, truncate};
 use crate::app::{App, InputMode, VisibleImage};
 use crate::image_render::{self, ImageProtocol};
 use crate::input::format_compact_duration;
