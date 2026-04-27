@@ -13,6 +13,7 @@ mod db;
 mod debug_log;
 mod domain;
 mod fs_migrate;
+mod handlers;
 mod image_render;
 mod input;
 mod keybindings;

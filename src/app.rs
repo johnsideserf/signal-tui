@@ -29,7 +29,7 @@ use crate::domain::{
 };
 use crate::image_render;
 use crate::image_render::ImageProtocol;
-use crate::input::{self, COMMANDS, InputAction};
+use crate::input::COMMANDS;
 use crate::keybindings::{self, BindingMode, KeyAction, KeyBindings};
 use crate::list_overlay::{self, ListKeyAction, classify_list_key};
 use crate::mute::MuteState;
@@ -88,7 +88,11 @@ pub struct WireQuote {
 
 impl App {
     /// Like `db_warn` but also surfaces the error in the status bar so the user sees it.
-    fn db_warn_visible<T>(&mut self, result: Result<T, impl std::fmt::Display>, context: &str) {
+    pub(crate) fn db_warn_visible<T>(
+        &mut self,
+        result: Result<T, impl std::fmt::Display>,
+        context: &str,
+    ) {
         if let Err(e) = result {
             crate::debug_log::logf(format_args!("db {context}: {e}"));
             self.status_message = format!("DB error ({context}): {e}");
@@ -3392,7 +3396,7 @@ impl App {
 
     /// Reset typing state and queue a stop request if we were typing.
     /// Call this before switching conversations.
-    fn reset_typing_with_stop(&mut self) {
+    pub(crate) fn reset_typing_with_stop(&mut self) {
         if self.typing.reset() {
             self.pending.typing_stop = self.build_typing_request(true);
         }
@@ -4874,7 +4878,7 @@ impl App {
     }
 
     /// Display name for a conversation, falling back to the id if unknown.
-    fn conversation_name<'a>(&'a self, conv_id: &'a str) -> &'a str {
+    pub(crate) fn conversation_name<'a>(&'a self, conv_id: &'a str) -> &'a str {
         self.store
             .conversations
             .get(conv_id)
@@ -4883,7 +4887,7 @@ impl App {
     }
 
     /// Apply a mute change to both in-memory state and the database.
-    fn apply_mute(&mut self, conv_id: &str, state: Option<MuteState>) {
+    pub(crate) fn apply_mute(&mut self, conv_id: &str, state: Option<MuteState>) {
         match state {
             None => {
                 self.muted_conversations.remove(conv_id);
@@ -5679,7 +5683,7 @@ impl App {
 
     /// Prepare outgoing mentions: replace @Name with U+FFFC and compute UTF-16 offsets.
     /// Returns (wire_body, mentions_for_rpc).
-    fn prepare_outgoing_mentions(&self, text: &str) -> (String, Vec<(usize, String)>) {
+    pub(crate) fn prepare_outgoing_mentions(&self, text: &str) -> (String, Vec<(usize, String)>) {
         if self.autocomplete.pending_mentions.is_empty() {
             return (text.to_string(), Vec::new());
         }
@@ -5882,628 +5886,7 @@ impl App {
 
     /// Handle a line of user input; returns Some((conv_id, body, is_group, local_ts_ms)) if we need to send a message
     pub fn handle_input(&mut self) -> Option<SendRequest> {
-        let input = self.input.buffer.clone();
-        let trimmed = input.trim();
-        if !trimmed.is_empty() {
-            self.input.history.push(trimmed.to_string());
-        }
-        self.input.history_index = None;
-        self.input.buffer.clear();
-        self.input.cursor = 0;
-
-        let action = input::parse_input(&input);
-        match action {
-            InputAction::SendText(raw_text) => {
-                let text = input::replace_shortcodes(&raw_text);
-                if text.is_empty()
-                    && self.pending_attachment.is_none()
-                    && self.editing_message.is_none()
-                {
-                    return None;
-                }
-
-                // Handle editing flow: update in-memory + DB + send edit RPC
-                if let Some((edit_ts, edit_conv_id)) = self.editing_message.take() {
-                    if !text.is_empty() {
-                        // Extract original quote fields (immutable borrow) before mutating
-                        let original_quote = self
-                            .store
-                            .conversations
-                            .get(&edit_conv_id)
-                            .and_then(|conv| {
-                                conv.find_msg_idx(edit_ts).map(|idx| &conv.messages[idx])
-                            })
-                            .filter(|msg| msg.sender == "you")
-                            .and_then(|msg| msg.quote.as_ref())
-                            .map(|q| (q.timestamp_ms, q.author_id.clone(), q.body.clone()));
-                        if let Some(conv) = self.store.conversations.get_mut(&edit_conv_id) {
-                            if let Some(idx) = conv
-                                .find_msg_idx(edit_ts)
-                                .filter(|&idx| conv.messages[idx].sender == "you")
-                            {
-                                conv.messages[idx].body = text.clone();
-                                conv.messages[idx].is_edited = true;
-                            }
-                            let is_group = conv.is_group;
-                            let (wire_body, wire_mentions) = self.prepare_outgoing_mentions(&text);
-                            self.autocomplete.pending_mentions.clear();
-                            self.db_warn_visible(
-                                self.db.update_message_body(&edit_conv_id, edit_ts, &text),
-                                "update_message_body",
-                            );
-                            let now = Utc::now();
-                            return Some(SendRequest::Edit {
-                                recipient: edit_conv_id,
-                                body: wire_body,
-                                is_group,
-                                edit_timestamp: edit_ts,
-                                local_ts_ms: now.timestamp_millis(),
-                                mentions: wire_mentions,
-                                quote_timestamp: original_quote.as_ref().map(|(ts, _, _)| *ts),
-                                quote_author: original_quote.as_ref().map(|(_, a, _)| a.clone()),
-                                quote_body: original_quote.map(|(_, _, b)| b),
-                            });
-                        }
-                    }
-                    return None;
-                }
-
-                if let Some(ref conv_id) = self.active_conversation {
-                    let attachment = self.pending_attachment.take();
-                    let is_group = self
-                        .store
-                        .conversations
-                        .get(conv_id)
-                        .map(|c| c.is_group)
-                        .unwrap_or(false);
-                    let conv_id = conv_id.clone();
-
-                    // Build display body with attachment prefix; render inline image if applicable
-                    let (display_body, outgoing_image_lines, outgoing_image_path) =
-                        if let Some(ref path) = attachment {
-                            let fname = path
-                                .file_name()
-                                .map(|f| f.to_string_lossy().to_string())
-                                .unwrap_or_else(|| "file".to_string());
-                            let ext = path
-                                .extension()
-                                .and_then(|e| e.to_str())
-                                .unwrap_or("")
-                                .to_lowercase();
-                            let is_image =
-                                matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp");
-                            let prefix = if is_image { "image" } else { "attachment" };
-                            let body = if text.is_empty() {
-                                format!("[{prefix}: {fname}]")
-                            } else {
-                                format!("[{prefix}: {fname}] {text}")
-                            };
-                            let (img_lines, img_path) =
-                                if is_image && self.image.image_mode != "none" {
-                                    (
-                                        image_render::render_image(path, 40),
-                                        Some(path.to_string_lossy().into_owned()),
-                                    )
-                                } else {
-                                    (None, None)
-                                };
-                            (body, img_lines, img_path)
-                        } else {
-                            (text.clone(), None, None)
-                        };
-
-                    // Compute mention byte ranges for display styling
-                    let mut mention_ranges = Vec::new();
-                    for (name, _uuid) in &self.autocomplete.pending_mentions {
-                        let needle = format!("@{name}");
-                        if let Some(pos) = display_body.find(&needle) {
-                            mention_ranges.push((pos, pos + needle.len()));
-                        }
-                    }
-
-                    // Prepare outgoing mentions (replace @Name with U+FFFC for wire)
-                    let (wire_body, wire_mentions) = self.prepare_outgoing_mentions(&text);
-                    self.autocomplete.pending_mentions.clear();
-
-                    // Add our own message to the display
-                    let now = Utc::now();
-                    let local_ts_ms = now.timestamp_millis();
-                    // Build quote for display if replying
-                    let quote = self.reply_target.as_ref().map(|(author_phone, body, ts)| {
-                        let author_display = self
-                            .store
-                            .contact_names
-                            .get(author_phone)
-                            .cloned()
-                            .unwrap_or_else(|| {
-                                if *author_phone == self.account {
-                                    "you".to_string()
-                                } else {
-                                    author_phone.clone()
-                                }
-                            });
-                        Quote {
-                            author: author_display,
-                            body: body.clone(),
-                            timestamp_ms: *ts,
-                            author_id: author_phone.clone(),
-                        }
-                    });
-                    let quote_timestamp = self.reply_target.as_ref().map(|(_, _, ts)| *ts);
-                    let quote_author = self
-                        .reply_target
-                        .as_ref()
-                        .map(|(phone, _, _)| phone.clone());
-                    let quote_body = self.reply_target.as_ref().map(|(_, body, _)| body.clone());
-
-                    // Outgoing messages inherit the conversation's expiration timer
-                    let out_expires = self
-                        .store
-                        .conversations
-                        .get(&conv_id)
-                        .map(|c| c.expiration_timer)
-                        .unwrap_or(0);
-                    let out_expiry_start = if out_expires > 0 { local_ts_ms } else { 0 };
-
-                    let outgoing_msg = DisplayMessage {
-                        sender: "you".to_string(),
-                        timestamp: now,
-                        body: display_body.clone(),
-                        is_system: false,
-                        image_lines: outgoing_image_lines,
-                        image_path: outgoing_image_path,
-                        status: Some(MessageStatus::Sending),
-                        timestamp_ms: local_ts_ms,
-                        reactions: Vec::new(),
-                        mention_ranges,
-                        style_ranges: Vec::new(),
-                        body_raw: if wire_mentions.is_empty() {
-                            None
-                        } else {
-                            Some(wire_body.clone())
-                        },
-                        mentions: wire_mentions
-                            .iter()
-                            .map(|(start, uuid)| Mention {
-                                start: *start,
-                                length: 1,
-                                uuid: uuid.clone(),
-                            })
-                            .collect(),
-                        quote,
-                        is_edited: false,
-                        is_deleted: false,
-                        is_pinned: false,
-                        sender_id: self.account.clone(),
-                        expires_in_seconds: out_expires,
-                        expiration_start_ms: out_expiry_start,
-                        poll_data: None,
-                        poll_votes: Vec::new(),
-                        preview: None,
-                        preview_image_lines: None,
-                        preview_image_path: None,
-                    };
-                    self.on_message_added(
-                        &conv_id,
-                        outgoing_msg,
-                        WireQuote {
-                            author: quote_author.clone(),
-                            body: quote_body.clone(),
-                            timestamp: quote_timestamp,
-                        },
-                        false,
-                    );
-                    self.scroll.offset = 0;
-                    self.scroll.focused_index = None;
-                    self.reply_target = None;
-                    return Some(SendRequest::Message {
-                        recipient: conv_id,
-                        body: wire_body,
-                        is_group,
-                        local_ts_ms,
-                        mentions: wire_mentions,
-                        attachment,
-                        quote_timestamp,
-                        quote_author,
-                        quote_body,
-                    });
-                } else {
-                    self.status_message =
-                        "No active conversation. Use /join <name> first.".to_string();
-                }
-            }
-            InputAction::Join(target) => {
-                self.join_conversation(&target);
-            }
-            InputAction::Part => {
-                self.save_scroll_position();
-                self.active_conversation = None;
-                self.scroll.offset = 0;
-                self.scroll.focused_index = None;
-                self.pending_attachment = None;
-                self.reset_typing_with_stop();
-                self.update_status();
-            }
-            InputAction::Quit => {
-                if self.input.buffer.is_empty() || self.quit_confirm {
-                    self.should_quit = true;
-                } else {
-                    self.quit_confirm = true;
-                }
-            }
-            InputAction::ToggleSidebar => {
-                self.sidebar_visible = !self.sidebar_visible;
-            }
-            InputAction::ToggleBell(ref target) => {
-                match target.as_deref() {
-                    None => {
-                        // Toggle both together
-                        let new_state =
-                            !(self.notifications.notify_direct && self.notifications.notify_group);
-                        self.notifications.notify_direct = new_state;
-                        self.notifications.notify_group = new_state;
-                        let state = if new_state { "on" } else { "off" };
-                        self.status_message = format!("notifications {state}");
-                    }
-                    Some("direct" | "dm" | "1:1") => {
-                        self.notifications.notify_direct = !self.notifications.notify_direct;
-                        let state = if self.notifications.notify_direct {
-                            "on"
-                        } else {
-                            "off"
-                        };
-                        self.status_message = format!("direct notifications {state}");
-                    }
-                    Some("group" | "groups") => {
-                        self.notifications.notify_group = !self.notifications.notify_group;
-                        let state = if self.notifications.notify_group {
-                            "on"
-                        } else {
-                            "off"
-                        };
-                        self.status_message = format!("group notifications {state}");
-                    }
-                    Some(other) => {
-                        self.status_message =
-                            format!("unknown bell type: {other} (use direct or group)");
-                    }
-                }
-            }
-            InputAction::Mute(opt_dur) => {
-                self.status_message = match self.active_conversation.clone() {
-                    None => "no active conversation to mute".to_string(),
-                    Some(conv_id) => match opt_dur {
-                        None => {
-                            // No argument: toggle between unmuted and permanently muted.
-                            let new_state = (!self.muted_conversations.contains_key(&conv_id))
-                                .then_some(MuteState::Permanent);
-                            self.apply_mute(&conv_id, new_state);
-                            let name = self.conversation_name(&conv_id);
-                            match new_state {
-                                None => format!("unmuted {name}"),
-                                Some(_) => format!("muted {name}"),
-                            }
-                        }
-                        Some(dur_str) => match input::parse_duration_to_seconds(&dur_str) {
-                            Ok(secs) if secs > 0 => {
-                                let expiry = Utc::now() + chrono::Duration::seconds(secs);
-                                self.apply_mute(&conv_id, Some(MuteState::Until(expiry)));
-                                format!("muted {} for {dur_str}", self.conversation_name(&conv_id))
-                            }
-                            Ok(_) => "use /mute to unmute, or specify a duration: 30m, 2h, 1d, 1w"
-                                .to_string(),
-                            Err(_) => format!("invalid duration '{dur_str}'. Try 30m, 2h, 1d, 1w"),
-                        },
-                    },
-                };
-            }
-            InputAction::Block => {
-                if let Some(ref conv_id) = self.active_conversation {
-                    let conv_id = conv_id.clone();
-                    let is_group = self
-                        .store
-                        .conversations
-                        .get(&conv_id)
-                        .map(|c| c.is_group)
-                        .unwrap_or(false);
-                    if self.blocked_conversations.contains(&conv_id) {
-                        let name = self
-                            .store
-                            .conversations
-                            .get(&conv_id)
-                            .map(|c| c.name.as_str())
-                            .unwrap_or(&conv_id);
-                        self.status_message = format!("{name} is already blocked");
-                    } else {
-                        let name = self
-                            .store
-                            .conversations
-                            .get(&conv_id)
-                            .map(|c| c.name.as_str())
-                            .unwrap_or(&conv_id);
-                        self.status_message = format!("blocked {name}");
-                        self.blocked_conversations.insert(conv_id.clone());
-                        db_warn(self.db.set_blocked(&conv_id, true), "set_blocked");
-                        return Some(SendRequest::Block {
-                            recipient: conv_id,
-                            is_group,
-                        });
-                    }
-                } else {
-                    self.status_message = "no active conversation to block".to_string();
-                }
-            }
-            InputAction::Unblock => {
-                if let Some(ref conv_id) = self.active_conversation {
-                    let conv_id = conv_id.clone();
-                    let is_group = self
-                        .store
-                        .conversations
-                        .get(&conv_id)
-                        .map(|c| c.is_group)
-                        .unwrap_or(false);
-                    if self.blocked_conversations.remove(&conv_id) {
-                        let name = self
-                            .store
-                            .conversations
-                            .get(&conv_id)
-                            .map(|c| c.name.as_str())
-                            .unwrap_or(&conv_id);
-                        self.status_message = format!("unblocked {name}");
-                        db_warn(self.db.set_blocked(&conv_id, false), "set_blocked");
-                        return Some(SendRequest::Unblock {
-                            recipient: conv_id,
-                            is_group,
-                        });
-                    } else {
-                        let name = self
-                            .store
-                            .conversations
-                            .get(&conv_id)
-                            .map(|c| c.name.as_str())
-                            .unwrap_or(&conv_id);
-                        self.status_message = format!("{name} is not blocked");
-                    }
-                } else {
-                    self.status_message = "no active conversation to unblock".to_string();
-                }
-            }
-            InputAction::Settings => {
-                self.open_overlay(OverlayKind::Settings);
-                self.settings_index = 0;
-                self.settings_mouse_snapshot = self.mouse.enabled;
-            }
-            InputAction::Attach => {
-                self.open_file_browser();
-            }
-            InputAction::Search(query) => {
-                self.search
-                    .open(query, self.active_conversation.as_deref(), &self.db);
-                self.open_overlay(OverlayKind::Search);
-            }
-            InputAction::Contacts => {
-                self.open_overlay(OverlayKind::Contacts);
-                self.contacts_overlay.index = 0;
-                self.contacts_overlay.filter.clear();
-                self.refresh_contacts_filter();
-            }
-            InputAction::Emoji(query) => {
-                let filter = if query.is_empty() { None } else { Some(query) };
-                self.emoji_picker.open(EmojiPickerSource::Input, filter);
-                self.open_overlay(OverlayKind::EmojiPicker);
-            }
-            InputAction::Theme => {
-                self.open_overlay(OverlayKind::ThemePicker);
-                self.theme_picker.index = self
-                    .theme_picker
-                    .available_themes
-                    .iter()
-                    .position(|t| t.name == self.theme.name)
-                    .unwrap_or(0);
-            }
-            InputAction::Group => {
-                self.open_overlay(OverlayKind::GroupMenu);
-                self.group_menu.state = Some(GroupMenuState::Menu);
-                self.group_menu.index = 0;
-                self.group_menu.filter.clear();
-                self.group_menu.input.clear();
-            }
-            InputAction::Verify => {
-                if let Some(ref conv_id) = self.active_conversation {
-                    let conv_id = conv_id.clone();
-                    let conv = &self.store.conversations[&conv_id];
-                    // Filter identities for this conversation
-                    if conv.is_group {
-                        // For groups, show identities for all members
-                        if let Some(group) = self.store.groups.get(&conv_id) {
-                            let members: HashSet<&str> =
-                                group.members.iter().map(|s| s.as_str()).collect();
-                            self.verify.identities = self
-                                .identity_trust
-                                .keys()
-                                .filter(|num| members.contains(num.as_str()))
-                                .filter_map(|num| {
-                                    // Find matching identity info from cached data
-                                    // We rebuild from identity_trust + contact_names
-                                    Some(IdentityInfo {
-                                        number: Some(num.clone()),
-                                        uuid: None,
-                                        fingerprint: String::new(),
-                                        safety_number: String::new(),
-                                        trust_level: *self.identity_trust.get(num)?,
-                                        added_timestamp: 0,
-                                    })
-                                })
-                                .collect();
-                        } else {
-                            self.verify.identities.clear();
-                        }
-                    } else {
-                        // 1:1 — show single identity
-                        self.verify.identities = self
-                            .identity_trust
-                            .get(&conv_id)
-                            .map(|tl| {
-                                vec![IdentityInfo {
-                                    number: Some(conv_id.clone()),
-                                    uuid: None,
-                                    fingerprint: String::new(),
-                                    safety_number: String::new(),
-                                    trust_level: *tl,
-                                    added_timestamp: 0,
-                                }]
-                            })
-                            .unwrap_or_default();
-                    }
-                    self.open_overlay(OverlayKind::Verify);
-                    self.verify.index = 0;
-                    // Request fresh identity data
-                    return Some(SendRequest::ListIdentities);
-                } else {
-                    self.status_message = "no active conversation".to_string();
-                }
-            }
-            InputAction::Profile => {
-                self.open_overlay(OverlayKind::Profile);
-                self.profile.index = 0;
-                self.profile.editing = false;
-            }
-            InputAction::About => {
-                self.open_overlay(OverlayKind::About);
-            }
-            InputAction::Keybindings => {
-                self.open_overlay(OverlayKind::Keybindings);
-                self.keybindings_overlay.index = 0;
-            }
-            InputAction::Help => {
-                self.open_overlay(OverlayKind::Help);
-            }
-            InputAction::SetDisappearing(duration_str) => {
-                match input::parse_duration_to_seconds(&duration_str) {
-                    Ok(seconds) => {
-                        if let Some(ref conv_id) = self.active_conversation {
-                            let conv_id = conv_id.clone();
-                            let is_group = self
-                                .store
-                                .conversations
-                                .get(&conv_id)
-                                .map(|c| c.is_group)
-                                .unwrap_or(false);
-                            // Update locally immediately
-                            if let Some(conv) = self.store.conversations.get_mut(&conv_id) {
-                                conv.expiration_timer = seconds;
-                            }
-                            self.db_warn_visible(
-                                self.db.update_expiration_timer(&conv_id, seconds),
-                                "update_expiration_timer",
-                            );
-                            // Return a SendRequest to trigger the RPC in main.rs
-                            return Some(SendRequest::UpdateExpiration {
-                                conv_id,
-                                is_group,
-                                seconds,
-                            });
-                        } else {
-                            self.status_message = "No active conversation".to_string();
-                        }
-                    }
-                    Err(msg) => {
-                        self.status_message = msg;
-                    }
-                }
-            }
-            InputAction::Poll {
-                question,
-                options,
-                allow_multiple,
-            } => {
-                if let Some(ref conv_id) = self.active_conversation {
-                    let conv_id = conv_id.clone();
-                    let is_group = self
-                        .store
-                        .conversations
-                        .get(&conv_id)
-                        .map(|c| c.is_group)
-                        .unwrap_or(false);
-                    let now = Utc::now();
-                    let local_ts_ms = now.timestamp_millis();
-
-                    let poll_options: Vec<PollOption> = options
-                        .iter()
-                        .enumerate()
-                        .map(|(i, text)| PollOption {
-                            id: i as i64,
-                            text: text.clone(),
-                        })
-                        .collect();
-                    let poll_data = PollData {
-                        question: question.clone(),
-                        options: poll_options,
-                        allow_multiple,
-                        closed: false,
-                    };
-
-                    // Optimistic local message
-                    let poll_data_for_db = poll_data.clone();
-                    let body = format!("\u{1F4CA} {question}");
-                    let poll_msg = DisplayMessage {
-                        sender: "you".to_string(),
-                        timestamp: now,
-                        body,
-                        is_system: false,
-                        image_lines: None,
-                        image_path: None,
-                        status: Some(MessageStatus::Sending),
-                        timestamp_ms: local_ts_ms,
-                        reactions: Vec::new(),
-                        mention_ranges: Vec::new(),
-                        style_ranges: Vec::new(),
-                        body_raw: None,
-                        mentions: Vec::new(),
-                        quote: None,
-                        is_edited: false,
-                        is_deleted: false,
-                        is_pinned: false,
-                        sender_id: self.account.clone(),
-                        expires_in_seconds: 0,
-                        expiration_start_ms: 0,
-                        poll_data: Some(poll_data),
-                        poll_votes: Vec::new(),
-                        preview: None,
-                        preview_image_lines: None,
-                        preview_image_path: None,
-                    };
-                    self.on_message_added(&conv_id, poll_msg, WireQuote::default(), false);
-                    self.db_warn_visible(
-                        self.db
-                            .upsert_poll_data(&conv_id, local_ts_ms, &poll_data_for_db),
-                        "upsert_poll_data",
-                    );
-
-                    self.scroll.offset = 0;
-                    return Some(SendRequest::PollCreate {
-                        recipient: conv_id,
-                        is_group,
-                        question,
-                        options,
-                        allow_multiple,
-                        local_ts_ms,
-                    });
-                } else {
-                    self.status_message = "No active conversation".to_string();
-                }
-            }
-            InputAction::Paste => {
-                return self.handle_paste_command();
-            }
-            InputAction::Export(limit) => {
-                self.export_chat_history(limit);
-            }
-            InputAction::Unknown(msg) => {
-                self.status_message = msg;
-            }
-        }
-        None
+        crate::handlers::input::handle_input(self)
     }
 
     /// Update autocomplete candidates based on the current input buffer.
@@ -6945,7 +6328,7 @@ impl App {
     /// Note: the full clipboard-read path is not unit-tested because `arboard::Clipboard`
     /// requires a display/compositor and cannot be mocked. The individual handlers
     /// (`handle_clipboard_image`, `handle_paste_text`) are tested directly instead.
-    fn handle_paste_command(&mut self) -> Option<SendRequest> {
+    pub(crate) fn handle_paste_command(&mut self) -> Option<SendRequest> {
         if self.active_conversation.is_none() {
             self.status_message = "No active conversation".to_string();
             return None;
@@ -7031,7 +6414,7 @@ impl App {
         }
     }
 
-    fn save_scroll_position(&mut self) {
+    pub(crate) fn save_scroll_position(&mut self) {
         if let Some(ref id) = self.active_conversation {
             self.scroll
                 .positions
@@ -7049,7 +6432,7 @@ impl App {
         }
     }
 
-    fn join_conversation(&mut self, target: &str) {
+    pub(crate) fn join_conversation(&mut self, target: &str) {
         self.mark_read();
         self.save_scroll_position();
         self.pending_attachment = None;
@@ -7218,7 +6601,7 @@ impl App {
         self.update_status();
     }
 
-    fn update_status(&mut self) {
+    pub(crate) fn update_status(&mut self) {
         if let Some(ref id) = self.active_conversation {
             if let Some(conv) = self.store.conversations.get(id) {
                 let prefix = if conv.is_group { "#" } else { "" };
@@ -7516,7 +6899,7 @@ impl App {
     }
 
     /// Export the active conversation's messages to a plain text file.
-    fn export_chat_history(&mut self, limit: Option<usize>) {
+    pub(crate) fn export_chat_history(&mut self, limit: Option<usize>) {
         let conv_id = match self.active_conversation.as_ref() {
             Some(id) => id.clone(),
             None => {
