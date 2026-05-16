@@ -21,6 +21,199 @@ use crate::signal::types::{LinkPreview, Mention, MessageStatus, PollData, PollVo
 /// (sender, body, timestamp_ms, conversation_id, conversation_name)
 pub type SearchRow = (String, String, i64, String, String);
 
+/// A schema migration: the target version it brings the database up to, and
+/// the SQL batch that performs the change. Each batch is responsible for its
+/// own `BEGIN; ...; UPDATE/INSERT schema_version; COMMIT;` so we never have to
+/// template SQL strings at runtime.
+struct Migration {
+    version: i32,
+    sql: &'static str,
+}
+
+/// Ordered list of schema migrations. To add a new version, append a new
+/// `Migration` with the next version number and the SQL batch that lifts the
+/// schema from `version - 1` to `version`. The batch must end with
+/// `UPDATE schema_version SET version = N;` (or, for version 1, the initial
+/// `INSERT`). Never edit an existing migration -- write a new one.
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        sql: "
+            BEGIN;
+
+            CREATE TABLE conversations (
+                id         TEXT PRIMARY KEY,
+                name       TEXT NOT NULL,
+                is_group   INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE messages (
+                rowid           INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id TEXT NOT NULL REFERENCES conversations(id),
+                sender          TEXT NOT NULL,
+                timestamp       TEXT NOT NULL,
+                body            TEXT NOT NULL,
+                is_system       INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX idx_messages_conv_ts ON messages(conversation_id, timestamp);
+
+            CREATE TABLE read_markers (
+                conversation_id TEXT PRIMARY KEY REFERENCES conversations(id),
+                last_read_rowid INTEGER NOT NULL DEFAULT 0
+            );
+
+            INSERT INTO schema_version (version) VALUES (1);
+
+            COMMIT;
+        ",
+    },
+    Migration {
+        version: 2,
+        sql: "
+            BEGIN;
+            ALTER TABLE conversations ADD COLUMN muted INTEGER NOT NULL DEFAULT 0;
+            UPDATE schema_version SET version = 2;
+            COMMIT;
+        ",
+    },
+    Migration {
+        version: 3,
+        sql: "
+            BEGIN;
+            ALTER TABLE messages ADD COLUMN status INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE messages ADD COLUMN timestamp_ms INTEGER NOT NULL DEFAULT 0;
+            UPDATE schema_version SET version = 3;
+            COMMIT;
+        ",
+    },
+    Migration {
+        version: 4,
+        sql: "
+            BEGIN;
+            CREATE TABLE reactions (
+                rowid           INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id TEXT NOT NULL,
+                target_ts_ms    INTEGER NOT NULL,
+                target_author   TEXT NOT NULL,
+                emoji           TEXT NOT NULL,
+                sender          TEXT NOT NULL,
+                UNIQUE(conversation_id, target_ts_ms, target_author, sender)
+            );
+            CREATE INDEX idx_reactions_target ON reactions(conversation_id, target_ts_ms);
+            UPDATE schema_version SET version = 4;
+            COMMIT;
+        ",
+    },
+    Migration {
+        version: 5,
+        sql: "
+            BEGIN;
+            CREATE INDEX IF NOT EXISTS idx_messages_conv_ts_ms ON messages(conversation_id, timestamp_ms);
+            UPDATE schema_version SET version = 5;
+            COMMIT;
+        ",
+    },
+    Migration {
+        version: 6,
+        sql: "
+            BEGIN;
+            ALTER TABLE messages ADD COLUMN is_edited INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE messages ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE messages ADD COLUMN quote_author TEXT;
+            ALTER TABLE messages ADD COLUMN quote_body TEXT;
+            ALTER TABLE messages ADD COLUMN quote_ts_ms INTEGER;
+            ALTER TABLE messages ADD COLUMN sender_id TEXT NOT NULL DEFAULT '';
+            UPDATE schema_version SET version = 6;
+            COMMIT;
+        ",
+    },
+    Migration {
+        version: 7,
+        sql: "
+            BEGIN;
+            ALTER TABLE conversations ADD COLUMN expiration_timer INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE messages ADD COLUMN expires_in_seconds INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE messages ADD COLUMN expiration_start_ms INTEGER NOT NULL DEFAULT 0;
+            UPDATE schema_version SET version = 7;
+            COMMIT;
+        ",
+    },
+    Migration {
+        version: 8,
+        sql: "
+            BEGIN;
+            ALTER TABLE conversations ADD COLUMN accepted INTEGER NOT NULL DEFAULT 1;
+            UPDATE schema_version SET version = 8;
+            COMMIT;
+        ",
+    },
+    Migration {
+        version: 9,
+        sql: "
+            BEGIN;
+            ALTER TABLE conversations ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0;
+            UPDATE schema_version SET version = 9;
+            COMMIT;
+        ",
+    },
+    Migration {
+        version: 10,
+        sql: "
+            BEGIN;
+            ALTER TABLE messages ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+            UPDATE schema_version SET version = 10;
+            COMMIT;
+        ",
+    },
+    Migration {
+        version: 11,
+        sql: "
+            BEGIN;
+            ALTER TABLE messages ADD COLUMN poll_data TEXT;
+            CREATE TABLE IF NOT EXISTS poll_votes (
+                conv_id TEXT NOT NULL,
+                poll_timestamp INTEGER NOT NULL,
+                voter TEXT NOT NULL,
+                voter_name TEXT,
+                option_indexes TEXT NOT NULL,
+                vote_count INTEGER NOT NULL DEFAULT 1,
+                UNIQUE(conv_id, poll_timestamp, voter)
+            );
+            UPDATE schema_version SET version = 11;
+            COMMIT;
+        ",
+    },
+    Migration {
+        version: 12,
+        sql: "
+            BEGIN;
+            ALTER TABLE messages ADD COLUMN link_preview TEXT;
+            UPDATE schema_version SET version = 12;
+            COMMIT;
+        ",
+    },
+    Migration {
+        version: 13,
+        sql: "
+            BEGIN;
+            ALTER TABLE messages ADD COLUMN body_raw TEXT;
+            ALTER TABLE messages ADD COLUMN mentions_json TEXT;
+            UPDATE schema_version SET version = 13;
+            COMMIT;
+        ",
+    },
+    Migration {
+        version: 14,
+        sql: "
+            BEGIN;
+            ALTER TABLE conversations ADD COLUMN mute_expires_at TEXT;
+            UPDATE schema_version SET version = 14;
+            COMMIT;
+        ",
+    },
+];
+
 pub struct Database {
     conn: Connection,
 }
@@ -45,221 +238,21 @@ impl Database {
     }
 
     fn migrate(&self) -> Result<()> {
-        // Create schema_version table if it doesn't exist
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);",
         )?;
 
-        let version: i32 = self.conn.query_row(
+        let current: i32 = self.conn.query_row(
             "SELECT COALESCE(MAX(version), 0) FROM schema_version",
             [],
             |row| row.get(0),
         )?;
 
-        if version < 1 {
-            self.conn.execute_batch(
-                "
-                BEGIN;
-
-                CREATE TABLE conversations (
-                    id         TEXT PRIMARY KEY,
-                    name       TEXT NOT NULL,
-                    is_group   INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-                );
-
-                CREATE TABLE messages (
-                    rowid           INTEGER PRIMARY KEY AUTOINCREMENT,
-                    conversation_id TEXT NOT NULL REFERENCES conversations(id),
-                    sender          TEXT NOT NULL,
-                    timestamp       TEXT NOT NULL,
-                    body            TEXT NOT NULL,
-                    is_system       INTEGER NOT NULL DEFAULT 0
-                );
-                CREATE INDEX idx_messages_conv_ts ON messages(conversation_id, timestamp);
-
-                CREATE TABLE read_markers (
-                    conversation_id TEXT PRIMARY KEY REFERENCES conversations(id),
-                    last_read_rowid INTEGER NOT NULL DEFAULT 0
-                );
-
-                INSERT INTO schema_version (version) VALUES (1);
-
-                COMMIT;
-                ",
-            )?;
+        for migration in MIGRATIONS {
+            if current < migration.version {
+                self.conn.execute_batch(migration.sql)?;
+            }
         }
-
-        if version < 2 {
-            self.conn.execute_batch(
-                "
-                BEGIN;
-                ALTER TABLE conversations ADD COLUMN muted INTEGER NOT NULL DEFAULT 0;
-                UPDATE schema_version SET version = 2;
-                COMMIT;
-                ",
-            )?;
-        }
-
-        if version < 3 {
-            self.conn.execute_batch(
-                "
-                BEGIN;
-                ALTER TABLE messages ADD COLUMN status INTEGER NOT NULL DEFAULT 0;
-                ALTER TABLE messages ADD COLUMN timestamp_ms INTEGER NOT NULL DEFAULT 0;
-                UPDATE schema_version SET version = 3;
-                COMMIT;
-                ",
-            )?;
-        }
-
-        if version < 4 {
-            self.conn.execute_batch(
-                "
-                BEGIN;
-                CREATE TABLE reactions (
-                    rowid           INTEGER PRIMARY KEY AUTOINCREMENT,
-                    conversation_id TEXT NOT NULL,
-                    target_ts_ms    INTEGER NOT NULL,
-                    target_author   TEXT NOT NULL,
-                    emoji           TEXT NOT NULL,
-                    sender          TEXT NOT NULL,
-                    UNIQUE(conversation_id, target_ts_ms, target_author, sender)
-                );
-                CREATE INDEX idx_reactions_target ON reactions(conversation_id, target_ts_ms);
-                UPDATE schema_version SET version = 4;
-                COMMIT;
-                ",
-            )?;
-        }
-
-        if version < 5 {
-            self.conn.execute_batch(
-                "
-                BEGIN;
-                CREATE INDEX IF NOT EXISTS idx_messages_conv_ts_ms ON messages(conversation_id, timestamp_ms);
-                UPDATE schema_version SET version = 5;
-                COMMIT;
-                ",
-            )?;
-        }
-
-        if version < 6 {
-            self.conn.execute_batch(
-                "
-                BEGIN;
-                ALTER TABLE messages ADD COLUMN is_edited INTEGER NOT NULL DEFAULT 0;
-                ALTER TABLE messages ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0;
-                ALTER TABLE messages ADD COLUMN quote_author TEXT;
-                ALTER TABLE messages ADD COLUMN quote_body TEXT;
-                ALTER TABLE messages ADD COLUMN quote_ts_ms INTEGER;
-                ALTER TABLE messages ADD COLUMN sender_id TEXT NOT NULL DEFAULT '';
-                UPDATE schema_version SET version = 6;
-                COMMIT;
-                ",
-            )?;
-        }
-
-        if version < 7 {
-            self.conn.execute_batch(
-                "
-                BEGIN;
-                ALTER TABLE conversations ADD COLUMN expiration_timer INTEGER NOT NULL DEFAULT 0;
-                ALTER TABLE messages ADD COLUMN expires_in_seconds INTEGER NOT NULL DEFAULT 0;
-                ALTER TABLE messages ADD COLUMN expiration_start_ms INTEGER NOT NULL DEFAULT 0;
-                UPDATE schema_version SET version = 7;
-                COMMIT;
-                ",
-            )?;
-        }
-
-        if version < 8 {
-            self.conn.execute_batch(
-                "
-                BEGIN;
-                ALTER TABLE conversations ADD COLUMN accepted INTEGER NOT NULL DEFAULT 1;
-                UPDATE schema_version SET version = 8;
-                COMMIT;
-                ",
-            )?;
-        }
-
-        if version < 9 {
-            self.conn.execute_batch(
-                "
-                BEGIN;
-                ALTER TABLE conversations ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0;
-                UPDATE schema_version SET version = 9;
-                COMMIT;
-                ",
-            )?;
-        }
-
-        if version < 10 {
-            self.conn.execute_batch(
-                "
-                BEGIN;
-                ALTER TABLE messages ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
-                UPDATE schema_version SET version = 10;
-                COMMIT;
-                ",
-            )?;
-        }
-
-        if version < 11 {
-            self.conn.execute_batch(
-                "
-                BEGIN;
-                ALTER TABLE messages ADD COLUMN poll_data TEXT;
-                CREATE TABLE IF NOT EXISTS poll_votes (
-                    conv_id TEXT NOT NULL,
-                    poll_timestamp INTEGER NOT NULL,
-                    voter TEXT NOT NULL,
-                    voter_name TEXT,
-                    option_indexes TEXT NOT NULL,
-                    vote_count INTEGER NOT NULL DEFAULT 1,
-                    UNIQUE(conv_id, poll_timestamp, voter)
-                );
-                UPDATE schema_version SET version = 11;
-                COMMIT;
-                ",
-            )?;
-        }
-
-        if version < 12 {
-            self.conn.execute_batch(
-                "
-                BEGIN;
-                ALTER TABLE messages ADD COLUMN link_preview TEXT;
-                UPDATE schema_version SET version = 12;
-                COMMIT;
-                ",
-            )?;
-        }
-
-        if version < 13 {
-            self.conn.execute_batch(
-                "
-                BEGIN;
-                ALTER TABLE messages ADD COLUMN body_raw TEXT;
-                ALTER TABLE messages ADD COLUMN mentions_json TEXT;
-                UPDATE schema_version SET version = 13;
-                COMMIT;
-                ",
-            )?;
-        }
-
-        if version < 14 {
-            self.conn.execute_batch(
-                "
-                BEGIN;
-                ALTER TABLE conversations ADD COLUMN mute_expires_at TEXT;
-                UPDATE schema_version SET version = 14;
-                COMMIT;
-                ",
-            )?;
-        }
-
         Ok(())
     }
 
@@ -1054,6 +1047,37 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM conversations", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    /// Regression guard: after migrate(), schema_version must match the last
+    /// migration in the table. Catches the obvious "added a migration but
+    /// forgot to append it" or "renumbered a version" mistakes.
+    #[rstest]
+    fn migrations_advance_schema_version_monotonically(db: Database) {
+        let max_in_table: i32 = db
+            .conn
+            .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let expected = MIGRATIONS
+            .last()
+            .expect("MIGRATIONS must not be empty")
+            .version;
+        assert_eq!(max_in_table, expected);
+
+        // Versions in the table must be strictly increasing and contiguous.
+        let mut prev = 0;
+        for migration in MIGRATIONS {
+            assert_eq!(
+                migration.version,
+                prev + 1,
+                "migration versions must be contiguous (got {} after {})",
+                migration.version,
+                prev
+            );
+            prev = migration.version;
+        }
     }
 
     #[rstest]
