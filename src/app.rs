@@ -6529,20 +6529,9 @@ mod tests {
         // A message arrives first with just a phone number
         let msg = SignalMessage {
             source: "+15551234567".to_string(),
-            source_name: None,
-            source_uuid: None,
             timestamp: chrono::Utc::now(),
             body: Some("hey".to_string()),
-            attachments: vec![],
-            group_id: None,
-            group_name: None,
-            is_outgoing: false,
-            destination: None,
-            mentions: vec![],
-            text_styles: vec![],
-            quote: None,
-            expires_in_seconds: 0,
-            previews: Vec::new(),
+            ..Default::default()
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         assert_eq!(app.store.conversations["+15551234567"].name, "+15551234567");
@@ -6563,19 +6552,9 @@ mod tests {
         let msg = SignalMessage {
             source: "+1".to_string(),
             source_name: Some("Alice".to_string()),
-            source_uuid: None,
             timestamp: chrono::Utc::now(),
             body: Some("hi".to_string()),
-            attachments: vec![],
-            group_id: None,
-            group_name: None,
-            is_outgoing: false,
-            destination: None,
-            mentions: vec![],
-            text_styles: vec![],
-            quote: None,
-            expires_in_seconds: 0,
-            previews: Vec::new(),
+            ..Default::default()
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         assert_eq!(app.store.conversations["+1"].name, "Alice");
@@ -6605,20 +6584,9 @@ mod tests {
         // Message arrives with no source_name — should use lookup
         let msg = SignalMessage {
             source: "+1".to_string(),
-            source_name: None,
-            source_uuid: None,
             timestamp: chrono::Utc::now(),
             body: Some("hello!".to_string()),
-            attachments: vec![],
-            group_id: None,
-            group_name: None,
-            is_outgoing: false,
-            destination: None,
-            mentions: vec![],
-            text_styles: vec![],
-            quote: None,
-            expires_in_seconds: 0,
-            previews: Vec::new(),
+            ..Default::default()
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
 
@@ -6642,19 +6610,10 @@ mod tests {
         let msg = SignalMessage {
             source: "+1".to_string(),
             source_name: Some("Alice".to_string()),
-            source_uuid: None,
             timestamp: chrono::Utc::now(),
             body: Some("hey family".to_string()),
-            attachments: vec![],
             group_id: Some("g1".to_string()),
-            group_name: None,
-            is_outgoing: false,
-            destination: None,
-            mentions: vec![],
-            text_styles: vec![],
-            quote: None,
-            expires_in_seconds: 0,
-            previews: Vec::new(),
+            ..Default::default()
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
 
@@ -6678,19 +6637,9 @@ mod tests {
             let msg = SignalMessage {
                 source: "+1".to_string(),
                 source_name: Some("Alice".to_string()),
-                source_uuid: None,
                 timestamp: chrono::Utc::now(),
                 body: Some("msg".to_string()),
-                attachments: vec![],
-                group_id: None,
-                group_name: None,
-                is_outgoing: false,
-                destination: None,
-                mentions: vec![],
-                text_styles: vec![],
-                quote: None,
-                expires_in_seconds: 0,
-                previews: Vec::new(),
+                ..Default::default()
             };
             app.handle_signal_event(SignalEvent::MessageReceived(msg));
         }
@@ -7682,19 +7631,9 @@ mod tests {
         let msg = SignalMessage {
             source: "+1".to_string(),
             source_name: Some("Alice".to_string()),
-            source_uuid: None,
             timestamp: chrono::Utc::now(),
             body: Some("hello".to_string()),
-            attachments: vec![],
-            group_id: None,
-            group_name: None,
-            is_outgoing: false,
-            destination: None,
-            mentions: vec![],
-            text_styles: vec![],
-            quote: None,
-            expires_in_seconds: 0,
-            previews: Vec::new(),
+            ..Default::default()
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
 
@@ -7779,19 +7718,9 @@ mod tests {
         let msg = SignalMessage {
             source: "+1".to_string(),
             source_name: Some("Alice".to_string()),
-            source_uuid: None,
             timestamp: chrono::Utc::now(),
             body: Some("hello".to_string()),
-            attachments: vec![],
-            group_id: None,
-            group_name: None,
-            is_outgoing: false,
-            destination: None,
-            mentions: vec![],
-            text_styles: vec![],
-            quote: None,
-            expires_in_seconds: 0,
-            previews: Vec::new(),
+            ..Default::default()
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         let ts_ms = app.store.conversations["+1"].messages[0].timestamp_ms;
@@ -7819,19 +7748,9 @@ mod tests {
         let msg = SignalMessage {
             source: "+1".to_string(),
             source_name: Some("Alice".to_string()),
-            source_uuid: None,
             timestamp: chrono::Utc::now(),
             body: Some("hello".to_string()),
-            attachments: vec![],
-            group_id: None,
-            group_name: None,
-            is_outgoing: false,
-            destination: None,
-            mentions: vec![],
-            text_styles: vec![],
-            quote: None,
-            expires_in_seconds: 0,
-            previews: Vec::new(),
+            ..Default::default()
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         let ts_ms = app.store.conversations["+1"].messages[0].timestamp_ms;
@@ -7867,19 +7786,9 @@ mod tests {
         let msg = SignalMessage {
             source: "+1".to_string(),
             source_name: Some("Alice".to_string()),
-            source_uuid: None,
             timestamp: chrono::Utc::now(),
             body: Some("hello".to_string()),
-            attachments: vec![],
-            group_id: None,
-            group_name: None,
-            is_outgoing: false,
-            destination: None,
-            mentions: vec![],
-            text_styles: vec![],
-            quote: None,
-            expires_in_seconds: 0,
-            previews: Vec::new(),
+            ..Default::default()
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         let ts_ms = app.store.conversations["+1"].messages[0].timestamp_ms;
@@ -8622,19 +8531,9 @@ mod tests {
         let msg1 = SignalMessage {
             source: "+15551234567".to_string(),
             source_name: Some("Alice".to_string()),
-            source_uuid: None,
             timestamp: chrono::Utc::now(),
             body: Some("first".to_string()),
-            attachments: vec![],
-            group_id: None,
-            group_name: None,
-            is_outgoing: false,
-            destination: None,
-            mentions: vec![],
-            text_styles: vec![],
-            quote: None,
-            expires_in_seconds: 0,
-            previews: Vec::new(),
+            ..Default::default()
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg1));
 
@@ -8655,19 +8554,9 @@ mod tests {
         let msg2 = SignalMessage {
             source: "+15551234567".to_string(),
             source_name: Some("Alice".to_string()),
-            source_uuid: None,
             timestamp: chrono::Utc::now(),
             body: Some("second".to_string()),
-            attachments: vec![],
-            group_id: None,
-            group_name: None,
-            is_outgoing: false,
-            destination: None,
-            mentions: vec![],
-            text_styles: vec![],
-            quote: None,
-            expires_in_seconds: 0,
-            previews: Vec::new(),
+            ..Default::default()
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg2));
 
@@ -8684,19 +8573,9 @@ mod tests {
         let msg = |body: &str, ts_ms: i64| SignalMessage {
             source: "+15551234567".to_string(),
             source_name: Some("Alice".to_string()),
-            source_uuid: None,
             timestamp: DateTime::from_timestamp_millis(ts_ms).unwrap(),
             body: Some(body.to_string()),
-            attachments: vec![],
-            group_id: None,
-            group_name: None,
-            is_outgoing: false,
-            destination: None,
-            mentions: vec![],
-            text_styles: vec![],
-            quote: None,
-            expires_in_seconds: 0,
-            previews: Vec::new(),
+            ..Default::default()
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg("one", 1000)));
         app.handle_signal_event(SignalEvent::MessageReceived(msg("two", 2000)));
@@ -8728,19 +8607,9 @@ mod tests {
         let msg = |body: &str, ts_ms: i64| SignalMessage {
             source: "+15551234567".to_string(),
             source_name: Some("Alice".to_string()),
-            source_uuid: None,
             timestamp: DateTime::from_timestamp_millis(ts_ms).unwrap(),
             body: Some(body.to_string()),
-            attachments: vec![],
-            group_id: None,
-            group_name: None,
-            is_outgoing: false,
-            destination: None,
-            mentions: vec![],
-            text_styles: vec![],
-            quote: None,
-            expires_in_seconds: 0,
-            previews: Vec::new(),
+            ..Default::default()
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg("one", 1000)));
         app.handle_signal_event(SignalEvent::MessageReceived(msg("two", 2000)));
@@ -9146,20 +9015,11 @@ mod tests {
     fn outgoing_sync_creates_accepted_conversation(mut app: App) {
         let msg = SignalMessage {
             source: "+10000000000".to_string(),
-            source_name: None,
-            source_uuid: None,
             timestamp: chrono::Utc::now(),
             body: Some("hey".to_string()),
-            attachments: vec![],
-            group_id: None,
-            group_name: None,
             is_outgoing: true,
             destination: Some("+1".to_string()),
-            mentions: vec![],
-            text_styles: vec![],
-            quote: None,
-            expires_in_seconds: 0,
-            previews: Vec::new(),
+            ..Default::default()
         };
         app.handle_signal_event(SignalEvent::MessageReceived(msg));
         assert!(app.store.conversations["+1"].accepted);
