@@ -22,12 +22,12 @@ mod typing;
 
 pub use emoji_picker::{CATEGORIES, EmojiPickerAction, EmojiPickerSource, EmojiPickerState};
 pub use file_picker::{FilePickerOutcome, FilePickerState};
-pub use image::ImageState;
+pub use image::{ImageMode, ImageState};
 pub use input::InputState;
 pub use lock::{LockPhase, LockState};
 pub use lock::{hash_passphrase, load_hash, lock_hash_path, save_hash, verify_passphrase};
 pub use mouse::MouseState;
-pub use notification::NotificationState;
+pub use notification::{NotificationPreview, NotificationState};
 pub use overlays::{
     ActionMenuState, ContactsOverlayState, ForwardOverlayState, GroupMenuOverlayState,
     KeybindingsOverlayState, PinDurationOverlayState, PollVoteOverlayState, ProfileOverlayState,

@@ -371,14 +371,15 @@ fn build_outgoing_attachment_body(
     } else {
         format!("[{prefix}: {fname}] {text}")
     };
-    let (img_lines, img_path) = if is_image && app.image.image_mode != "none" {
-        (
-            image_render::render_image(path, 40),
-            Some(path.to_string_lossy().into_owned()),
-        )
-    } else {
-        (None, None)
-    };
+    let (img_lines, img_path) =
+        if is_image && app.image.image_mode != crate::domain::ImageMode::None {
+            (
+                image_render::render_image(path, 40),
+                Some(path.to_string_lossy().into_owned()),
+            )
+        } else {
+            (None, None)
+        };
     (body, img_lines, img_path)
 }
 

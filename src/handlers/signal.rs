@@ -682,7 +682,7 @@ fn persist_message_extras(app: &mut App, r: &ResolvedMessage) {
             .find(|m| m.timestamp_ms == r.msg_ts_ms && !m.body.starts_with('['))
     {
         let (img_lines, img_path) = if app.image.show_link_previews
-            && app.image.image_mode != "none"
+            && app.image.image_mode != crate::domain::ImageMode::None
             && let Some(ref p) = preview.image_path
         {
             (
@@ -780,7 +780,7 @@ fn apply_notification_policy(
             notif_body,
             r.is_group,
             notif_group.as_deref(),
-            &app.notifications.notification_preview,
+            app.notifications.notification_preview,
         );
     }
 }

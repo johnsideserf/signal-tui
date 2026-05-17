@@ -9,6 +9,75 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Notification preview detail level. Drives whether desktop notification
+/// bodies show the message text, just the sender, or nothing beyond
+/// "new message". Persisted in `notification_preview` config field.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NotificationPreview {
+    /// Show sender + body.
+    #[default]
+    Full,
+    /// Show sender only.
+    Sender,
+    /// Show "new message" only.
+    Minimal,
+}
+
+impl NotificationPreview {
+    /// Cycle to the next preview level (Full -> Sender -> Minimal -> Full).
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Full => Self::Sender,
+            Self::Sender => Self::Minimal,
+            Self::Minimal => Self::Full,
+        }
+    }
+
+    /// User-facing label for the settings overlay.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Sender => "sender",
+            Self::Minimal => "minimal",
+        }
+    }
+}
+
+/// Image rendering mode. Selects the protocol used to draw inline image
+/// previews in the chat pane. Persisted in `image_mode` config field.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ImageMode {
+    /// Native terminal image protocols (Kitty, iTerm2, Sixel).
+    Native,
+    /// Unicode halfblock approximation. Universal fallback.
+    #[default]
+    Halfblock,
+    /// Do not render images.
+    None,
+}
+
+impl ImageMode {
+    /// Cycle to the next image mode (Native -> Halfblock -> None -> Native).
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Native => Self::Halfblock,
+            Self::Halfblock => Self::None,
+            Self::None => Self::Native,
+        }
+    }
+
+    /// User-facing label for the settings overlay.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::Halfblock => "halfblock",
+            Self::None => "none",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Phone number in E.164 format (e.g., +15551234567)
@@ -35,17 +104,19 @@ pub struct Config {
     #[serde(default)]
     pub desktop_notifications: bool,
 
-    /// Notification preview level: "full", "sender", or "minimal"
-    #[serde(default = "default_notification_preview")]
-    pub notification_preview: String,
+    /// Notification preview level (full / sender / minimal).
+    #[serde(default)]
+    pub notification_preview: NotificationPreview,
 
     /// Seconds before clipboard is auto-cleared after copying (0 = disabled)
     #[serde(default = "default_clipboard_clear_seconds")]
     pub clipboard_clear_seconds: u64,
 
-    /// Image display mode: "native" (terminal protocol), "halfblock", or "none"
+    /// Image display mode (native / halfblock / none). `None` here means the
+    /// field was absent from the on-disk TOML and migration should fill it in
+    /// from the legacy `inline_images` / `native_images` flags.
     #[serde(default)]
-    pub image_mode: String,
+    pub image_mode: Option<ImageMode>,
 
     /// Override cell pixel width for Sixel sizing (0 = auto-detect)
     #[serde(default)]
@@ -144,10 +215,6 @@ fn default_settings_profile() -> String {
     "Default".to_string()
 }
 
-fn default_notification_preview() -> String {
-    "full".to_string()
-}
-
 fn default_clipboard_clear_seconds() -> u64 {
     30
 }
@@ -175,9 +242,9 @@ impl Default for Config {
             notify_direct: true,
             notify_group: true,
             desktop_notifications: false,
-            notification_preview: default_notification_preview(),
+            notification_preview: NotificationPreview::Full,
             clipboard_clear_seconds: default_clipboard_clear_seconds(),
-            image_mode: "halfblock".to_string(),
+            image_mode: Some(ImageMode::Halfblock),
             cell_pixel_width: 0,
             cell_pixel_height: 0,
             inline_images: true,
@@ -232,16 +299,16 @@ impl Config {
     /// flags when upgrading from a config written by siggy < v1.6.0. No-op
     /// once `image_mode` is set.
     fn migrate_legacy_image_mode(&mut self) {
-        if !self.image_mode.is_empty() {
+        if self.image_mode.is_some() {
             return;
         }
-        self.image_mode = if self.native_images {
-            "native".to_string()
+        self.image_mode = Some(if self.native_images {
+            ImageMode::Native
         } else if self.inline_images {
-            "halfblock".to_string()
+            ImageMode::Halfblock
         } else {
-            "none".to_string()
-        };
+            ImageMode::None
+        });
     }
 
     /// Serialize this config to TOML and write it to the default config path.
@@ -304,10 +371,10 @@ mod tests {
     use super::*;
 
     fn legacy_config(inline: bool, native: bool) -> Config {
-        // image_mode MUST be explicitly empty here — Config::default()
-        // sets it to "halfblock", which would early-return the migration.
+        // image_mode MUST be explicitly None here -- Config::default()
+        // sets it to Some(Halfblock), which would early-return the migration.
         Config {
-            image_mode: String::new(),
+            image_mode: None,
             inline_images: inline,
             native_images: native,
             ..Config::default()
@@ -318,33 +385,33 @@ mod tests {
     fn migrate_legacy_image_mode_native_wins() {
         let mut c = legacy_config(true, true);
         c.migrate_legacy_image_mode();
-        assert_eq!(c.image_mode, "native");
+        assert_eq!(c.image_mode, Some(ImageMode::Native));
     }
 
     #[test]
     fn migrate_legacy_image_mode_halfblock_when_only_inline() {
         let mut c = legacy_config(true, false);
         c.migrate_legacy_image_mode();
-        assert_eq!(c.image_mode, "halfblock");
+        assert_eq!(c.image_mode, Some(ImageMode::Halfblock));
     }
 
     #[test]
     fn migrate_legacy_image_mode_none_when_both_disabled() {
         let mut c = legacy_config(false, false);
         c.migrate_legacy_image_mode();
-        assert_eq!(c.image_mode, "none");
+        assert_eq!(c.image_mode, Some(ImageMode::None));
     }
 
     #[test]
     fn migrate_legacy_image_mode_preserves_existing() {
         let mut c = Config {
-            image_mode: "native".to_string(),
+            image_mode: Some(ImageMode::Native),
             inline_images: false,
             native_images: false,
             ..Config::default()
         };
         c.migrate_legacy_image_mode();
-        assert_eq!(c.image_mode, "native");
+        assert_eq!(c.image_mode, Some(ImageMode::Native));
     }
 
     // Filesystem migrations are tested in db::tests::migrate_path_*.

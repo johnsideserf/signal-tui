@@ -6,6 +6,8 @@
 //! window (`clipboard_clear_seconds`) and the `clipboard_set_at`
 //! timestamp used to scrub copied data after it expires.
 
+pub use crate::config::NotificationPreview;
+
 /// State for notification preferences and clipboard auto-clear.
 #[derive(Default)]
 pub struct NotificationState {
@@ -17,8 +19,8 @@ pub struct NotificationState {
     pub notify_group: bool,
     /// OS-level desktop notifications for incoming messages
     pub desktop_notifications: bool,
-    /// Notification preview level: "full", "sender", or "minimal"
-    pub notification_preview: String,
+    /// Notification preview level
+    pub notification_preview: NotificationPreview,
     /// Seconds before clipboard is auto-cleared after copying (0 = disabled)
     pub clipboard_clear_seconds: u64,
     /// Timestamp when clipboard was last set
@@ -30,7 +32,7 @@ impl NotificationState {
         Self {
             notify_direct: true,
             notify_group: true,
-            notification_preview: "full".to_string(),
+            notification_preview: NotificationPreview::Full,
             clipboard_clear_seconds: 30,
             ..Default::default()
         }
