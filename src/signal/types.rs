@@ -361,6 +361,31 @@ pub struct SignalMessage {
     pub previews: Vec<LinkPreview>,
 }
 
+impl Default for SignalMessage {
+    /// Empty-but-valid message. Used by tests via struct-update syntax:
+    /// `SignalMessage { body: Some("hi".into()), source: "+1".into(), ..Default::default() }`.
+    /// Production parsers fill every field explicitly via `parse_common_message_fields`.
+    fn default() -> Self {
+        Self {
+            source: String::new(),
+            source_name: None,
+            source_uuid: None,
+            timestamp: DateTime::<Utc>::from_timestamp(0, 0).unwrap_or_default(),
+            body: None,
+            attachments: Vec::new(),
+            group_id: None,
+            group_name: None,
+            is_outgoing: false,
+            destination: None,
+            mentions: Vec::new(),
+            text_styles: Vec::new(),
+            quote: None,
+            expires_in_seconds: 0,
+            previews: Vec::new(),
+        }
+    }
+}
+
 /// Link preview metadata attached to a message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinkPreview {
