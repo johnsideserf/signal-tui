@@ -307,8 +307,8 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut line_msg_idx: Vec<Option<usize>> = Vec::new();
 
     // Track images for native protocol overlay: (first_line_index, line_count, path)
-    let use_native =
-        app.image.image_mode == "native" && app.image.image_protocol != ImageProtocol::Halfblock;
+    let use_native = app.image.image_mode == crate::domain::ImageMode::Native
+        && app.image.image_protocol != ImageProtocol::Halfblock;
     let mut image_records: Vec<(usize, usize, String)> = Vec::new();
 
     for (i, msg) in visible.iter().enumerate() {
@@ -491,7 +491,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 
             // Render inline image preview if available (skip for deleted, skip if images disabled)
             if !msg.is_deleted
-                && app.image.image_mode != "none"
+                && app.image.image_mode != crate::domain::ImageMode::None
                 && let Some(ref image_lines) = msg.image_lines
             {
                 let first_idx = lines.len();
@@ -541,7 +541,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                 line_msg_idx.push(Some(msg_index));
 
                 // Render link preview thumbnail (only when images enabled)
-                if app.image.image_mode != "none"
+                if app.image.image_mode != crate::domain::ImageMode::None
                     && let Some(ref img_lines) = msg.preview_image_lines
                 {
                     let first_idx = lines.len();

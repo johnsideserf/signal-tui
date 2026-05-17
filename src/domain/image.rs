@@ -13,14 +13,16 @@ use std::collections::{HashMap, HashSet};
 
 use std::sync::mpsc;
 
+pub use crate::config::ImageMode;
+
 use crate::app::{ImageRenderResult, VisibleImage};
 use crate::image_render::ImageProtocol;
 use crate::ui::LinkRegion;
 
 /// State for image rendering, caching, and link overlay tracking.
 pub struct ImageState {
-    /// Image display mode: "native", "halfblock", or "none"
-    pub image_mode: String,
+    /// Image display mode
+    pub image_mode: ImageMode,
     /// Show link previews (title, description, thumbnail) for URLs
     pub show_link_previews: bool,
     /// Link regions detected in the last rendered frame
@@ -67,7 +69,7 @@ impl ImageState {
     ) -> Self {
         use crate::image_render;
         Self {
-            image_mode: "halfblock".to_string(),
+            image_mode: ImageMode::Halfblock,
             show_link_previews: true,
             link_regions: Vec::new(),
             link_url_map: HashMap::new(),

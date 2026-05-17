@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::app::App;
+use crate::domain::ImageMode;
 
 /// A settings profile: a named collection of persisted display settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,8 +17,8 @@ pub struct SettingsProfile {
     pub notify_direct: bool,
     pub notify_group: bool,
     pub desktop_notifications: bool,
-    #[serde(default = "default_halfblock")]
-    pub image_mode: String,
+    #[serde(default)]
+    pub image_mode: ImageMode,
     pub show_link_previews: bool,
     pub date_separators: bool,
     pub show_receipts: bool,
@@ -29,17 +30,13 @@ pub struct SettingsProfile {
     pub sidebar_on_right: bool,
 }
 
-fn default_halfblock() -> String {
-    "halfblock".to_string()
-}
-
 pub fn default_profile() -> SettingsProfile {
     SettingsProfile {
         name: "Default".to_string(),
         notify_direct: true,
         notify_group: true,
         desktop_notifications: false,
-        image_mode: "halfblock".to_string(),
+        image_mode: ImageMode::Halfblock,
         show_link_previews: true,
         date_separators: true,
         show_receipts: true,
@@ -58,7 +55,7 @@ pub fn minimal_profile() -> SettingsProfile {
         notify_direct: false,
         notify_group: false,
         desktop_notifications: false,
-        image_mode: "none".to_string(),
+        image_mode: ImageMode::None,
         show_link_previews: false,
         date_separators: false,
         show_receipts: false,
@@ -77,7 +74,7 @@ pub fn full_profile() -> SettingsProfile {
         notify_direct: true,
         notify_group: true,
         desktop_notifications: true,
-        image_mode: "native".to_string(),
+        image_mode: ImageMode::Native,
         show_link_previews: true,
         date_separators: true,
         show_receipts: true,
@@ -221,7 +218,7 @@ impl SettingsProfile {
             notify_direct: app.notifications.notify_direct,
             notify_group: app.notifications.notify_group,
             desktop_notifications: app.notifications.desktop_notifications,
-            image_mode: app.image.image_mode.clone(),
+            image_mode: app.image.image_mode,
             show_link_previews: app.image.show_link_previews,
             date_separators: app.date_separators,
             show_receipts: app.show_receipts,
@@ -239,7 +236,7 @@ impl SettingsProfile {
         app.notifications.notify_direct = self.notify_direct;
         app.notifications.notify_group = self.notify_group;
         app.notifications.desktop_notifications = self.desktop_notifications;
-        app.image.image_mode = self.image_mode.clone();
+        app.image.image_mode = self.image_mode;
         app.image.show_link_previews = self.show_link_previews;
         app.date_separators = self.date_separators;
         app.show_receipts = self.show_receipts;
@@ -308,7 +305,7 @@ mod tests {
         assert!(!p.notify_direct);
         assert!(!p.notify_group);
         assert!(!p.desktop_notifications);
-        assert_eq!(p.image_mode, "none");
+        assert_eq!(p.image_mode, ImageMode::None);
         assert!(!p.show_link_previews);
         assert!(!p.date_separators);
         assert!(!p.show_receipts);
@@ -326,7 +323,7 @@ mod tests {
         assert!(p.notify_direct);
         assert!(p.notify_group);
         assert!(p.desktop_notifications);
-        assert_eq!(p.image_mode, "native");
+        assert_eq!(p.image_mode, ImageMode::Native);
         assert!(p.show_link_previews);
         assert!(p.date_separators);
         assert!(p.show_receipts);

@@ -106,7 +106,7 @@ pub(in crate::ui) fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
     render_special(
         &mut lines,
         "Notification preview: ",
-        &app.notifications.notification_preview,
+        app.notifications.notification_preview.label(),
         preview_index,
     );
 
@@ -123,7 +123,7 @@ pub(in crate::ui) fn draw_settings(frame: &mut Frame, app: &App, area: Rect) {
     render_special(
         &mut lines,
         "Image mode: ",
-        &app.image.image_mode,
+        app.image.image_mode.label(),
         image_mode_index,
     );
 

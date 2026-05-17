@@ -211,33 +211,23 @@ pub(crate) fn show_desktop_notification(
     body: &str,
     is_group: bool,
     group_name: Option<&str>,
-    preview_level: &str,
+    preview_level: crate::domain::NotificationPreview,
 ) {
+    use crate::domain::NotificationPreview;
+    let sender_title = || -> String {
+        if is_group {
+            match group_name {
+                Some(gn) => format!("{} - {}", gn, sender),
+                None => sender.to_string(),
+            }
+        } else {
+            sender.to_string()
+        }
+    };
     let (title, preview) = match preview_level {
-        "minimal" => ("New message".to_string(), String::new()),
-        "sender" => {
-            let t = if is_group {
-                match group_name {
-                    Some(gn) => format!("{} — {}", gn, sender),
-                    None => sender.to_string(),
-                }
-            } else {
-                sender.to_string()
-            };
-            (t, "New message".to_string())
-        }
-        _ => {
-            // "full" or any unknown value — current behavior
-            let t = if is_group {
-                match group_name {
-                    Some(gn) => format!("{} — {}", gn, sender),
-                    None => sender.to_string(),
-                }
-            } else {
-                sender.to_string()
-            };
-            (t, body.chars().take(100).collect())
-        }
+        NotificationPreview::Minimal => ("New message".to_string(), String::new()),
+        NotificationPreview::Sender => (sender_title(), "New message".to_string()),
+        NotificationPreview::Full => (sender_title(), body.chars().take(100).collect()),
     };
 
     tokio::task::spawn_blocking(move || {
@@ -929,8 +919,8 @@ impl App {
         config.theme = self.theme.name.clone();
         config.keybinding_profile = self.keybindings.profile_name.clone();
         config.settings_profile = self.settings_profiles.name.clone();
-        config.notification_preview = self.notifications.notification_preview.clone();
-        config.image_mode = self.image.image_mode.clone();
+        config.notification_preview = self.notifications.notification_preview;
+        config.image_mode = Some(self.image.image_mode);
         config.sidebar_width = self.sidebar_width;
         for def in SETTINGS {
             if let Some(save_fn) = def.save {
@@ -985,7 +975,7 @@ impl App {
             }
         }
 
-        if self.image.image_mode == "none" {
+        if self.image.image_mode == crate::domain::ImageMode::None {
             return drained;
         }
         let Some(ref id) = self.active_conversation else {
@@ -1032,7 +1022,7 @@ impl App {
         }
 
         // Spawn background render tasks
-        let is_native = self.image.image_mode == "native";
+        let is_native = self.image.image_mode == crate::domain::ImageMode::Native;
         let is_sixel = self.image.image_protocol == image_render::ImageProtocol::Sixel;
         let cell_px = self.image.cell_px;
         for (ts, path, max_width, is_preview) in work {
@@ -1117,17 +1107,9 @@ impl App {
             KeyCode::Char(' ') | KeyCode::Enter | KeyCode::Tab => {
                 if self.settings_overlay.index == preview_index {
                     self.notifications.notification_preview =
-                        match self.notifications.notification_preview.as_str() {
-                            "full" => "sender".to_string(),
-                            "sender" => "minimal".to_string(),
-                            _ => "full".to_string(),
-                        };
+                        self.notifications.notification_preview.cycle();
                 } else if self.settings_overlay.index == image_mode_index {
-                    self.image.image_mode = match self.image.image_mode.as_str() {
-                        "native" => "halfblock".to_string(),
-                        "halfblock" => "none".to_string(),
-                        _ => "native".to_string(),
-                    };
+                    self.image.image_mode = self.image.image_mode.cycle();
                 } else if self.settings_overlay.index == customize_index {
                     self.open_overlay(OverlayKind::Customize);
                     self.settings_overlay.customize_index = 0;
@@ -3300,7 +3282,13 @@ impl App {
                     "conversations"
                 };
                 let body = format!("{total} new messages in {conv_count} {conv_word}");
-                show_desktop_notification("siggy", &body, false, None, "full");
+                show_desktop_notification(
+                    "siggy",
+                    &body,
+                    false,
+                    None,
+                    crate::domain::NotificationPreview::Full,
+                );
             }
         }
         self.sync.suppressed_notifications.clear();

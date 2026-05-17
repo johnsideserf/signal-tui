@@ -1225,9 +1225,9 @@ async fn run_app(
     app.notifications.notify_direct = config.notify_direct;
     app.notifications.notify_group = config.notify_group;
     app.notifications.desktop_notifications = config.desktop_notifications;
-    app.notifications.notification_preview = config.notification_preview.clone();
+    app.notifications.notification_preview = config.notification_preview;
     app.notifications.clipboard_clear_seconds = config.clipboard_clear_seconds;
-    app.image.image_mode = config.image_mode.clone();
+    app.image.image_mode = config.image_mode.unwrap_or_default();
     app.image.show_link_previews = config.show_link_previews;
     app.incognito = incognito;
     app.date_separators = config.date_separators;
@@ -1320,7 +1320,7 @@ async fn run_app(
         // Only redraw when state has changed (avoids resetting cursor blink timer every 50ms)
         if needs_redraw {
             diag_render = diag_render.wrapping_add(1);
-            let native = app.image.image_mode == "native";
+            let native = app.image.image_mode == crate::domain::ImageMode::Native;
             let sixel_mode =
                 native && app.image.image_protocol == image_render::ImageProtocol::Sixel;
 
