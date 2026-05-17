@@ -497,53 +497,88 @@ fn resolve_incoming(app: &App, msg: &SignalMessage) -> Option<ResolvedMessage> {
     })
 }
 
-/// Apply mutations: sync-burst tracking, conversation creation, append each
-/// entry, persist mention rows, attach link preview, and update the read
-/// marker for the active conversation. The corresponding bell / unread /
-/// desktop-notification side effects are handled by
+/// Apply mutations for an incoming message: sync-burst tracking, conversation
+/// creation, append each entry, persist mention rows, attach link preview, and
+/// update the read marker for the active conversation. The corresponding bell /
+/// unread / desktop-notification side effects are handled by
 /// [`apply_notification_policy`].
+///
+/// Returns the final accepted-state of the conversation so the caller can pass
+/// the same snapshot to `apply_notification_policy` without re-reading the
+/// store (nothing else mutates `accepted` after this point).
 fn push_resolved(app: &mut App, r: &ResolvedMessage, is_active: bool) -> bool {
-    if app.store.move_conversation_to_top(&r.conv_id) && app.is_overlay(OverlayKind::SidebarFilter)
-    {
+    refresh_sidebar_after_move(app, &r.conv_id);
+    track_sync_progress(app, r);
+    remember_sender_identity(app, r);
+
+    let conv_accepted = accept_or_create_conversation(app, r);
+    append_entries(app, r);
+    persist_message_extras(app, r);
+
+    if is_active {
+        update_active_read_state(app, r, conv_accepted);
+    }
+    conv_accepted
+}
+
+/// Move this conversation to the top of the sidebar order. If the sidebar
+/// filter is open, re-run the filter so the moved entry appears at its new
+/// position instead of vanishing until the user types another character.
+fn refresh_sidebar_after_move(app: &mut App, conv_id: &str) {
+    if app.store.move_conversation_to_top(conv_id) && app.is_overlay(OverlayKind::SidebarFilter) {
         app.refresh_sidebar_filter();
     }
+}
 
-    // Track sync burst progress.
-    if app.sync.active {
-        app.sync.message_count += 1;
-        app.sync.last_message_time = Some(Instant::now());
-        app.status_message = format!("Syncing... ({} messages received)", app.sync.message_count);
-        // Pin the viewport against the message at the bottom of the active
-        // conversation BEFORE we append, so subsequent renders hold that
-        // message at its original screen position. See #394.
-        app.maybe_capture_sync_pin(&r.conv_id);
+/// While a sync burst is active, bump the visible counter and capture a
+/// viewport pin against the message at the bottom of the active conversation
+/// BEFORE the new message appends. The pin holds that anchor at its original
+/// screen position so the user does not get scroll-jumped during the burst
+/// (see #394).
+fn track_sync_progress(app: &mut App, r: &ResolvedMessage) {
+    if !app.sync.active {
+        return;
     }
+    app.sync.message_count += 1;
+    app.sync.last_message_time = Some(Instant::now());
+    app.status_message = format!("Syncing... ({} messages received)", app.sync.message_count);
+    app.maybe_capture_sync_pin(&r.conv_id);
+}
 
-    // Remember sender identity for future events (typing indicators, mentions).
-    if let Some(identity) = &r.source_to_remember {
+/// Cache the sender's display name (and UUID -> name mapping when present) so
+/// later events from the same sender resolve correctly even before the contact
+/// list fills in. Must run BEFORE `accept_or_create_conversation` so a
+/// previously-unknown sender does not get misclassified as a message-request.
+fn remember_sender_identity(app: &mut App, r: &ResolvedMessage) {
+    let Some(identity) = &r.source_to_remember else {
+        return;
+    };
+    app.store
+        .remember_contact_name(&identity.source, identity.source_name.as_deref());
+    if let (Some(uuid), Some(name)) = (&identity.source_uuid, &identity.source_name)
+        && !name.is_empty()
+    {
         app.store
-            .remember_contact_name(&identity.source, identity.source_name.as_deref());
-        if let (Some(uuid), Some(name)) = (&identity.source_uuid, &identity.source_name)
-            && !name.is_empty()
-        {
-            app.store
-                .uuid_to_name
-                .entry(uuid.clone())
-                .or_insert_with(|| name.clone());
-        }
+            .uuid_to_name
+            .entry(uuid.clone())
+            .or_insert_with(|| name.clone());
     }
+}
 
-    // Detect "this is the conversation's first message" BEFORE get_or_create_conversation
-    // creates it. The is_unaccepted_request check below must run AFTER remember_contact_name
-    // (above) so that messages from new senders who include source_name in their envelope
-    // are NOT mis-classified as message-requests: remember_contact_name pre-populates
-    // contact_names, and the request check looks for an entry there.
+/// Ensure a conversation row exists for this message; mark it unaccepted if
+/// it is a new 1:1 from a sender we have no contact record for (which the UI
+/// renders as a message-request prompt). Also keep the conversation's
+/// disappearing-message timer in sync with the incoming message's timer.
+///
+/// Returns the post-mutation `accepted` value -- this is the canonical
+/// snapshot consumers (read-receipt gate, notification policy) should use.
+fn accept_or_create_conversation(app: &mut App, r: &ResolvedMessage) -> bool {
+    // Detect "first message in this conversation" BEFORE creation.
     let is_new = !app.store.conversations.contains_key(&r.conv_id);
 
-    // Ensure conversation exists. For new 1:1 from an unknown sender, mark
-    // unaccepted so the UI can present a message-request prompt.
     app.store
         .get_or_create_conversation(&r.conv_id, &r.conv_name, r.is_group, &app.db);
+
     let is_unaccepted_request = is_new
         && !r.is_outgoing
         && !r.is_group
@@ -555,7 +590,6 @@ fn push_resolved(app: &mut App, r: &ResolvedMessage, is_active: bool) -> bool {
         app.db_warn_visible(app.db.update_accepted(&r.conv_id, false), "update_accepted");
     }
 
-    // Keep the conversation's expiration timer in sync with incoming messages.
     if let Some(conv) = app.store.conversations.get_mut(&r.conv_id)
         && conv.expiration_timer != r.msg_expires_in
     {
@@ -566,20 +600,29 @@ fn push_resolved(app: &mut App, r: &ResolvedMessage, is_active: bool) -> bool {
         );
     }
 
-    // Drain any poll event that arrived before this message; attach it to the FIRST
-    // entry (body, or first attachment if there's no body). Subsequent entries get None.
+    app.store
+        .conversations
+        .get(&r.conv_id)
+        .map(|c| c.accepted)
+        .unwrap_or(true)
+}
+
+/// Append each `ResolvedEntry` as a `DisplayMessage` in push order. Two
+/// "first-entry only" fields are carried in `take()`-shaped locals so they
+/// land on the body row (or, when there is no body, the first attachment
+/// row) and not on subsequent attachment entries:
+/// - `deferred_poll`: a poll event that arrived before this message and was
+///   buffered; attaches once to avoid duplicate poll-data rendering.
+/// - `entry_wire_quote`: the message's quote payload, which historically
+///   got copy-persisted to every attachment row and produced duplicate
+///   quote rendering on reload.
+fn append_entries(app: &mut App, r: &ResolvedMessage) {
     let mut deferred_poll = app
         .poll_vote
         .pending_polls
         .remove(&(r.conv_id.clone(), r.msg_ts_ms));
-
-    // Likewise, the wire-quote belongs to the message as a whole, not per-entry.
-    // Hand it to on_message_added on the first entry only -- attachment rows that
-    // followed historically had the same quote_author/body/ts columns populated
-    // which produced duplicate quote rendering on reload.
     let mut entry_wire_quote = Some(r.wire_quote.clone());
 
-    // Append each entry as a DisplayMessage in push order.
     for entry in &r.entries {
         let display = DisplayMessage {
             sender: r.sender_display.clone(),
@@ -611,9 +654,14 @@ fn push_resolved(app: &mut App, r: &ResolvedMessage, is_active: bool) -> bool {
         let wq = entry_wire_quote.take().unwrap_or_default();
         app.on_message_added(&r.conv_id, display, wq, true);
     }
+}
 
-    // Persist raw body + mentions so the display body can be re-resolved
-    // when the contact / group list later fills in unknown UUIDs.
+/// Persist the artifacts that hang off a message but live outside the
+/// per-entry rows: raw body + mention ranges (so the display body can be
+/// re-resolved when the contact list later fills in unknown UUIDs), and the
+/// first link preview (decoded and attached to the body row, with the
+/// preview row itself written to the DB).
+fn persist_message_extras(app: &mut App, r: &ResolvedMessage) {
     if let Some((raw, mentions)) = &r.raw_body_for_mentions_db {
         db_warn(
             app.db
@@ -622,70 +670,59 @@ fn push_resolved(app: &mut App, r: &ResolvedMessage, is_active: bool) -> bool {
         );
     }
 
-    // Attach the first link preview to the body message (skip attachment entries).
-    if let Some(preview) = &r.preview {
-        if let Some(conv) = app.store.conversations.get_mut(&r.conv_id)
-            && let Some(dm) = conv
-                .messages
-                .iter_mut()
-                .rev()
-                .find(|m| m.timestamp_ms == r.msg_ts_ms && !m.body.starts_with('['))
+    let Some(preview) = &r.preview else {
+        return;
+    };
+
+    if let Some(conv) = app.store.conversations.get_mut(&r.conv_id)
+        && let Some(dm) = conv
+            .messages
+            .iter_mut()
+            .rev()
+            .find(|m| m.timestamp_ms == r.msg_ts_ms && !m.body.starts_with('['))
+    {
+        let (img_lines, img_path) = if app.image.show_link_previews
+            && app.image.image_mode != "none"
+            && let Some(ref p) = preview.image_path
         {
-            let (img_lines, img_path) =
-                if app.image.show_link_previews && app.image.image_mode != "none" {
-                    if let Some(ref p) = preview.image_path {
-                        (
-                            image_render::render_image(Path::new(p), 30),
-                            Some(p.clone()),
-                        )
-                    } else {
-                        (None, None)
-                    }
-                } else {
-                    (None, None)
-                };
-            dm.preview = Some(preview.clone());
-            dm.preview_image_lines = img_lines;
-            dm.preview_image_path = img_path;
+            (
+                image_render::render_image(Path::new(p), 30),
+                Some(p.clone()),
+            )
+        } else {
+            (None, None)
+        };
+        dm.preview = Some(preview.clone());
+        dm.preview_image_lines = img_lines;
+        dm.preview_image_path = img_path;
+    }
+    db_warn(
+        app.db.upsert_link_preview(&r.conv_id, r.msg_ts_ms, preview),
+        "upsert_link_preview",
+    );
+}
+
+/// For a message in the currently-active conversation: queue a read receipt
+/// (skipped during sync, for outgoing messages, when the conv is unaccepted,
+/// or when the contact is blocked), advance the in-memory read marker, and
+/// persist the on-disk read marker so reloads see the new position.
+fn update_active_read_state(app: &mut App, r: &ResolvedMessage, conv_accepted: bool) {
+    if !app.sync.active {
+        if !r.is_outgoing && conv_accepted && !app.blocked_conversations.contains(&r.conv_id) {
+            app.queue_single_read_receipt(&r.sender_id, r.msg_ts_ms);
         }
+        if let Some(conv) = app.store.conversations.get(&r.conv_id) {
+            app.store
+                .last_read_index
+                .insert(r.conv_id.clone(), conv.messages.len());
+        }
+    }
+    if let Ok(Some(rowid)) = app.db.last_message_rowid(&r.conv_id) {
         db_warn(
-            app.db.upsert_link_preview(&r.conv_id, r.msg_ts_ms, preview),
-            "upsert_link_preview",
+            app.db.save_read_marker(&r.conv_id, rowid),
+            "save_read_marker",
         );
     }
-
-    // Snapshot the final accepted state once: it's read here for the read-receipt
-    // gate (active-conv branch) and returned so apply_notification_policy can
-    // reuse the same value without re-reading the store. After this point nothing
-    // mutates conv.accepted, so the two consumers always agree.
-    let conv_accepted = app
-        .store
-        .conversations
-        .get(&r.conv_id)
-        .map(|c| c.accepted)
-        .unwrap_or(true);
-
-    // Active conversation: send read receipt and advance the read marker.
-    if is_active {
-        if !app.sync.active {
-            if !r.is_outgoing && conv_accepted && !app.blocked_conversations.contains(&r.conv_id) {
-                app.queue_single_read_receipt(&r.sender_id, r.msg_ts_ms);
-            }
-            if let Some(conv) = app.store.conversations.get(&r.conv_id) {
-                app.store
-                    .last_read_index
-                    .insert(r.conv_id.clone(), conv.messages.len());
-            }
-        }
-        if let Ok(Some(rowid)) = app.db.last_message_rowid(&r.conv_id) {
-            db_warn(
-                app.db.save_read_marker(&r.conv_id, rowid),
-                "save_read_marker",
-            );
-        }
-    }
-
-    conv_accepted
 }
 
 /// Apply notification side effects for an incoming message that is NOT in
