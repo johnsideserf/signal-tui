@@ -200,27 +200,12 @@ impl SignalClient {
         }
     }
 
-    /// Build the JSON-RPC envelope, register the rpc id with `method` so the stdout
-    /// reader can correlate the response, and send to signal-cli's stdin. Returns
-    /// the rpc id so callers that need to track the send (send_message,
+    /// Build the JSON-RPC envelope, send to signal-cli's stdin, and register the
+    /// rpc id with `method` so the stdout reader can correlate the response.
+    /// Returns the rpc id so callers that need to track the send (send_message,
     /// send_edit_message) can correlate the result.
     async fn send_rpc(&self, method: &str, params: serde_json::Value) -> Result<String> {
-        let id = Uuid::new_v4().to_string();
-        if let Ok(mut map) = self.pending_requests.lock() {
-            map.insert(id.clone(), (method.to_string(), Instant::now()));
-        }
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            method: method.to_string(),
-            id: id.clone(),
-            params: Some(params),
-        };
-        let json = serde_json::to_string(&request)?;
-        self.stdin_tx
-            .send(json)
-            .await
-            .with_context(|| format!("Failed to send {method} to signal-cli stdin"))?;
-        Ok(id)
+        send_rpc_impl(&self.stdin_tx, &self.pending_requests, method, params).await
     }
 
     pub async fn send_message(
@@ -719,5 +704,131 @@ impl SignalClient {
     pub async fn shutdown(&mut self) -> Result<()> {
         let _ = self.child.kill().await;
         Ok(())
+    }
+}
+
+/// Send a JSON-RPC envelope to signal-cli's stdin and register the rpc id
+/// with `method` for response correlation. Returns the rpc id.
+///
+/// Ordering matters: the entry only lands in `pending_requests` after the
+/// stdin write succeeds. If we registered before the write, a serialize or
+/// channel failure would leak an orphaned entry that sat in the map until the
+/// 60s TTL sweep, and callers waiting on the correlated event (SendTimestamp
+/// / SendFailed) would silently never hear back. See issue #434.
+///
+/// Extracted from `SignalClient::send_rpc` so it can be unit-tested without
+/// spawning a real signal-cli process.
+async fn send_rpc_impl(
+    stdin_tx: &mpsc::Sender<String>,
+    pending_requests: &Arc<Mutex<HashMap<String, (String, Instant)>>>,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<String> {
+    let id = Uuid::new_v4().to_string();
+    let request = JsonRpcRequest {
+        jsonrpc: "2.0".to_string(),
+        method: method.to_string(),
+        id: id.clone(),
+        params: Some(params),
+    };
+    let json = serde_json::to_string(&request)?;
+    stdin_tx
+        .send(json)
+        .await
+        .with_context(|| format!("Failed to send {method} to signal-cli stdin"))?;
+    match pending_requests.lock() {
+        Ok(mut map) => {
+            map.insert(id.clone(), (method.to_string(), Instant::now()));
+        }
+        Err(poisoned) => {
+            // The mutex is poisoned (another task panicked while holding it).
+            // We've already written the request to stdin, so signal-cli will
+            // respond -- recover the inner data and insert anyway so the
+            // response is still correlatable. Log loudly so the next debug
+            // capture surfaces it.
+            crate::debug_log::logf(format_args!(
+                "send_rpc: pending_requests mutex poisoned, recovering and registering {method} (id={id})"
+            ));
+            let mut map = poisoned.into_inner();
+            map.insert(id.clone(), (method.to_string(), Instant::now()));
+        }
+    }
+    Ok(id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Happy path: stdin write succeeds, pending_requests gains one entry
+    /// whose method matches the call.
+    #[tokio::test]
+    async fn send_rpc_impl_registers_after_successful_send() {
+        let (tx, mut rx) = mpsc::channel::<String>(8);
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+
+        let id = send_rpc_impl(&tx, &pending, "listContacts", serde_json::json!({}))
+            .await
+            .expect("send_rpc_impl");
+
+        let wire = rx.recv().await.expect("stdin payload");
+        assert!(wire.contains("\"method\":\"listContacts\""));
+        assert!(wire.contains(&id));
+
+        let map = pending.lock().unwrap();
+        let (method, _) = map.get(&id).expect("pending entry");
+        assert_eq!(method, "listContacts");
+        assert_eq!(map.len(), 1);
+    }
+
+    /// REL-001 regression: when the channel receiver is dropped, send() fails
+    /// and pending_requests MUST NOT be mutated. Pre-fix, the insert ran first
+    /// and orphaned an entry that lived until the 60s TTL sweep.
+    #[tokio::test]
+    async fn send_rpc_impl_does_not_leak_on_send_failure() {
+        let (tx, rx) = mpsc::channel::<String>(8);
+        drop(rx); // close the channel so send() returns Err
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+
+        let result = send_rpc_impl(&tx, &pending, "listContacts", serde_json::json!({})).await;
+
+        assert!(result.is_err(), "send must fail when receiver is dropped");
+        let map = pending.lock().unwrap();
+        assert!(
+            map.is_empty(),
+            "pending_requests must stay empty when stdin send fails (got {} entries)",
+            map.len()
+        );
+    }
+
+    /// REL-002 regression: a poisoned mutex used to silently drop the
+    /// pending-requests insert (the `if let Ok(...)` arm just skipped on Err),
+    /// orphaning the in-flight request. We now recover from the poison and
+    /// insert anyway.
+    #[tokio::test]
+    async fn send_rpc_impl_recovers_from_poisoned_mutex() {
+        let (tx, mut rx) = mpsc::channel::<String>(8);
+        let pending: Arc<Mutex<HashMap<String, (String, Instant)>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+
+        // Poison the mutex by panicking while holding the lock.
+        let pending_clone = Arc::clone(&pending);
+        let poison = std::thread::spawn(move || {
+            let _guard = pending_clone.lock().unwrap();
+            panic!("intentional poison");
+        });
+        let _ = poison.join();
+        assert!(pending.is_poisoned(), "mutex should be poisoned");
+
+        let id = send_rpc_impl(&tx, &pending, "listContacts", serde_json::json!({}))
+            .await
+            .expect("send_rpc_impl should succeed even with poisoned map");
+
+        let _ = rx.recv().await;
+        let map = pending.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(
+            map.contains_key(&id),
+            "pending_requests must contain the entry even after mutex was poisoned"
+        );
     }
 }
