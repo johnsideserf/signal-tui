@@ -2165,7 +2165,7 @@ impl App {
         let msg = conv.messages.get(index)?;
 
         let target_timestamp = msg.timestamp_ms;
-        let target_author = if msg.sender == "you" {
+        let target_author = if msg.is_outgoing() {
             self.account.clone()
         } else {
             // Reverse lookup: find the phone number for this display name
@@ -2181,7 +2181,7 @@ impl App {
         let is_remove = msg
             .reactions
             .iter()
-            .any(|r| r.sender == "you" && r.emoji == emoji);
+            .any(|r| r.is_from_me() && r.emoji == emoji);
 
         // Optimistic local update
         if let Some(conv) = self.store.conversations.get_mut(&conv_id)
@@ -2189,10 +2189,10 @@ impl App {
         {
             if is_remove {
                 msg.reactions
-                    .retain(|r| !(r.sender == "you" && r.emoji == emoji));
+                    .retain(|r| !(r.is_from_me() && r.emoji == emoji));
             } else {
                 // One reaction per user — replace or push
-                if let Some(existing) = msg.reactions.iter_mut().find(|r| r.sender == "you") {
+                if let Some(existing) = msg.reactions.iter_mut().find(|r| r.is_from_me()) {
                     existing.emoji = emoji.to_string();
                 } else {
                     msg.reactions.push(Reaction {
@@ -2242,7 +2242,7 @@ impl App {
                 nerd_icon: "\u{f045a}",
             });
         }
-        if msg.sender == "you" && !msg.is_system && !msg.is_deleted {
+        if msg.is_outgoing() && !msg.is_system && !msg.is_deleted {
             items.push(ActionMenuItem {
                 label: "Edit",
                 key_hint: ActionMenuHint::Edit,
@@ -2290,7 +2290,7 @@ impl App {
                     nerd_icon: "\u{f0e73}",
                 });
             }
-            if msg.sender == "you" && !poll.closed {
+            if msg.is_outgoing() && !poll.closed {
                 items.push(ActionMenuItem {
                     label: "End Poll",
                     key_hint: ActionMenuHint::EndPoll,
@@ -2379,18 +2379,13 @@ impl App {
                     && !msg.is_system
                     && !msg.is_deleted
                 {
-                    let author_phone = msg.sender_id.clone();
+                    let phone = msg.route_author(&self.account).to_string();
                     let snippet: String = if msg.body.chars().count() > 50 {
                         format!("{}…", msg.body.chars().take(50).collect::<String>())
                     } else {
                         msg.body.clone()
                     };
                     let ts = msg.timestamp_ms;
-                    let phone = if author_phone.is_empty() || author_phone == "you" {
-                        self.account.clone()
-                    } else {
-                        author_phone
-                    };
                     self.reply_target = Some((phone, snippet, ts));
                     self.mode = InputMode::Insert;
                 }
@@ -2399,7 +2394,7 @@ impl App {
             ActionMenuHint::Edit => {
                 // Edit — same as Normal 'e'
                 if let Some(msg) = self.selected_message()
-                    && msg.sender == "you"
+                    && msg.is_outgoing()
                     && !msg.is_deleted
                     && !msg.is_system
                 {
@@ -2466,11 +2461,7 @@ impl App {
                         .get(&conv_id)
                         .map(|c| c.is_group)
                         .unwrap_or(false);
-                    let poll_author = if msg.sender_id.is_empty() || msg.sender_id == "you" {
-                        self.account.clone()
-                    } else {
-                        msg.sender_id.clone()
-                    };
+                    let poll_author = msg.route_author(&self.account).to_string();
                     let options = poll.options.clone();
                     let allow_multiple = poll.allow_multiple;
                     let poll_timestamp = msg.timestamp_ms;
@@ -2492,7 +2483,7 @@ impl App {
             ActionMenuHint::EndPoll => {
                 // End poll
                 if let Some(msg) = self.selected_message()
-                    && msg.sender == "you"
+                    && msg.is_outgoing()
                     && msg.poll_data.as_ref().is_some_and(|p| !p.closed)
                 {
                     let conv_id = self.active_conversation.clone()?;
@@ -4028,18 +4019,13 @@ impl App {
                     && !msg.is_system
                     && !msg.is_deleted
                 {
-                    let author_phone = msg.sender_id.clone();
+                    let phone = msg.route_author(&self.account).to_string();
                     let snippet: String = if msg.body.chars().count() > 50 {
                         format!("{}…", msg.body.chars().take(50).collect::<String>())
                     } else {
                         msg.body.clone()
                     };
                     let ts = msg.timestamp_ms;
-                    let phone = if author_phone.is_empty() || author_phone == "you" {
-                        self.account.clone()
-                    } else {
-                        author_phone
-                    };
                     self.reply_target = Some((phone, snippet, ts));
                     self.mode = InputMode::Insert;
                 }
@@ -4047,7 +4033,7 @@ impl App {
             }
             Some(KeyAction::EditMessage) => {
                 if let Some(msg) = self.selected_message()
-                    && msg.sender == "you"
+                    && msg.is_outgoing()
                     && !msg.is_deleted
                     && !msg.is_system
                 {
@@ -4227,25 +4213,20 @@ impl App {
                     && !msg.is_system
                     && !msg.is_deleted
                 {
-                    let author_phone = msg.sender_id.clone();
+                    let phone = msg.route_author(&self.account).to_string();
                     let snippet: String = if msg.body.chars().count() > 50 {
                         format!("{}…", msg.body.chars().take(50).collect::<String>())
                     } else {
                         msg.body.clone()
                     };
                     let ts = msg.timestamp_ms;
-                    let phone = if author_phone.is_empty() || author_phone == "you" {
-                        self.account.clone()
-                    } else {
-                        author_phone
-                    };
                     self.reply_target = Some((phone, snippet, ts));
                 }
                 None
             }
             Some(KeyAction::EditMessage) => {
                 if let Some(msg) = self.selected_message()
-                    && msg.sender == "you"
+                    && msg.is_outgoing()
                     && !msg.is_deleted
                     && !msg.is_system
                 {
@@ -4454,7 +4435,7 @@ impl App {
                     .focused_index
                     .unwrap_or_else(|| conv.messages.len().saturating_sub(1));
                 let msg = conv.messages.get(index)?;
-                let is_outgoing = msg.sender == "you";
+                let is_outgoing = msg.is_outgoing();
                 let target_timestamp = msg.timestamp_ms;
 
                 // Apply local delete
