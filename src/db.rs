@@ -438,7 +438,7 @@ impl Database {
                 let idx = ts_to_idx.get(&target_ts).and_then(|idxs| {
                     idxs.iter()
                         .find(|&&i| {
-                            messages[i].sender == target_author || messages[i].sender == "you"
+                            messages[i].sender == target_author || messages[i].is_outgoing()
                         })
                         .or_else(|| idxs.first())
                         .copied()

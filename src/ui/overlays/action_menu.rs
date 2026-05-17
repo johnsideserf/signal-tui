@@ -87,7 +87,7 @@ pub(in crate::ui) fn draw_action_menu(frame: &mut Frame, app: &App, area: Rect) 
 pub(in crate::ui) fn draw_delete_confirm(frame: &mut Frame, app: &App, area: Rect) {
     let theme = &app.theme;
     let msg = app.selected_message();
-    let is_outgoing = msg.is_some_and(|m| m.sender == "you");
+    let is_outgoing = msg.is_some_and(|m| m.is_outgoing());
 
     let (popup_area, block) = centered_popup(frame, area, 44, 5, " Delete Message ", theme);
 

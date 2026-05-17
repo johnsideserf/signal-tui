@@ -310,14 +310,14 @@ fn try_send_edit(
         .conversations
         .get(&edit_conv_id)
         .and_then(|conv| conv.find_msg_idx(edit_ts).map(|idx| &conv.messages[idx]))
-        .filter(|msg| msg.sender == "you")
+        .filter(|msg| msg.is_outgoing())
         .and_then(|msg| msg.quote.as_ref())
         .map(|q| (q.timestamp_ms, q.author_id.clone(), q.body.clone()));
 
     let conv = app.store.conversations.get_mut(&edit_conv_id)?;
     if let Some(idx) = conv
         .find_msg_idx(edit_ts)
-        .filter(|&idx| conv.messages[idx].sender == "you")
+        .filter(|&idx| conv.messages[idx].is_outgoing())
     {
         conv.messages[idx].body = text.to_string();
         conv.messages[idx].is_edited = true;

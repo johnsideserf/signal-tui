@@ -24,7 +24,7 @@ pub(crate) fn execute_pin_toggle(app: &mut App) -> Option<SendRequest> {
     }
     let was_pinned = msg.is_pinned;
     let target_timestamp = msg.timestamp_ms;
-    let author_phone = msg.sender_id.clone();
+    let target_author = msg.route_author(&app.account).to_string();
     let conv_id = app.active_conversation.clone()?;
     let is_group = app
         .store
@@ -32,12 +32,6 @@ pub(crate) fn execute_pin_toggle(app: &mut App) -> Option<SendRequest> {
         .get(&conv_id)
         .map(|c| c.is_group)
         .unwrap_or(false);
-
-    let target_author = if author_phone.is_empty() || author_phone == "you" {
-        app.account.clone()
-    } else {
-        author_phone
-    };
 
     if was_pinned {
         // Unpin immediately -- no duration needed.

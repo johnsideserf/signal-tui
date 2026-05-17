@@ -876,7 +876,7 @@ fn handle_reaction(
     if let Some(conv) = app.store.conversations.get_mut(conv_id) {
         let found = conv.find_msg_idx(target_timestamp).and_then(|idx| {
             let m = &conv.messages[idx];
-            let matches = if m.sender == "you" {
+            let matches = if m.is_outgoing() {
                 target_author == account.as_str()
             } else {
                 m.sender == target_author || target_display.as_deref() == Some(m.sender.as_str())
@@ -1298,7 +1298,7 @@ fn handle_send_timestamp(app: &mut App, rpc_id: &str, server_ts: i64) {
             // Find the outgoing message with matching local timestamp
             if let Some(idx) = conv
                 .find_msg_idx(local_ts)
-                .filter(|&idx| conv.messages[idx].sender == "you")
+                .filter(|&idx| conv.messages[idx].is_outgoing())
             {
                 conv.messages[idx].timestamp_ms = effective_ts;
                 conv.messages[idx].status = Some(MessageStatus::Sent);
@@ -1344,7 +1344,7 @@ fn handle_send_failed(app: &mut App, rpc_id: &str) {
         if let Some(conv) = app.store.conversations.get_mut(&conv_id)
             && let Some(idx) = conv
                 .find_msg_idx(local_ts)
-                .filter(|&idx| conv.messages[idx].sender == "you")
+                .filter(|&idx| conv.messages[idx].is_outgoing())
         {
             conv.messages[idx].status = Some(MessageStatus::Failed);
             found = true;
@@ -1370,7 +1370,7 @@ fn try_upgrade_receipt(
 ) -> bool {
     if let Some(idx) = conv
         .find_msg_idx(ts)
-        .filter(|&idx| conv.messages[idx].sender == "you")
+        .filter(|&idx| conv.messages[idx].is_outgoing())
     {
         if let Some(current) = conv.messages[idx].status
             && new_status > current

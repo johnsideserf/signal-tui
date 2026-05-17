@@ -117,6 +117,13 @@ pub(crate) fn short_name(number: &str) -> String {
     }
 }
 
+/// Sentinel string used as `sender` / `sender_id` for outgoing messages and
+/// reactions. Persisted to the DB as the literal string `"you"` for legacy
+/// reasons, but new code should go through `DisplayMessage::is_outgoing` /
+/// `Reaction::is_from_me` / the `OUTGOING_SENDER` const rather than comparing
+/// the string directly. See issue #453 for the history.
+pub const OUTGOING_SENDER: &str = "you";
+
 /// Quoted reply context attached to a message.
 #[derive(Debug, Clone)]
 pub struct Quote {
@@ -185,6 +192,36 @@ impl DisplayMessage {
     pub fn format_time(&self) -> String {
         let local: DateTime<Local> = self.timestamp.with_timezone(&Local);
         local.format("%H:%M").to_string()
+    }
+
+    /// Whether this message was sent from this account (vs. received from a
+    /// contact). Three signals combine because they overlap in different
+    /// data sources: `status.is_some()` is the canonical runtime marker
+    /// (outgoing messages carry a [`MessageStatus`]), while `sender` /
+    /// `sender_id == "you"` cover demo data and legacy DB rows respectively.
+    pub fn is_outgoing(&self) -> bool {
+        self.status.is_some() || self.sender == OUTGOING_SENDER || self.sender_id == OUTGOING_SENDER
+    }
+
+    /// Wire identifier suitable for routing replies / reactions / pin queries
+    /// back to the original author. Resolves to `my_account` for outgoing
+    /// messages or legacy rows with no `sender_id`; otherwise returns the
+    /// sender's phone / UUID. The empty-sender_id fallback is defensive: a
+    /// legacy row with neither signal is rarer than the alternative (an
+    /// invalid empty recipient string sent to signal-cli).
+    pub fn route_author<'a>(&'a self, my_account: &'a str) -> &'a str {
+        if self.is_outgoing() || self.sender_id.is_empty() {
+            my_account
+        } else {
+            &self.sender_id
+        }
+    }
+}
+
+impl crate::signal::types::Reaction {
+    /// Whether this reaction was sent from this account.
+    pub fn is_from_me(&self) -> bool {
+        self.sender == OUTGOING_SENDER
     }
 }
 
@@ -491,11 +528,11 @@ impl ConversationStore {
             for msg in &mut conv.messages {
                 // Resolve reaction senders
                 for reaction in &mut msg.reactions {
-                    if reaction.sender == "you" {
+                    if reaction.is_from_me() {
                         continue;
                     }
                     if reaction.sender == account {
-                        reaction.sender = "you".to_string();
+                        reaction.sender = OUTGOING_SENDER.to_string();
                     } else if let Some(name) = phone_to_name.get(&reaction.sender) {
                         reaction.sender = name.clone();
                     }
