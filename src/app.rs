@@ -5365,14 +5365,16 @@ impl App {
         }
     }
 
-    /// Whether the startup spinner should advance this event-loop tick.
+    /// Whether the startup spinner should force a redraw on this tick.
     ///
-    /// Pauses during the initial sync burst (`sync.active`). The event loop
-    /// polls every 50ms, and ticking the spinner unconditionally on every
-    /// iteration sets `needs_redraw = true`, which bypasses the 500ms sync
-    /// redraw throttle in `drain_events`. The status bar already shows
-    /// "Syncing... (N messages received)" during sync, so the spinner adds
-    /// no information; pausing it lets the throttle actually take effect.
+    /// The spinner's *counter* advances at 80ms cadence whenever `loading`
+    /// is true (see main.rs and #426), but the *redraw* it triggers is gated
+    /// here. During the initial sync burst (`sync.active`), drain_events
+    /// throttles redraws to 500ms so the UI stays responsive; forcing a
+    /// redraw on every spinner tick (12.5fps) would bypass that throttle.
+    /// Returning false during sync defers spinner rendering to the next
+    /// throttled redraw, which still picks up the advanced counter value
+    /// -- so the spinner animates at ~2fps during sync, 12.5fps after.
     pub fn should_tick_spinner(&self) -> bool {
         self.loading && !self.sync.active
     }

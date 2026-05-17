@@ -1286,7 +1286,13 @@ async fn run_app(
 
     let mut last_expiry_sweep = Instant::now();
     let mut last_sync_redraw = Instant::now();
-    let mut last_spinner_tick = Instant::now();
+    // Initialise far enough in the past that the spinner ticks on the very
+    // first loop iteration. Without this the spinner sits on frame 0 for the
+    // first 80ms after entering run_app, which on slow hardware looks like a
+    // freeze before any animation starts (#426).
+    let mut last_spinner_tick = Instant::now()
+        .checked_sub(Duration::from_millis(80))
+        .unwrap_or_else(Instant::now);
     let mut needs_redraw = true;
     let mut last_title: Option<String> = None;
     // Loop-rate diagnostics: only counted/logged when --debug is on. Helps
@@ -1379,10 +1385,19 @@ async fn run_app(
         // collapses bursts of input into a single outer iteration, which
         // would otherwise tie the spinner to "events arrived" rather than
         // "time passed". 80ms = 12.5fps, brisk but not frantic.
-        if app.should_tick_spinner() && last_spinner_tick.elapsed() >= Duration::from_millis(80) {
+        //
+        // The counter advances whenever loading=true regardless of sync state
+        // (see #426 -- otherwise the spinner appears frozen during the initial
+        // sync burst). The redraw, however, only fires outside sync so the
+        // 500ms sync redraw throttle in drain_events still applies (see #326).
+        // During sync the spinner therefore animates at ~2fps (one frame per
+        // throttled redraw), and at 12.5fps after sync ends.
+        if app.loading && last_spinner_tick.elapsed() >= Duration::from_millis(80) {
             app.spinner_tick = app.spinner_tick.wrapping_add(1);
             last_spinner_tick = Instant::now();
-            needs_redraw = true;
+            if app.should_tick_spinner() {
+                needs_redraw = true;
+            }
         }
 
         // Load older messages when scrolled to the top
