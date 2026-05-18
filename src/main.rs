@@ -619,8 +619,7 @@ fn emit_native_images(backend: &mut CrosstermBackend<io::Stdout>, app: &mut App)
             }
 
             // Create virtual placement (U=1 enables Unicode Placeholder mode)
-            let placement =
-                format!("\x1b_Ga=p,U=1,i={id},c={cols},r={rows},q=2\x1b\\");
+            let placement = format!("\x1b_Ga=p,U=1,i={id},c={cols},r={rows},q=2\x1b\\");
             emit_passthrough_seq(backend, &placement, tmux)?;
 
             app.image.kitty_transmitted.insert(*id);
